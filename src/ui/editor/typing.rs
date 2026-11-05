@@ -3,6 +3,7 @@
 // pages catch up the typed text is drawn where it goes. Input methods compose in place.
 use super::*;
 use document::caret::{self, CharMap, Edit};
+use document::format::{Align, Style};
 
 /// The caret: a source offset, kept on its text across edits.
 pub(super) struct Caret {
@@ -902,7 +903,7 @@ impl Doc {
     }
 
     /// Tab (Shift-Tab: `out`) in a list: the item one level in (out).
-    fn tab(&mut self, out: bool, cx: &mut Context<Self>) {
+    pub(super) fn tab(&mut self, out: bool, cx: &mut Context<Self>) {
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
@@ -1340,6 +1341,34 @@ pub(super) fn caret_actions(view: Stateful<Div>, cx: &mut Context<Doc>) -> State
     .on_action(cx.listener(|d, _: &Outdent, _, cx| d.tab(true, cx)))
     .on_action(cx.listener(|d, _: &SelectCaretBlock, _, cx| d.select_caret_block(cx)))
     .on_action(cx.listener(|d, _: &InsertMath, w, cx| d.insert_math(w, cx)))
+    .on_action(cx.listener(|d, _: &FormatBold, w, cx| d.format(FormatOp::Inline("textbf"), w, cx)))
+    .on_action(
+        cx.listener(|d, _: &FormatItalic, w, cx| d.format(FormatOp::Inline("textit"), w, cx)),
+    )
+    .on_action(
+        cx.listener(|d, _: &FormatUnderline, w, cx| d.format(FormatOp::Inline("underline"), w, cx)),
+    )
+    .on_action(cx.listener(|d, _: &FontBigger, w, cx| d.format(FormatOp::Grow(1), w, cx)))
+    .on_action(cx.listener(|d, _: &FontSmaller, w, cx| d.format(FormatOp::Grow(-1), w, cx)))
+    .on_action(cx.listener(|d, _: &Heading1, w, cx| {
+        d.format(FormatOp::Style(Style::Heading("section")), w, cx)
+    }))
+    .on_action(cx.listener(|d, _: &Heading2, w, cx| {
+        d.format(FormatOp::Style(Style::Heading("subsection")), w, cx)
+    }))
+    .on_action(cx.listener(|d, _: &Heading3, w, cx| {
+        d.format(FormatOp::Style(Style::Heading("subsubsection")), w, cx)
+    }))
+    .on_action(cx.listener(|d, _: &AlignLeft, w, cx| d.format(FormatOp::Align(Align::Left), w, cx)))
+    .on_action(
+        cx.listener(|d, _: &AlignCenter, w, cx| d.format(FormatOp::Align(Align::Center), w, cx)),
+    )
+    .on_action(
+        cx.listener(|d, _: &AlignRight, w, cx| d.format(FormatOp::Align(Align::Right), w, cx)),
+    )
+    .on_action(
+        cx.listener(|d, _: &AlignJustify, w, cx| d.format(FormatOp::Align(Align::Justify), w, cx)),
+    )
     .on_action(cx.listener(|d, _: &MoveParagraphUp, _, cx| {
         if d.caret.is_some() {
             d.move_caret_block(true, cx)
@@ -2061,5 +2090,117 @@ mod tests {
             !cx.read(|cx| doc.read(cx).source.contains("\\subsection{}")),
             "Backspace removes it"
         );
+    }
+
+    /// The ribbon's operations on a real document through rtex: each typesets without a LaTeX
+    /// error and undoes in one step. `RTD_TYPE=/abs/copy.tex cargo test --release
+    /// format_on_pages -- --ignored --nocapture`.
+    #[gpui_kit::test]
+    #[ignore]
+    fn format_on_pages(cx: &mut TestAppContext) {
+        use super::super::FormatOp;
+        use crate::document::format::{Align, Size, Style};
+        let file = std::env::var("RTD_TYPE").expect("RTD_TYPE=/abs/path/main.tex");
+        let path = std::path::PathBuf::from(&file);
+        let (root, main) = (
+            path.parent().unwrap().to_path_buf(),
+            path.file_name().unwrap().to_string_lossy().to_string(),
+        );
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        engine::configure("", "/Library/TeX/texbin");
+        let (doc, cx) = cx.add_window_view(|window: &mut Window, cx| {
+            Doc::new(root, main, Default::default(), window, cx)
+        });
+        wait(cx, &doc, "the first layout", |d| {
+            d.spans_pending == 0 && d.blocks.iter().filter(|b| !b.rows.is_empty()).count() > 3
+        });
+        calm(cx, &doc);
+        let base = cx.read(|cx| doc.read(cx).source.clone());
+        // a plain paragraph's second word
+        let off = cx.read(|cx| {
+            let d = doc.read(cx);
+            let b = d
+                .blocks
+                .iter()
+                .find(|b| d.source[b.range.clone()].starts_with("Used together"))
+                .expect("the paragraph");
+            b.range.start + "Used ".len()
+        });
+        let select_word = |d: &mut Doc, cx: &mut gpui_kit::Context<Doc>| {
+            d.set_caret(off, cx);
+            d.extending(cx, |d, cx| d.move_word(1, cx));
+        };
+        let ops: Vec<(&str, FormatOp, &str)> = vec![
+            ("bold", FormatOp::Inline("textbf"), "\\textbf{together}"),
+            ("italic", FormatOp::Inline("textit"), "\\textit{together}"),
+            (
+                "size",
+                FormatOp::Size(Size::Named("Large")),
+                "{\\Large together}",
+            ),
+            (
+                "colour",
+                FormatOp::Color("red".into()),
+                "\\textcolor{red}{together}",
+            ),
+            (
+                "bullets",
+                FormatOp::List("itemize"),
+                "\\begin{itemize}\n  \\item Used together",
+            ),
+            (
+                "heading",
+                FormatOp::Style(Style::Heading("subsection")),
+                "\\subsection{Used together",
+            ),
+            (
+                "center",
+                FormatOp::Align(Align::Center),
+                "\\begin{center}\nUsed together",
+            ),
+        ];
+        for (name, op, want) in ops {
+            doc.update_in(cx, |d, window, cx| {
+                d.status.clear();
+                select_word(d, cx);
+                d.format(op.clone(), window, cx);
+            });
+            let src = cx.read(|cx| doc.read(cx).source.clone());
+            assert!(
+                src.contains(want),
+                "{name}: {:?}",
+                &src[off.saturating_sub(30)..(off + 80).min(src.len())]
+            );
+            if name == "colour" {
+                assert!(
+                    src.contains("\\usepackage{xcolor}") || base.contains("xcolor"),
+                    "xcolor added"
+                );
+            }
+            calm(cx, &doc);
+            let status = cx.read(|cx| doc.read(cx).status.clone());
+            assert!(!status.contains("LaTeX"), "{name}: {status}");
+            if name == "bold" {
+                // the ribbon shows it, and the button again takes it off
+                cx.read(|cx| assert!(doc.read(cx).ribbon_state().has("textbf"), "bold lit"));
+                doc.update_in(cx, |d, window, cx| {
+                    d.format(FormatOp::Inline("textbf"), window, cx)
+                });
+                let src = cx.read(|cx| doc.read(cx).source.clone());
+                assert!(!src.contains("\\textbf{together}"), "bold off again");
+                doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+            }
+            doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+            assert_eq!(
+                cx.read(|cx| doc.read(cx).source.clone()),
+                base,
+                "{name}: one undo step"
+            );
+            calm(cx, &doc);
+        }
     }
 }

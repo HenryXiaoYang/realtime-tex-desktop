@@ -828,7 +828,7 @@ pub fn open_groups(block: &str, base: usize, off: usize) -> Vec<(String, usize, 
 
 /// The command whose argument the group opening at `open` is: its start and name (past any
 /// earlier arguments, `\textcolor{red}{`); the group itself and "" when there is none.
-fn group_command(src: &str, open: usize) -> (usize, String) {
+pub fn group_command(src: &str, open: usize) -> (usize, String) {
     let s = src.as_bytes();
     let mut i = open;
     // step back over earlier {…} and […] arguments
@@ -1116,7 +1116,7 @@ fn shows_text(src: &str, r: Range<usize>) -> bool {
 }
 
 /// Where the group opening at `open` closes.
-fn group_close(src: &str, open: usize) -> Option<usize> {
+pub fn group_close(src: &str, open: usize) -> Option<usize> {
     let s = src.as_bytes();
     let mut depth = 0;
     let mut i = open;

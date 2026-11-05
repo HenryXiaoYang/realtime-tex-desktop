@@ -4,6 +4,7 @@
 mod complete;
 mod editing;
 mod file_view;
+mod formatting;
 mod menu;
 mod navigation;
 mod pages;
@@ -17,6 +18,7 @@ use crate::document::{self, glyphmap};
 use crate::engine;
 use crate::render::{self, viewer};
 use crate::ui::settings::AppSettings;
+pub use formatting::{FormatOp, RibbonState};
 use futures::StreamExt;
 use gpui_kit::component::input::{
     Copy, Cut, Editor, EditorState, InputEvent, Paste, SelectAll, highlight_characters,
@@ -91,7 +93,19 @@ actions!(
         SelectLineStart,
         SelectLineEnd,
         SelectDocStart,
-        SelectDocEnd
+        SelectDocEnd,
+        FormatBold,
+        FormatItalic,
+        FormatUnderline,
+        FontBigger,
+        FontSmaller,
+        Heading1,
+        Heading2,
+        Heading3,
+        AlignLeft,
+        AlignCenter,
+        AlignRight,
+        AlignJustify
     ]
 );
 
@@ -139,6 +153,19 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-end", SelectLineEnd, caret),
         KeyBinding::new("cmd-shift-up", SelectDocStart, caret),
         KeyBinding::new("cmd-shift-down", SelectDocEnd, caret),
+        // Word's formatting keys
+        KeyBinding::new("cmd-b", FormatBold, caret),
+        KeyBinding::new("cmd-i", FormatItalic, caret),
+        KeyBinding::new("cmd-u", FormatUnderline, caret),
+        KeyBinding::new("cmd-shift-.", FontBigger, caret),
+        KeyBinding::new("cmd-shift-,", FontSmaller, caret),
+        KeyBinding::new("cmd-alt-1", Heading1, caret),
+        KeyBinding::new("cmd-alt-2", Heading2, caret),
+        KeyBinding::new("cmd-alt-3", Heading3, caret),
+        KeyBinding::new("cmd-l", AlignLeft, caret),
+        KeyBinding::new("cmd-e", AlignCenter, caret),
+        KeyBinding::new("cmd-r", AlignRight, caret),
+        KeyBinding::new("cmd-j", AlignJustify, caret),
     ]);
     let pages = Some("Pages");
     cx.bind_keys([

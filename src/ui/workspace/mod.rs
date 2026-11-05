@@ -3,6 +3,7 @@
 mod chrome;
 mod files;
 mod project_panel;
+mod ribbon;
 
 use files::*;
 
@@ -136,6 +137,7 @@ impl Render for Workspace {
                     .on_mouse_down(MouseButton::Left, cx.listener(leave))
                     .child(self.render_tabs(cx)),
             )
+            .children(self.render_ribbon(cx))
             .child(div().flex_1().min_h_0().children(self.doc().cloned()).when(
                 self.tabs.is_empty(),
                 |d| {

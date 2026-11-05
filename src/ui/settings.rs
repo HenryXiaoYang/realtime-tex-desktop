@@ -33,6 +33,8 @@ pub struct AppSettings {
     pub rtex_path: String,
     /// Folders with lualatex and kpsewhich, added to PATH.
     pub tex_bin: String,
+    /// The ribbon folded to its tab row.
+    pub ribbon_collapsed: bool,
 }
 
 impl Default for AppSettings {
@@ -50,6 +52,7 @@ impl Default for AppSettings {
             autosave: false,
             rtex_path: String::new(),
             tex_bin: "/Library/TeX/texbin".into(),
+            ribbon_collapsed: false,
         }
     }
 }

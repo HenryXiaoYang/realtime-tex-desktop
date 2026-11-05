@@ -50,7 +50,7 @@ impl Workspace {
                             .small()
                             .primary()
                             .disabled(!can_export)
-                            .tooltip("Typeset the whole document to a PDF (⌘E)")
+                            .tooltip("Typeset the whole document to a PDF (⌘⌥E)")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.with_doc(cx, |d, cx| d.export(cx))
                             })),
@@ -117,7 +117,7 @@ impl Workspace {
                             .icon(Icon::default().path("icons/refresh-cw.svg"))
                             .xsmall()
                             .ghost()
-                            .tooltip("Run the full LaTeX compile now (⌘R)")
+                            .tooltip("Run the full LaTeX compile now (⌘⇧R)")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.with_doc(cx, |d, cx| d.recompile(cx))
                             })),
@@ -268,7 +268,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .selected(self.sidebar)
-                            .tooltip("Toggle Project Panel (⌘B)")
+                            .tooltip("Toggle Project Panel (⌘\\)")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.sidebar = !this.sidebar;
                                 cx.notify();

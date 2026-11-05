@@ -34,6 +34,15 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   Backspace removes it. Enter at the start of a paragraph or heading
   opens a new paragraph above it; in a heading's middle it splits it in two; in a table it does
   nothing yet.
+- The ribbon (under the file tabs, in Visual mode; double-click its tab to fold it): Home has
+  paste/cut/copy/undo/redo; the font (Serif, Sans, Mono or any installed font through fontspec,
+  which also names LuaLaTeX for the file), the size (LaTeX's named sizes or points, ⌘⇧. / ⌘⇧,
+  a step), bold ⌘B, italic ⌘I, underline ⌘U, strikethrough, sub- and superscript, small caps,
+  colour; bullets, numbering, indent; alignment (⌘L, ⌘E, ⌘R, ⌘J); and styles (Normal, Title,
+  Part/Chapter when the class has them, Heading 1–4 = section…paragraph, ⌘⌥1–3, Quote). The
+  buttons light up for the text at the caret and turn off what is on. They act on the
+  selection (or the caret's word, or its paragraphs); a package an edit needs (xcolor, ulem,
+  fontspec) goes into the preamble with a note in the status bar.
 - Selecting text: drag over it, Shift-click, Shift with any caret move (⇧←/→/↑/↓, ⌥⇧ by word,
   ⌘⇧ to the line's or document's ends), double-click a word, triple-click a paragraph, ⌘A for
   all. Typing replaces the selection, Backspace/Delete removes it (markup it only partly holds,
@@ -83,11 +92,15 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 | ⌘S | Save |
 | ⌘Z / ⌘⇧Z | Undo / redo: in the source box or Source mode, its own edits; on the pages, a whole edit (a box's changes, a menu action) at a time |
 | ⌘X ⌘C ⌘V ⌘A | Cut, copy, paste, select all in the source box and Source mode (also in the Edit menu) |
-| ⌘R | Recompile (full LaTeX run) |
+| ⌘⇧R | Recompile (full LaTeX run) |
 | ⌘, | Settings |
-| ⌘E | Export PDF |
+| ⌘⌥E | Export PDF |
 | ⌘W | Close tab |
-| ⌘B | Toggle the project panel |
+| ⌘\ | Toggle the project panel |
+| ⌘B ⌘I ⌘U | Bold, italic, underline (on the pages) |
+| ⌘⇧. / ⌘⇧, | Bigger / smaller text |
+| ⌘⌥1 ⌘⌥2 ⌘⌥3 | Heading 1–3 |
+| ⌘L ⌘E ⌘R ⌘J | Align left, center, right, justify |
 | ⌘⇧E | Switch between Visual and Source |
 | ⌃⇧↑ / ⌃⇧↓ | Move the paragraph at the caret (or the selected blocks) up / down |
 
@@ -117,19 +130,23 @@ src/
     outline.rs         the section outline
     glyphmap.rs        click-to-source: glyph text aligned with the visible source
     caret.rs           where a caret stands among glyphs; typing, Enter, Tab, Backspace as edits
+    format.rs          formatting as source edits: inline commands, sizes, colours, fonts, lists,
+                       alignment, styles, packages
   render/              rasterizing (skrifa, tiny-skia, hayro)
     mod.rs             display lists to pixels, dark paper
     resources.rs       fonts (OpenType, Type1 via pdftex.map) and images (PNG, JPG, PDF)
     viewer.rs          PDF and image files opened as tabs
   ui/
     settings.rs        settings and the Settings window
-    workspace/         the window: title bar, tabs, status bar (chrome.rs), project panel,
+    workspace/         the window: title bar, tabs, status bar (chrome.rs), the ribbon
+                       (ribbon.rs), project panel,
                        files and file commands (files.rs)
     editor/            one open file (Doc)
       session.rs       keeping in step with rtex: layouts, live paragraphs, page images
       pages.rs         drawing a page, split around the source box, with the compile spinner
       typing.rs        Visual mode's caret: moving, typing, input methods, the typed-text overlay
       text_selection.rs  selecting text on the pages; deleting, typing over, copying, pasting it
+      formatting.rs    the ribbon's side: the state at the caret, formatting operations
       source_box.rs    the inline source box
       editing.rs       opening, typing in and leaving the box; insert spots; undo
       selection.rs     block selection and block commands
