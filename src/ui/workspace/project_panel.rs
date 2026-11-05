@@ -236,13 +236,14 @@ fn indent_guides(depth: usize, cx: &App) -> Vec<AnyElement> {
     let color = cx.theme().sidebar_foreground.opacity(0.2);
     (0..depth)
         .map(|level| {
-            // the row's padding (12), the levels before, the chevron's middle (12 px wide)
-            // past the row's edges a little: the tree sets its rows apart, and the line runs on
+            // from the row's content (an absolute child sits in its parent, inside the row's
+            // padding): the levels before, then the chevron's middle (12 px wide)
+            // through the row's padding above and below (4 px), so the rows' lines join up
             div()
                 .absolute()
                 .top(px(-4.0))
                 .bottom(px(-4.0))
-                .left(px(12.0 + level as f32 * 12.0 + 5.5))
+                .left(px(level as f32 * 12.0 + 5.5))
                 .w(px(1.0))
                 .bg(color)
                 .into_any_element()
