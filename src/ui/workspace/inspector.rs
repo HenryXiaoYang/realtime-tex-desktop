@@ -141,9 +141,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .tip("Hide the sidebar (⌘⌥\\)")
-                            .on_click(|_, _, cx| {
-                                settings::AppSettings::set(cx, |s| s.inspector_closed = true)
-                            }),
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_right(cx))),
                     ),
             )
             .child(

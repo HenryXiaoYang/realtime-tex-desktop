@@ -306,7 +306,7 @@ impl Workspace {
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> Button {
-        widgets::big_button(id, icon, label, false, cx)
+        widgets::big_button(id, icon, label, false, self.insert_compact(), cx)
             .disabled(!enabled)
             .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
     }
@@ -317,7 +317,14 @@ impl Workspace {
 
     /// Space: a menu of LaTeX's vertical skips.
     fn space_menu(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
-        let face = widgets::big_button("ins-space", "icons/move-vertical.svg", "Space", true, cx);
+        let face = widgets::big_button(
+            "ins-space",
+            "icons/move-vertical.svg",
+            "Space",
+            true,
+            self.insert_compact(),
+            cx,
+        );
         if !enabled {
             return face.disabled(true).into_any_element();
         }
@@ -370,7 +377,14 @@ impl Workspace {
                 .into_any_element();
         }
         let weak = cx.entity().downgrade();
-        let face = widgets::big_button("ins-table", "icons/table.svg", "Table", true, cx);
+        let face = widgets::big_button(
+            "ins-table",
+            "icons/table.svg",
+            "Table",
+            true,
+            self.insert_compact(),
+            cx,
+        );
         widgets::table_grid(
             face,
             self.table_rows.clone(),

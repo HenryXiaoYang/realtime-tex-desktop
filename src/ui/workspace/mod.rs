@@ -4,6 +4,8 @@ mod chrome;
 mod files;
 mod insert_tab;
 mod inspector;
+mod layout;
+pub use layout::MIN_WINDOW;
 mod project_panel;
 mod ribbon;
 mod widgets;
@@ -54,6 +56,7 @@ actions!(
         InsertCitation,
         InsertPageBreak,
         InsertContents,
+        FitWidth,
         MinimizeWindow,
         ZoomWindow,
         ToggleFullScreen
@@ -74,6 +77,8 @@ pub struct Workspace {
     inspector: inspector::Inspector,
     /// The ribbon's open tab.
     ribbon_tab: ribbon::RibbonTab,
+    /// What the window's width allows: which panels show, how wide the ribbon is.
+    fit: layout::Fit,
     /// The colour palette's hex field.
     color_hex: Entity<InputState>,
     /// The table grid's size fields, for sizing a table from the keyboard.
@@ -108,6 +113,7 @@ impl Workspace {
             sidebar: true,
             inspector: Default::default(),
             ribbon_tab: Default::default(),
+            fit: Default::default(),
             color_hex: cx.new(|cx| InputState::new(window, cx).placeholder("1A2B3C")),
             table_rows: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             table_cols: cx.new(|cx| InputState::new(window, cx).default_value("3")),
@@ -186,8 +192,9 @@ impl Render for Workspace {
             |this: &mut Self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
                 this.with_doc(cx, |d, cx| d.leave(window, cx))
             };
-        let inspector_visible = self.inspector_visible(cx);
-        let inspector = if inspector_visible {
+        // the window's width decides which panels have room
+        self.fit_panels(window, cx);
+        let inspector = if self.fit.right {
             self.render_inspector(window, cx)
         } else {
             div().into_any_element()
@@ -251,9 +258,9 @@ impl Render for Workspace {
                     d.set_source_mode(on, window, cx)
                 })
             }))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar = !this.sidebar;
-                cx.notify();
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_left(cx)))
+            .on_action(cx.listener(|this, _: &FitWidth, window, cx| {
+                this.with_doc(cx, |d, cx| d.fit_width(window, cx))
             }))
             .on_action(
                 cx.listener(|this, _: &InsertLink, window, cx| this.open_link_dialog(window, cx)),
@@ -284,9 +291,7 @@ impl Render for Workspace {
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .on_action(|_: &ZoomWindow, window, _| window.zoom_window())
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
-            .on_action(cx.listener(|_, _: &ToggleInspector, _, cx| {
-                settings::AppSettings::set(cx, |s| s.inspector_closed = !s.inspector_closed);
-            }))
+            .on_action(cx.listener(|this, _: &ToggleInspector, _, cx| this.toggle_right(cx)))
             // the title bar keeps its mouse to itself: it moves the window
             .child(self.render_title_bar(cx))
             .child(
@@ -296,7 +301,7 @@ impl Render for Workspace {
                             resizable_panel()
                                 .size(px(260.0))
                                 .size_range(px(160.0)..px(640.0))
-                                .visible(self.sidebar)
+                                .visible(self.fit.left)
                                 .child(
                                     div()
                                         .size_full()
@@ -309,7 +314,7 @@ impl Render for Workspace {
                             resizable_panel()
                                 .size(px(280.0))
                                 .size_range(px(220.0)..px(520.0))
-                                .visible(inspector_visible)
+                                .visible(self.fit.right)
                                 .child(inspector),
                         ),
                 ),

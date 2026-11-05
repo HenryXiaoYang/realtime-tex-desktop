@@ -73,6 +73,11 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   first, the rest under Advanced. Changes apply as they are made, adding any package they need;
   a value that cannot go into the TeX (a width that is not a number, a label with a `#`) is
   kept out, with a note under the field saying what it takes.
+- The window adapts to its width (down to 720 × 480): below 1100 px the project panel steps
+  aside for the pages, below 940 px the sidebar too (⌘\\ or ⌘⌥\\ brings one back while the window
+  stays narrow); the styles gallery keeps the tiles that fit (Normal and the headings first) and
+  puts the rest under More; the Insert tab shows icons alone when tight. View → Fit Width (or the
+  zoom menu) sizes the pages to the column.
 - The menu bar holds every command (Edit → Find, Insert, Format, View, Window), each with its
   shortcut. Every control has a name VoiceOver reads (icon buttons, swatches, styles), the
   ribbon, the sidebar and the pickers work from the keyboard (↑/↓ in the cross-reference and

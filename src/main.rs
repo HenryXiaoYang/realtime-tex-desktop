@@ -128,6 +128,7 @@ fn main() {
                         MenuItem::action("Zoom In", ZoomIn),
                         MenuItem::action("Zoom Out", ZoomOut),
                         MenuItem::action("Actual Size", ZoomReset),
+                        MenuItem::action("Fit Width", FitWidth),
                         MenuItem::separator(),
                         MenuItem::action("Show or Hide Project Panel", ToggleSidebar),
                         MenuItem::action("Show or Hide Sidebar", ToggleInspector),
@@ -153,6 +154,7 @@ fn main() {
                 let options = WindowOptions {
                     window_bounds: Some(WindowBounds::centered(size(px(1460.0), px(900.0)), cx)),
                     titlebar: Some(titlebar),
+                    window_min_size: Some(size(px(MIN_WINDOW.0), px(MIN_WINDOW.1))),
                     ..TitleBar::window_options()
                 };
                 gpui_kit::open_window(options, cx, move |window, cx| {

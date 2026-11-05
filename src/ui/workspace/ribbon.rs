@@ -176,6 +176,8 @@ impl Workspace {
             .pb_2()
             .overflow_x_scroll()
             .children(groups);
+        // the ribbon's width, for what folds next frame
+        let body = div().relative().child(self.measure_ribbon()).child(body);
         Some(ribbon.child(body).into_any_element())
     }
 
@@ -568,8 +570,63 @@ impl Workspace {
             styles.push((label, Style::Heading(h)));
         }
         styles.push(("Quote", Style::Quote));
+        // as many tiles as the ribbon has room for; all of them in a menu after those
+        let shown = self.style_tiles(styles.len());
+        let menu = (shown < styles.len()).then(|| {
+            let weak = cx.entity().downgrade();
+            let all = styles.clone();
+            let now = st.style;
+            Button::new("rb-styles-more")
+                .label(if shown == 0 {
+                    all.iter()
+                        .find(|(_, s)| Some(*s) == now)
+                        .map_or("Styles", |(l, _)| *l)
+                } else {
+                    "More"
+                })
+                .outline()
+                .small()
+                .h(px(44.0))
+                .disabled(!st.enabled)
+                .dropdown_caret(true)
+                .tooltip("Styles")
+                .accessibility_label("More styles")
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (label, style) in all.iter().copied() {
+                        let weak = weak.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(now == Some(style))
+                                .on_click(move |_, window, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.format(FormatOp::Style(style), window, cx)
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                })
+        });
+        // the tiles kept are the most used (Normal, the first headings), in their usual order
+        let rank = |s: &Style| match s {
+            Style::Normal => 0,
+            Style::Heading("section") => 1,
+            Style::Heading("subsection") => 2,
+            Style::Heading("subsubsection") => 3,
+            Style::Title => 4,
+            Style::Quote => 5,
+            Style::Heading("chapter") => 6,
+            _ => 7,
+        };
+        let mut by_use: Vec<Style> = styles.iter().map(|(_, s)| *s).collect();
+        by_use.sort_by_key(rank);
+        by_use.truncate(shown);
         let mut row = div().flex().gap_1();
-        for (i, (label, style)) in styles.into_iter().enumerate() {
+        for (i, (label, style)) in styles
+            .into_iter()
+            .filter(|(_, s)| by_use.contains(s))
+            .enumerate()
+        {
             let on = st.style == Some(style);
             let (size, weight) = match style {
                 Style::Title => (px(15.0), FontWeight::NORMAL),
@@ -601,6 +658,7 @@ impl Workspace {
                     })),
             );
         }
+        let row = row.children(menu);
         Self::group("Styles", vec![row.into_any_element()], cx)
     }
 }

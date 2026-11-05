@@ -54,19 +54,40 @@ pub(super) fn color_of(spec: &str) -> Option<Hsla> {
 
 /// A big ribbon button: its icon over its name, with a caret when it opens a menu. A real
 /// button (focusable, named for VoiceOver, Enter and Space press it).
+/// `compact` (a narrow ribbon): the icon alone, its name in the tooltip.
 pub(super) fn big_button(
     id: impl Into<ElementId>,
     icon: &'static str,
     label: &'static str,
     caret: bool,
+    compact: bool,
     cx: &App,
 ) -> Button {
-    Button::new(id)
+    let b = Button::new(id)
         .ghost()
         .h_auto()
         .p_0()
-        .accessibility_label(label)
-        .child(big_face(icon, label, caret, cx))
+        .accessibility_label(label);
+    if compact {
+        b.tooltip(label).child(
+            div()
+                .flex()
+                .items_center()
+                .gap_0p5()
+                .px_1()
+                .h(px(34.0))
+                .child(Icon::default().path(icon).size(px(20.0)))
+                .when(caret, |d| {
+                    d.child(
+                        Icon::default()
+                            .path("icons/chevron-down.svg")
+                            .size(px(10.0)),
+                    )
+                }),
+        )
+    } else {
+        b.child(big_face(icon, label, caret, cx))
+    }
 }
 
 /// A big ribbon button's face: its icon over its name, with a caret when it opens a menu.

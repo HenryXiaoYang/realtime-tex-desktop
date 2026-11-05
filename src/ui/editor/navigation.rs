@@ -212,6 +212,20 @@ impl Doc {
     }
 
     /// One step along `ZOOMS`.
+    /// The zoom at which the widest page fills the column, with the gap beside it.
+    pub fn fit_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let widest = self
+            .preview
+            .pages
+            .values()
+            .filter_map(|dl| dl.page_width)
+            .fold(0.0, f64::max);
+        let column = f32::from(self.scroll.bounds().size.width) - 2.0 * PAGE_GAP;
+        if widest > 0.0 && column > 0.0 {
+            self.set_zoom(column / page_px(widest, 1.0), None, window, cx);
+        }
+    }
+
     pub fn zoom_step(&mut self, dir: i32, window: &mut Window, cx: &mut Context<Self>) {
         let z = self.zoom;
         let next = if dir > 0 {

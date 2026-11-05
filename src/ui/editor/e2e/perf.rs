@@ -36,6 +36,25 @@ fn frame_costs(cx: &mut TestAppContext) {
         });
         doc.update(cx, |d, cx| d.set_caret(off, cx));
         cx.run_until_parked();
+        // Fit Width: the widest page as wide as the column, less the gap either side
+        doc.update_in(cx, |d, window, cx| d.fit_width(window, cx));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let d = doc.read(cx);
+            let widest = d
+                .preview
+                .pages
+                .values()
+                .filter_map(|p| p.page_width)
+                .fold(0.0, f64::max);
+            let column =
+                f32::from(d.scroll.bounds().size.width) - 2.0 * crate::ui::editor::PAGE_GAP;
+            let page = crate::ui::editor::page_px(widest, d.zoom);
+            assert!(
+                (page - column).abs() < 2.0 || d.zoom <= 0.25 || d.zoom >= 4.0,
+                "{page} vs {column}"
+            );
+        });
         let n = 200;
         let t = Instant::now();
         for _ in 0..n {

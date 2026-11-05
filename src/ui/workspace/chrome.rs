@@ -194,6 +194,17 @@ impl Workspace {
                     .xsmall()
                     .dropdown_caret(true)
                     .dropdown_menu(move |mut menu, _, _| {
+                        // the page as wide as the column, whatever the window
+                        let fit = weak.clone();
+                        menu = menu
+                            .item(
+                                PopupMenuItem::new("Fit Width").on_click(move |_, window, cx| {
+                                    let _ = fit.update(cx, |this, cx| {
+                                        this.with_doc(cx, |d, cx| d.fit_width(window, cx))
+                                    });
+                                }),
+                            )
+                            .separator();
                         for z in ZOOMS {
                             let weak = weak.clone();
                             menu = menu.item(
@@ -268,12 +279,9 @@ impl Workspace {
                             .icon(Icon::default().path("icons/panel-left.svg"))
                             .ghost()
                             .xsmall()
-                            .selected(self.sidebar)
+                            .selected(self.fit.left)
                             .tip("Toggle Project Panel (⌘\\)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.sidebar = !this.sidebar;
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_left(cx))),
                     )
                     .child(
                         Button::new("settings")
