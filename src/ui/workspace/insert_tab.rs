@@ -292,7 +292,7 @@ impl Workspace {
             Self::group("Illustrations", vec![pictures], cx),
             Self::group("Formulas", vec![formulas], cx),
             Self::group("Links", vec![links], cx),
-            Self::group("References", vec![refs], cx),
+            Self::last_group("References", vec![refs], cx),
         ]
     }
 

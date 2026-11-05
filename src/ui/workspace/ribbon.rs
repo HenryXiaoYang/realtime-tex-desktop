@@ -163,13 +163,23 @@ impl Workspace {
             return Some(ribbon.into_any_element());
         }
         let groups = match tab {
+            // the groups that never fold, measured for the room the styles have
             RibbonTab::Home => vec![
-                self.clipboard_group(cx),
-                self.font_group(&state, cx),
-                self.paragraph_group(&state, cx),
+                layout::measured_row(
+                    vec![
+                        self.clipboard_group(cx),
+                        self.font_group(&state, cx),
+                        self.paragraph_group(&state, cx),
+                    ],
+                    Some(self.fit.home_fixed_w.clone()),
+                ),
                 self.styles_group(&state, cx),
             ],
-            RibbonTab::Insert => self.insert_body(state.enabled, cx),
+            // measured while it shows its names, for when they stop fitting
+            RibbonTab::Insert => vec![layout::measured_row(
+                self.insert_body(state.enabled, cx),
+                (!self.insert_compact()).then(|| self.fit.insert_full_w.clone()),
+            )],
         };
         let body = div()
             .id("ribbon-body")
@@ -185,16 +195,23 @@ impl Workspace {
         Some(ribbon.child(body).into_any_element())
     }
 
-    /// A group of the ribbon: its tools, and its name under them.
+    /// A group of the ribbon: its tools, and its name under them; a rule after it.
     pub(super) fn group(name: &'static str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
+        Self::group_ruled(name, rows, true, cx)
+    }
+
+    /// The tab's last group, with no rule after it.
+    pub(super) fn last_group(name: &'static str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
+        Self::group_ruled(name, rows, false, cx)
+    }
+
+    fn group_ruled(name: &'static str, rows: Vec<AnyElement>, rule: bool, cx: &App) -> AnyElement {
         let theme = cx.theme();
         div()
             .flex()
             .flex_col()
             .gap_1()
-            .pr_3()
-            .border_r_1()
-            .border_color(theme.border)
+            .when(rule, |d| d.pr_3().border_r_1().border_color(theme.border))
             .children(rows)
             .child(
                 div()
@@ -662,7 +679,14 @@ impl Workspace {
                     })),
             );
         }
+        // the menu measured, for how many tiles fit beside it
+        let menu = menu.map(|m| {
+            layout::measured_row(
+                vec![m.into_any_element()],
+                Some(self.fit.styles_menu_w.clone()),
+            )
+        });
         let row = row.children(menu);
-        Self::group("Styles", vec![row.into_any_element()], cx)
+        Self::last_group("Styles", vec![row.into_any_element()], cx)
     }
 }
