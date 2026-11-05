@@ -81,7 +81,9 @@ impl Workspace {
                 Button::new("inspector-advanced")
                     .ghost()
                     .small()
-                    .justify_start()
+                    // flush with the fields' labels
+                    .self_start()
+                    .px_0()
                     .icon(Icon::default().path(if advanced {
                         "icons/chevron-down.svg"
                     } else {

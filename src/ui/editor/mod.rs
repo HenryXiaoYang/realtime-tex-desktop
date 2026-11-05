@@ -655,6 +655,42 @@ impl Render for Doc {
             );
             pages.insert(0, self.render_frame("Preamble", w0, cx));
             pages.push(self.render_frame("Trailer", w1, cx));
+        } else if self.tex {
+            // no pages yet: what is happening, rather than an empty desk
+            let name = Path::new(&self.path)
+                .file_name()
+                .map_or(self.path.clone(), |n| n.to_string_lossy().to_string());
+            let (title, detail) = if self.rtex.is_some() {
+                (
+                    format!("Typesetting {name}…"),
+                    "The first time can take a minute, while LaTeX builds its font list.",
+                )
+            } else {
+                (
+                    "The typesetter is not running".to_string(),
+                    "See the status bar for why. Recompile (⌘⇧R) tries again.",
+                )
+            };
+            let muted = theme.muted_foreground;
+            pages.push(
+                div()
+                    .mt(px(120.0))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_2()
+                    .when(self.rtex.is_some(), |d| {
+                        d.child(
+                            Spinner::new()
+                                .icon(Icon::default().path("icons/loader-circle.svg"))
+                                .with_size(Size::Medium)
+                                .color(muted),
+                        )
+                    })
+                    .child(div().text_sm().child(title))
+                    .child(div().text_xs().text_color(muted).child(detail))
+                    .into_any_element(),
+            );
         }
         // the selected blocks' keys; with no selection (or a box open) the key goes on
         type SelAct = fn(&mut Doc, usize, usize, &mut Window, &mut Context<Doc>);

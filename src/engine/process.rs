@@ -3,8 +3,30 @@
 use super::protocol::{Msg, parse};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// The process groups of the rtex runs going now (each rtex with the LaTeX runs it starts).
+static RUNNING: Mutex<Vec<u32>> = Mutex::new(vec![]);
+
+/// Every rtex stopped, with its LaTeX runs (the app is quitting, and its documents may not be
+/// dropped before it exits).
+pub fn stop_all() {
+    for pgid in RUNNING.lock().unwrap().drain(..) {
+        kill_group(pgid);
+    }
+}
+
+/// Process group `pgid` ended: rtex and any lualatex it left running.
+fn kill_group(pgid: u32) {
+    let _ = Command::new("/bin/kill")
+        .args(["-KILL", "--", &format!("-{pgid}")])
+        .stderr(Stdio::null())
+        .status();
+}
 
 pub struct Rtex {
     child: Child,
@@ -28,11 +50,14 @@ impl Rtex {
             .arg(build_dir(root, main))
             .current_dir(root)
             .env("PATH", tex_path())
+            // its own process group, so that rtex and its LaTeX runs end together
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("cannot start {}: {e}", bin.display()))?;
+        RUNNING.lock().unwrap().push(child.id());
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
@@ -94,9 +119,19 @@ impl Rtex {
 }
 
 impl Drop for Rtex {
+    /// rtex asked to quit, given a moment to, then ended with whatever it started (a killed rtex
+    /// used to leave its lualatex runs behind).
     fn drop(&mut self) {
         self.send(json!({"cmd": "quit"}));
+        let until = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < until && matches!(self.child.try_wait(), Ok(None)) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pgid = self.child.id();
+        kill_group(pgid);
         let _ = self.child.kill();
+        let _ = self.child.wait();
+        RUNNING.lock().unwrap().retain(|p| *p != pgid);
     }
 }
 

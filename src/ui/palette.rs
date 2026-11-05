@@ -49,10 +49,17 @@ pub fn marks(dark: bool, cx: &App) -> Marks {
         } else {
             black
         },
-        text_selection: theme.selection.opacity(0.3),
+        // the accent, strong enough to stand out from the paper (dark paper needs more of it)
+        text_selection: accent.opacity(selection_alpha(dark)),
         match_current: theme.warning.opacity(0.6),
         match_other: theme.warning.opacity(0.28),
     }
+}
+
+/// How much of the accent fills selected text: enough that the fill stands 1.5:1 from the paper
+/// while the text over it still reads.
+fn selection_alpha(dark: bool) -> f32 {
+    if dark { 0.6 } else { 0.4 }
 }
 
 /// The source box's background and text over `dark` paper: a step off the paper.
@@ -107,6 +114,27 @@ mod tests {
             let c: Hsla = rgb(c).into();
             assert!(contrast(readable_on(c, white, 3.0), white) >= 3.0);
             assert!(contrast(readable_on(c, black, 3.0), black) >= 3.0);
+        }
+        // a selection fill shows on either paper: the accent blended over it
+        let blend = |c: Hsla, a: f32, bg: Hsla| {
+            let (c, bg) = (c.to_rgb(), bg.to_rgb());
+            let mix = |x: f32, y: f32| x * a + y * (1.0 - a);
+            let r = gpui_kit::Rgba {
+                r: mix(c.r, bg.r),
+                g: mix(c.g, bg.g),
+                b: mix(c.b, bg.b),
+                a: 1.0,
+            };
+            Hsla::from(r)
+        };
+        for (sel, paper, dark) in [(0x55a0fc, white, false), (0x1d4ed8, black, true)] {
+            let accent = readable_on(rgb(sel).into(), paper, 3.0);
+            let fill = blend(accent, super::selection_alpha(dark), paper);
+            assert!(
+                contrast(fill, paper) >= 1.5,
+                "{dark}: {}",
+                contrast(fill, paper)
+            );
         }
         // a colour that already reads stays as it is
         let ok: Hsla = rgb(0x1d4ed8).into();

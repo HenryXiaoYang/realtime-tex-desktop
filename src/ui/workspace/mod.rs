@@ -114,7 +114,7 @@ impl Workspace {
             inspector: Default::default(),
             ribbon_tab: Default::default(),
             fit: Default::default(),
-            color_hex: cx.new(|cx| InputState::new(window, cx).placeholder("1A2B3C")),
+            color_hex: cx.new(|cx| InputState::new(window, cx).placeholder("e.g. 1A2B3C")),
             table_rows: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             table_cols: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             status: String::new(),

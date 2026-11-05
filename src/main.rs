@@ -28,6 +28,8 @@ fn main() {
             editor::bind_keys(cx);
             ui::keymap::bind_all(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
+            // no rtex or lualatex outlives the app
+            cx.on_app_quit(|_| async { engine::stop_all() }).detach();
             // every command has a place in the menu bar, where its shortcut shows
             use editor::{
                 AlignCenter, AlignJustify, AlignLeft, AlignRight, CloseFind, FindNext, FindPrev,
