@@ -112,11 +112,24 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
+        // each heading's line runs down beside the headings under it, at the start of its
+        // number, as the file tree's do under a folder
+        let mut open: Vec<usize> = vec![];
         let outline =
             outline.into_iter().map(|(off, level, number, title)| {
                 let title_copy = title.clone();
+                while open.last().is_some_and(|l| *l >= level) {
+                    open.pop();
+                }
+                let guides: Vec<Div> = open
+                    .iter()
+                    .map(|l| guide_line(12.0 + *l as f32 * 12.0 + 3.5, cx))
+                    .collect();
+                open.push(level);
                 div()
                     .id(("heading", off))
+                    .relative()
+                    .children(guides)
                     .flex()
                     .gap_2()
                     .text_sm()
@@ -232,23 +245,28 @@ impl Workspace {
 /// the rows' lines join up (as VS Code draws them). A folder's arrow sits on the line of the
 /// folder it is in: there the line stops, clear of the arrow.
 fn indent_guides(depth: usize, folder: bool, cx: &App) -> Vec<AnyElement> {
-    // the panel's text, faint: it shows on any panel (the theme's border is the dark panel's
-    // own gray)
-    let color = cx.theme().sidebar_foreground.opacity(0.2);
     (0..depth)
         .filter(|level| !(folder && level + 1 == depth))
         .map(|level| {
             // from the row's content (an absolute child sits in its parent, inside the row's
             // padding): under the middle of the folder's icon (its arrow 12 px, a 4 px gap, the
             // icon 12 px); through the row's padding above and below (4 px)
-            div()
-                .absolute()
+            guide_line(level as f32 * 12.0 + 21.5, cx)
                 .top(px(-4.0))
                 .bottom(px(-4.0))
-                .left(px(level as f32 * 12.0 + 21.5))
-                .w(px(1.0))
-                .bg(color)
                 .into_any_element()
         })
         .collect()
+}
+
+/// An indent guide `left` px into its row, its full height: the panel's text, faint, so it
+/// shows on any panel (the theme's border is the dark panel's own gray).
+fn guide_line(left: f32, cx: &App) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(left))
+        .w(px(1.0))
+        .bg(cx.theme().sidebar_foreground.opacity(0.2))
 }
