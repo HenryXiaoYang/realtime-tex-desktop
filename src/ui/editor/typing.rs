@@ -247,11 +247,69 @@ impl Doc {
         let Some(m) = self.map_of(bi, page) else {
             return false;
         };
+        if let Some(off) = self.empty_item_near(bi, page, &m, y) {
+            self.set_caret(off, cx);
+            return true;
+        }
         let Some(i) = m.stop_near(x, y) else {
             return false;
         };
         self.set_caret(m.stops[i].off, cx);
         true
+    }
+
+    /// For a click at `y` (sp) on a line of block `bi` with no text of its own (an empty list
+    /// item, just its label): where that item's text goes.
+    fn empty_item_near(&self, bi: usize, page: u32, m: &CharMap, y: f64) -> Option<usize> {
+        let b = &self.blocks[bi];
+        let base = |r: &document::PlacedRow| r.bbox[3] - r.row.dl.lines[r.row.line].d;
+        let bare = |r: &document::PlacedRow| {
+            let y = base(r);
+            !m.stops.iter().any(|s| (s.y - y).abs() < 0.5 * s.size)
+        };
+        let dist = |r: &document::PlacedRow| {
+            if y < r.bbox[1] {
+                r.bbox[1] - y
+            } else {
+                (y - r.bbox[3]).max(0.0)
+            }
+        };
+        let rows: Vec<&document::PlacedRow> = b.rows.iter().filter(|r| r.page == page).collect();
+        let r = *rows.iter().min_by(|a, b| dist(a).total_cmp(&dist(b)))?;
+        if !bare(r) {
+            return None;
+        }
+        // the text around it, and which of the bare lines between is this one
+        let line = base(r);
+        let lo = m.stops.iter().filter(|s| s.y < line).map(|s| s.off).max();
+        let top = m
+            .stops
+            .iter()
+            .filter(|s| s.y < line)
+            .map(|s| s.y)
+            .reduce(f64::max);
+        let hi = m
+            .stops
+            .iter()
+            .filter(|s| s.y > line)
+            .map(|s| s.off)
+            .min()
+            .unwrap_or(b.range.end);
+        let n = rows
+            .iter()
+            .filter(|q| base(q) < line && top.is_none_or(|t| base(q) > t) && bare(q))
+            .count();
+        let (lo, src) = (lo.unwrap_or(b.range.start), &self.source);
+        let mut empty = vec![];
+        let mut at = lo;
+        while let Some(i) = src.get(at..hi).and_then(|t| t.find("\\item")) {
+            let p = at + i + "\\item".len();
+            if let Some(it) = caret::item_at(src, p).filter(|it| it.text.is_empty()) {
+                empty.push(it.text.start);
+            }
+            at = p;
+        }
+        empty.get(n).copied()
     }
 
     /// Whether the char under (`x`, `y`) on `page` in block `bi` is text the caret edits (not a
@@ -1336,6 +1394,18 @@ mod tests {
         let (_, x1, y1, size) = cx.read(|cx| doc.read(cx).caret_at().unwrap());
         assert!(y1 > y0 + size, "a line lower: {y0} → {y1}");
         assert!(x1 < x0, "at the line's start: {x0} → {x1}");
+        // a click on the empty item's line puts the caret back in it
+        let (bi, page) = cx.read(|cx| {
+            let d = doc.read(cx);
+            let bi = d.block_of(item).unwrap();
+            (bi, d.blocks[bi].rows[0].page)
+        });
+        let want = cx.read(|cx| doc.read(cx).caret.as_ref().unwrap().off);
+        doc.update(cx, |d, cx| {
+            d.set_caret(item, cx);
+            assert!(d.caret_click(bi, page, x1 + 20.0 * 65536.0, y1 - 3.0 * 65536.0, cx));
+            assert_eq!(d.caret.as_ref().unwrap().off, want, "in the empty item");
+        });
         doc.update(cx, |d, cx| d.type_text("x", false, cx));
         doc.update(cx, |d, cx| d.tab(false, cx));
         assert!(
