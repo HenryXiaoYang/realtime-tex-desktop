@@ -225,7 +225,7 @@ pub fn commands() -> Vec<Command> {
         cmd!(
             "project-panel",
             "View",
-            "Toggle Project Panel",
+            "Show or Hide Project Panel",
             ANY,
             "cmd-\\",
             ToggleSidebar
@@ -233,7 +233,7 @@ pub fn commands() -> Vec<Command> {
         cmd!(
             "inspector",
             "View",
-            "Toggle Sidebar",
+            "Show or Hide Sidebar",
             ANY,
             "cmd-alt-\\",
             ToggleInspector

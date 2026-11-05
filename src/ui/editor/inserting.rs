@@ -144,7 +144,7 @@ impl Doc {
                 && (text.trim().is_empty() || text.trim() == self.selected_text().trim())
         });
         if sel.is_some() && wrap.is_none() && text.trim().is_empty() {
-            self.status = "A link's text is one stretch of a paragraph: select less".into();
+            self.status = "A link cannot span paragraphs: select text within one".into();
             cx.notify();
             return;
         }
@@ -313,5 +313,5 @@ fn to_png(file: &Path) -> Result<Vec<u8>, String> {
         .unwrap_or(false);
     let bytes = std::fs::read(&out).ok().filter(|_| ok);
     let _ = std::fs::remove_file(&out);
-    bytes.ok_or_else(|| "LaTeX cannot read this kind of picture".into())
+    bytes.ok_or_else(|| "LaTeX cannot use this kind of picture; use PNG, JPEG or PDF".into())
 }

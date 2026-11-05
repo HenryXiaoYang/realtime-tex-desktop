@@ -148,7 +148,7 @@ pub(super) fn parse(line: &str) -> Option<Msg> {
             // an incomplete edit (`\fr` on the way to `\frac`): keep showing the last good result
             // (the first diagnostic that says something: some come with an empty message)
             "ParagraphUpdate" if v["status"] == "error" => Some(Msg::Status(format!(
-                "LaTeX error: {}",
+                "LaTeX error in this paragraph: {}",
                 v["diagnostics"]
                     .as_array()
                     .into_iter()
@@ -181,7 +181,7 @@ pub(super) fn parse(line: &str) -> Option<Msg> {
         "spans" => Some(Msg::Spans(serde_json::from_value(v["spans"].clone()).ok()?)),
         "edit" if v["result"]["routed"] != "fast" => Some(Msg::Compiling),
         "error" => Some(Msg::Status(format!(
-            "rtex: {}",
+            "Typesetter: {}",
             v["message"].as_str().unwrap_or("")
         ))),
         _ => None,

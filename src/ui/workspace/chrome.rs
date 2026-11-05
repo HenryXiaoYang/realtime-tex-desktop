@@ -104,27 +104,26 @@ impl Workspace {
             let zoom = d.read(cx).zoom;
             self.render_zoom(zoom, cx).into_any_element()
         });
-        let tools =
-            self.doc().filter(|d| d.read(cx).tex).map(|d| {
-                let d = d.read(cx);
-                let (zoom, source) = (d.zoom, d.source_mode);
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .children((!source).then(|| self.render_zoom(zoom, cx)))
-                    .child(
-                        Button::new("recompile")
-                            .icon(Icon::default().path("icons/refresh-cw.svg"))
-                            .xsmall()
-                            .ghost()
-                            .tip("Recompile: run the full LaTeX compile now (⌘⇧R)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.with_doc(cx, |d, cx| d.recompile(cx))
-                            })),
-                    )
-                    .child(self.render_mode_switch(source, cx))
-            });
+        let tools = self.doc().filter(|d| d.read(cx).tex).map(|d| {
+            let d = d.read(cx);
+            let (zoom, source) = (d.zoom, d.source_mode);
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .children((!source).then(|| self.render_zoom(zoom, cx)))
+                .child(
+                    Button::new("recompile")
+                        .icon(Icon::default().path("icons/refresh-cw.svg"))
+                        .xsmall()
+                        .ghost()
+                        .tip("Recompile: run the full LaTeX compile now (⌘⇧R)")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.with_doc(cx, |d, cx| d.recompile(window, cx))
+                        })),
+                )
+                .child(self.render_mode_switch(source, cx))
+        });
         TabBar::new("tabs")
             .small()
             .selected_index(self.active)
@@ -280,7 +279,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .selected(self.fit.left)
-                            .tip("Toggle Project Panel (⌘\\)")
+                            .tip("Show or Hide Project Panel (⌘\\)")
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_left(cx))),
                     )
                     .child(

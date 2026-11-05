@@ -124,7 +124,7 @@ impl Doc {
             }
         };
         let Some(fmt) = fmt else {
-            self.status = "Nothing to format there".into();
+            self.status = "Select some text, or put the caret in a word, to format it".into();
             cx.notify();
             return;
         };

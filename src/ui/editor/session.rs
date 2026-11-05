@@ -47,19 +47,30 @@ impl Doc {
             }
             engine::Msg::Status(s) => self.status = s,
             engine::Msg::Failed => {
-                self.status = "LaTeX failed; showing the last good layout".into();
+                self.status = "LaTeX could not typeset the last change: the pages show the version before it. Undo (⌘Z) or fix the TeX".into();
                 self.compiling = false;
             }
             engine::Msg::Compiling => self.compiling = true,
             engine::Msg::Exported { path, ok } => {
+                let name = |p: &str| {
+                    Path::new(p)
+                        .file_name()
+                        .map_or(p.to_string(), |n| n.to_string_lossy().to_string())
+                };
                 self.status = match (path, ok) {
-                    (Some(p), true) => format!("Exported {p}"),
-                    (Some(p), false) => format!("Exported {p}, but LaTeX reported errors"),
-                    (None, _) => "Export failed: LaTeX did not produce a PDF".into(),
+                    (Some(p), true) => format!("Exported {}", name(&p)),
+                    (Some(p), false) => format!(
+                        "Exported {}, but LaTeX reported errors: some of it may be wrong",
+                        name(&p)
+                    ),
+                    (None, _) => {
+                        "Export failed: LaTeX made no PDF. Fix the errors shown on the pages and export again".into()
+                    }
                 }
             }
             engine::Msg::Exited(tail) => {
-                self.status = format!("rtex stopped: {tail}");
+                self.status =
+                    format!("The typesetter stopped ({tail}). Recompile (⌘⇧R) starts it again");
                 self.rtex = None;
                 self.compiling = false;
             }

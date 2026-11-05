@@ -477,17 +477,23 @@ impl Doc {
         if !tex {
             return this;
         }
+        this.start_engine(window, cx);
+        this
+    }
+
+    /// rtex started on the file (as saved) and listened to.
+    fn start_engine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
-        match engine::Rtex::start(&this.root, &this.path, tx) {
+        match engine::Rtex::start(&self.root, &self.path, tx) {
             Ok(mut r) => {
                 r.request_spans();
-                this.spans_pending = 1;
-                this.rtex = Some(r);
-                this.status = "Typesetting…".into();
+                self.spans_pending = 1;
+                self.rtex = Some(r);
+                self.status = "Typesetting…".into();
             }
-            Err(e) => this.status = e,
+            Err(e) => self.status = e,
         }
-        this._tasks.push(cx.spawn_in(window, async move |this, cx| {
+        self._tasks.push(cx.spawn_in(window, async move |this, cx| {
             while let Some(msg) = rx.next().await {
                 if this
                     .update_in(cx, |this, window, cx| this.on_msg(msg, window, cx))
@@ -497,7 +503,6 @@ impl Doc {
                 }
             }
         }));
-        this
     }
 
     /// Free the page images in the window's texture atlas (when the tab closes).
@@ -528,13 +533,21 @@ impl Doc {
         cx.notify();
     }
 
-    /// A full LaTeX run now (references, a changed .bib or included file).
-    pub fn recompile(&mut self, cx: &mut Context<Self>) {
-        if let Some(r) = self.rtex.as_mut() {
-            r.request_layout();
-            self.compiling = true;
-            cx.notify();
+    /// A full LaTeX run now (references, a changed .bib or included file); the typesetting
+    /// engine started again (on the file, saved first) if it had stopped.
+    pub fn recompile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.rtex.as_mut() {
+            Some(r) => {
+                r.request_layout();
+                self.compiling = true;
+            }
+            None if self.tex => {
+                self.save(cx);
+                self.start_engine(window, cx);
+            }
+            None => {}
         }
+        cx.notify();
     }
 
     /// Ask where, then have rtex typeset the whole document into a PDF there.
@@ -556,7 +569,10 @@ impl Doc {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(r) = this.rtex.as_mut() {
                         r.export_pdf(&out);
-                        this.status = format!("Exporting {}…", out.display());
+                        let name = out
+                            .file_name()
+                            .map_or(String::new(), |n| n.to_string_lossy().to_string());
+                        this.status = format!("Exporting {name}…");
                         cx.notify();
                     }
                 });

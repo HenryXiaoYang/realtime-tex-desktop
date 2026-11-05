@@ -157,11 +157,10 @@ impl Doc {
             let (r, text) = find::replace(&self.source, m.clone(), &with);
             self.replace(r, &text, cx);
         }
-        self.status = format!(
-            "Replaced {} match{}",
-            matches.len(),
-            if matches.len() == 1 { "" } else { "es" }
-        );
+        self.status = match matches.len() {
+            1 => "Replaced 1 match. Undo (⌘Z) puts it back".to_string(),
+            n => format!("Replaced {n} matches. Undo (⌘Z) puts them all back"),
+        };
         self.refind(cx);
     }
 
@@ -199,7 +198,7 @@ impl Doc {
         let theme = cx.theme().clone();
         let count = match (f.current, f.matches.len()) {
             (_, 0) if f.query.read(cx).value().is_empty() => String::new(),
-            (_, 0) => "No results".to_string(),
+            (_, 0) => "No matches".to_string(),
             (Some(i), n) => format!("{} of {n}", i + 1),
             (None, n) => format!("{n}"),
         };

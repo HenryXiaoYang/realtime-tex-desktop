@@ -27,7 +27,7 @@ impl Workspace {
                 || std::fs::read(self.root.join(&path))
                     .map_or(true, |b| std::str::from_utf8(&b).is_err()))
         {
-            self.status = format!("{path} is not a text file");
+            self.status = format!("Cannot open {path}: it is not a text file");
             cx.notify();
             return;
         }
@@ -177,9 +177,9 @@ impl Workspace {
         let new = old.with_file_name(&name);
         if name.is_empty() || new == old {
         } else if name.contains('/') || name.starts_with('.') {
-            self.status = format!("“{name}” is not a usable name");
+            self.status = format!("“{name}” cannot be a name: no / and no dot at the start");
         } else if new.exists() {
-            self.status = format!("{name} already exists");
+            self.status = format!("{name} already exists here: choose another name");
         } else if let Some(new_rel) = self.rel(&new) {
             // open files under it are saved, closed, and reopened under the new name
             let moved = self.close_under(&rel, true, window, cx);

@@ -559,7 +559,7 @@ impl Workspace {
         let d = doc.clone();
         self.open_picker(
             "Insert Citation",
-            "No .bib file with entries beside the document.",
+            "No sources yet: put a .bib file beside the document, or name one with \\bibliography{…}.",
             items,
             Rc::new(move |key, _, cx| d.update(cx, |d, cx| d.insert_citation(key, cx))),
             window,

@@ -166,7 +166,7 @@ impl Workspace {
             Some(m) => this.open(m, window, cx),
             None => {
                 this.status =
-                    "No .tex file with \\documentclass in this folder: pick one on the left".into()
+                    "No document here: this folder has no .tex file with \\documentclass. Open one from the project panel".into()
             }
         }
         this
@@ -238,11 +238,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &Export, _, cx| this.with_doc(cx, |d, cx| d.export(cx))),
             )
-            .on_action(
-                cx.listener(|this, _: &Recompile, _, cx| {
-                    this.with_doc(cx, |d, cx| d.recompile(cx))
-                }),
-            )
+            .on_action(cx.listener(|this, _: &Recompile, window, cx| {
+                this.with_doc(cx, |d, cx| d.recompile(window, cx))
+            }))
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
                 this.with_doc(cx, |d, cx| d.zoom_step(1, window, cx))
             }))
