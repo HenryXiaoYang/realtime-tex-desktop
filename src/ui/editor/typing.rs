@@ -61,7 +61,9 @@ impl Doc {
         }
         let src = self.source.get(b.range.clone())?;
         let gt = glyphmap::glyph_text_of(&rows);
-        let m = Rc::new(caret::char_map(&gt, src, b.range.start));
+        let mut m = caret::char_map(&gt, src, b.range.start);
+        self.add_empty_items(bi, page, &mut m);
+        let m = Rc::new(m);
         self.maps.borrow_mut().insert(key, m.clone());
         Some(m)
     }
@@ -122,26 +124,8 @@ impl Doc {
     /// blocks (a new paragraph not typeset yet), under the block before.
     fn caret_at(&self) -> Option<(u32, f64, f64, f64)> {
         let off = self.caret.as_ref()?.off;
-        if let Some((bi, page, m, i)) = self.caret_stop() {
+        if let Some((_, page, m, i)) = self.caret_stop() {
             let s = m.stops[i];
-            // in an empty list item (a new one after Enter): no text to stand by yet, so at the
-            // start of its line, the n-th below the text before it for the n-th \item since
-            let items = self
-                .source
-                .get(s.off..off)
-                .map_or(0, |t| t.matches("\\item").count());
-            if items > 0 {
-                let mut below: Vec<&document::PlacedRow> = self.blocks[bi]
-                    .rows
-                    .iter()
-                    .filter(|r| r.page == page && r.bbox[1] > s.y)
-                    .collect();
-                below.sort_by(|a, b| a.bbox[1].total_cmp(&b.bbox[1]));
-                if let Some(r) = below.get(items - 1) {
-                    let baseline = r.bbox[3] - r.row.dl.lines[r.row.line].d;
-                    return Some((page, r.bbox[0], baseline, s.size));
-                }
-            }
             return Some((page, s.x, s.y, s.size));
         }
         let size = |b: &document::Block| {
@@ -247,10 +231,6 @@ impl Doc {
         let Some(m) = self.map_of(bi, page) else {
             return false;
         };
-        if let Some(off) = self.empty_item_near(bi, page, &m, y) {
-            self.set_caret(off, cx);
-            return true;
-        }
         let Some(i) = m.stop_near(x, y) else {
             return false;
         };
@@ -258,58 +238,59 @@ impl Doc {
         true
     }
 
-    /// For a click at `y` (sp) on a line of block `bi` with no text of its own (an empty list
-    /// item, just its label): where that item's text goes.
-    fn empty_item_near(&self, bi: usize, page: u32, m: &CharMap, y: f64) -> Option<usize> {
+    /// Stops on the lines of block `bi` that have no text of their own (empty list items,
+    /// just their label): where each item's text goes, at the start of its line.
+    fn add_empty_items(&self, bi: usize, page: u32, m: &mut CharMap) {
         let b = &self.blocks[bi];
         let base = |r: &document::PlacedRow| r.bbox[3] - r.row.dl.lines[r.row.line].d;
-        let bare = |r: &document::PlacedRow| {
-            let y = base(r);
-            !m.stops.iter().any(|s| (s.y - y).abs() < 0.5 * s.size)
-        };
-        let dist = |r: &document::PlacedRow| {
-            if y < r.bbox[1] {
-                r.bbox[1] - y
-            } else {
-                (y - r.bbox[3]).max(0.0)
+        let stops = m.stops.clone();
+        let bare = |y: f64| !stops.iter().any(|s| (s.y - y).abs() < 0.5 * s.size);
+        let mut rows: Vec<&document::PlacedRow> = b
+            .rows
+            .iter()
+            .filter(|r| r.page == page && bare(base(r)))
+            .collect();
+        rows.sort_by(|a, b| base(a).total_cmp(&base(b)));
+        let src = &self.source;
+        for (k, r) in rows.iter().enumerate() {
+            let line = base(r);
+            // the text around it, and which of the bare lines between is this one
+            let above: Vec<&caret::Stop> = stops.iter().filter(|s| s.y < line).collect();
+            let lo = above.iter().map(|s| s.off).max().unwrap_or(b.range.start);
+            let top = above.iter().map(|s| s.y).reduce(f64::max);
+            let after = stops.iter().filter(|s| s.y > line).min_by_key(|s| s.off);
+            let hi = after.map_or(b.range.end, |s| s.off);
+            let n = rows[..k]
+                .iter()
+                .filter(|q| top.is_none_or(|t| base(q) > t))
+                .count();
+            let mut empty = vec![];
+            let mut at = lo;
+            while let Some(i) = src.get(at..hi).and_then(|t| t.find("\\item")) {
+                let p = at + i + "\\item".len();
+                if let Some(it) = caret::item_at(src, p).filter(|it| it.text.is_empty()) {
+                    empty.push(it.text.start);
+                }
+                at = p;
             }
-        };
-        let rows: Vec<&document::PlacedRow> = b.rows.iter().filter(|r| r.page == page).collect();
-        let r = *rows.iter().min_by(|a, b| dist(a).total_cmp(&dist(b)))?;
-        if !bare(r) {
-            return None;
+            let Some(&off) = empty.get(n) else { continue };
+            let size = after
+                .or(above.last().copied())
+                .map_or(10.0 * 65536.0, |s| s.size);
+            let stop = caret::Stop {
+                k: after.map_or(m.chars.len(), |s| s.k),
+                off,
+                x: r.bbox[0],
+                y: line,
+                size,
+            };
+            let at = m
+                .stops
+                .iter()
+                .position(|s| s.off > off)
+                .unwrap_or(m.stops.len());
+            m.stops.insert(at, stop);
         }
-        // the text around it, and which of the bare lines between is this one
-        let line = base(r);
-        let lo = m.stops.iter().filter(|s| s.y < line).map(|s| s.off).max();
-        let top = m
-            .stops
-            .iter()
-            .filter(|s| s.y < line)
-            .map(|s| s.y)
-            .reduce(f64::max);
-        let hi = m
-            .stops
-            .iter()
-            .filter(|s| s.y > line)
-            .map(|s| s.off)
-            .min()
-            .unwrap_or(b.range.end);
-        let n = rows
-            .iter()
-            .filter(|q| base(q) < line && top.is_none_or(|t| base(q) > t) && bare(q))
-            .count();
-        let (lo, src) = (lo.unwrap_or(b.range.start), &self.source);
-        let mut empty = vec![];
-        let mut at = lo;
-        while let Some(i) = src.get(at..hi).and_then(|t| t.find("\\item")) {
-            let p = at + i + "\\item".len();
-            if let Some(it) = caret::item_at(src, p).filter(|it| it.text.is_empty()) {
-                empty.push(it.text.start);
-            }
-            at = p;
-        }
-        empty.get(n).copied()
     }
 
     /// Whether the char under (`x`, `y`) on `page` in block `bi` is text the caret edits (not a
@@ -1405,6 +1386,20 @@ mod tests {
             d.set_caret(item, cx);
             assert!(d.caret_click(bi, page, x1 + 20.0 * 65536.0, y1 - 3.0 * 65536.0, cx));
             assert_eq!(d.caret.as_ref().unwrap().off, want, "in the empty item");
+        });
+        // and the arrows stop there, from the item before and back
+        doc.update(cx, |d, cx| {
+            d.set_caret(item, cx);
+            d.move_v(1, cx);
+            assert_eq!(d.caret.as_ref().unwrap().off, want, "↓ into the empty item");
+            d.move_v(-1, cx);
+            assert!(d.caret.as_ref().unwrap().off < item + 1, "↑ out of it");
+            d.set_caret(item, cx);
+            d.move_h(1, cx);
+            assert_eq!(d.caret.as_ref().unwrap().off, want, "→ into the empty item");
+            d.move_h(-1, cx);
+            assert_eq!(d.caret.as_ref().unwrap().off, item, "← back");
+            d.set_caret(want, cx);
         });
         doc.update(cx, |d, cx| d.type_text("x", false, cx));
         doc.update(cx, |d, cx| d.tab(false, cx));
