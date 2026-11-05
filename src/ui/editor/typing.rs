@@ -122,8 +122,26 @@ impl Doc {
     /// blocks (a new paragraph not typeset yet), under the block before.
     fn caret_at(&self) -> Option<(u32, f64, f64, f64)> {
         let off = self.caret.as_ref()?.off;
-        if let Some((_, page, m, i)) = self.caret_stop() {
+        if let Some((bi, page, m, i)) = self.caret_stop() {
             let s = m.stops[i];
+            // in an empty list item (a new one after Enter): no text to stand by yet, so at the
+            // start of its line, the n-th below the text before it for the n-th \item since
+            let items = self
+                .source
+                .get(s.off..off)
+                .map_or(0, |t| t.matches("\\item").count());
+            if items > 0 {
+                let mut below: Vec<&document::PlacedRow> = self.blocks[bi]
+                    .rows
+                    .iter()
+                    .filter(|r| r.page == page && r.bbox[1] > s.y)
+                    .collect();
+                below.sort_by(|a, b| a.bbox[1].total_cmp(&b.bbox[1]));
+                if let Some(r) = below.get(items - 1) {
+                    let baseline = r.bbox[3] - r.row.dl.lines[r.row.line].d;
+                    return Some((page, r.bbox[0], baseline, s.size));
+                }
+            }
             return Some((page, s.x, s.y, s.size));
         }
         let size = |b: &document::Block| {
@@ -1296,8 +1314,8 @@ mod tests {
         // Enter at the end of a list item adds one; Tab nests it; undo takes both back
         let item = cx.read(|cx| {
             let d = doc.read(cx);
-            let at = d.source.find("\\item ").unwrap();
-            at + d.source[at..].find('\n').unwrap()
+            // the end of a list's last item, which has a line of its own for a new item
+            d.source.find("\n\\end{itemize}").unwrap()
         });
         let base = cx.read(|cx| doc.read(cx).source.clone());
         doc.update(cx, |d, cx| {
@@ -1310,6 +1328,14 @@ mod tests {
             "{:?}",
             &one[item..item + 20]
         );
+        // the caret stands on the new item's line, not after the item before
+        let (_, x0, y0, _) = cx.read(|cx| doc.read(cx).caret_at().unwrap());
+        wait(cx, &doc, "the new item typeset", |d| {
+            d.spans_pending == 0 && !d.compiling && d.caret_at().is_some_and(|c| c.2 > y0)
+        });
+        let (_, x1, y1, size) = cx.read(|cx| doc.read(cx).caret_at().unwrap());
+        assert!(y1 > y0 + size, "a line lower: {y0} → {y1}");
+        assert!(x1 < x0, "at the line's start: {x0} → {x1}");
         doc.update(cx, |d, cx| d.type_text("x", false, cx));
         doc.update(cx, |d, cx| d.tab(false, cx));
         assert!(
