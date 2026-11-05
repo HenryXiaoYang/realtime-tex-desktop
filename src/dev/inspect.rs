@@ -100,6 +100,42 @@ fn inspect() {
             b.span,
             &source[b.range.clone()]
         );
+        // RTD_INSPECT_CARET=1: where the caret can stand, as ¦ in the source
+        if std::env::var("RTD_INSPECT_CARET").is_ok() {
+            let mut seen = std::collections::BTreeSet::new();
+            for page in b.rows.iter().map(|r| r.page) {
+                if !seen.insert(page) {
+                    continue;
+                }
+                let rows: Vec<_> = b
+                    .rows
+                    .iter()
+                    .filter(|r| r.page == page)
+                    .map(|r| &r.row)
+                    .collect();
+                let gt = glyphmap::glyph_text_of(&rows);
+                let m = document::caret::char_map(&gt, &source[b.range.clone()], b.range.start);
+                let mut marked = String::new();
+                for (o, ch) in source[b.range.clone()].char_indices() {
+                    if m.stops.iter().any(|s| s.off == b.range.start + o) {
+                        marked.push('¦');
+                    }
+                    marked.push(ch);
+                }
+                if m.stops.iter().any(|s| s.off == b.range.end) {
+                    marked.push('¦');
+                }
+                println!("  caret p{page} ({} stops): {marked:?}", m.stops.len());
+                if std::env::var("RTD_INSPECT_CHARS")
+                    .is_ok_and(|f| source[b.range.clone()].contains(&f))
+                {
+                    for c in &m.chars {
+                        let s = c.src.clone().map(|r| &source[r]);
+                        println!("    {:?} {s:?} glyph={}", c.ch, c.glyph);
+                    }
+                }
+            }
+        }
     }
     // RTD_INSPECT_PNG=dir also writes each page as dir/page-<n>.png
     let Ok(out) = std::env::var("RTD_INSPECT_PNG") else {

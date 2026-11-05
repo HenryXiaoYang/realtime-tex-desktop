@@ -18,8 +18,20 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 - The window is laid out like Zed: the project name and **Export PDF** in the title bar, a
   project panel (files and outline) you can resize or hide, tabs for open files, and a status bar
   with the engine state and page number.
-- Click a block to select it; double-click it to edit its source, with the caret at the clicked character;
-  Up on the first line or Down on the last moves to the neighbouring block; Escape leaves it.
+- Visual mode: click text on a page for a caret there and type, as in a word processor. What
+  you type goes into the source escaped (`%` becomes `\%`), rtex re-typesets the paragraph in
+  milliseconds, and until it has, the typed text is drawn at the caret. Input methods (pinyin…)
+  compose in place, underlined. Arrows, ⌥←/⌥→ (word), ⌘←/⌘→ (line) and ⌘↑/⌘↓ (document) move the
+  caret. Enter starts a paragraph (closing and reopening `\textbf{…}` and the like around the
+  break) or, in a list, an item (on an empty item, leaves the list); Shift-Enter is a line break
+  (`\\`); Tab and Shift-Tab nest and un-nest list items; Backspace and Delete remove a character,
+  a whole `\ref`/`\cite` or formula, or join two paragraphs or items. Undo takes back a word at a
+  time (in Chinese, Japanese, Thai…, one input-method commit). ⌘M opens a formula in the
+  paragraph's source box.
+- Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
+  it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
+  the clicked character; Up on the first line or Down on the last moves to the neighbouring
+  block; Escape leaves it. Escape on the caret selects its block instead.
 - The source box shows the source in the font the document sets that text in (Latin Modern,
   Times, whatever fontspec loaded), at its size and the zoom; Settings → Source box font can name
   another family. Fonts the app cannot load (Type1 fonts from TFM-era documents) fall back to
@@ -32,12 +44,12 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   Right-click empty space to insert a paragraph, a template or the clipboard there.
 - Selecting blocks, while no source box is open: a click or right-click selects one (outlined in blue),
   Shift-click or Shift-right-click extends to another, ⇧↑/⇧↓ extend by a block, ⌘A selects all.
-  On the selection: Enter (or Edit Source) edits all of it in one box, Show in Source selects it there, ↑/↓ select the previous/next block, ⌥↑/⌥↓ move
+  On the selection: Enter (or Edit Source) edits all of it in one box, Show in Source selects it there, ↑/↓ select the previous/next block, ⌃⇧↑/⌃⇧↓ move
   them, ⌫ deletes them, ⌘D duplicates them, ⌘C/⌘X copy or cut their source, ⌘V pastes below,
   Escape clears. With a box open, all these keys edit the box's text instead.
 - The preamble (`\documentclass` … `\begin{document}`) and `\end{document}` print nothing, so
   they sit in thin strips above the first page and below the last; click one to edit it.
-- **Rendered / Source** (right of the tab bar): edit on the typeset pages, or the whole file in a
+- **Visual / Source** (right of the tab bar): edit on the typeset pages, or the whole file in a
   code editor with LaTeX highlighting and line numbers. Edits in either show in the other.
 - Autocomplete, in the source box and in Source mode: `\` commands (with the caret placed in
   the first argument), environments after `\begin{` (inserting the matching `\end`) and
@@ -62,7 +74,8 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 | ⌘E | Export PDF |
 | ⌘W | Close tab |
 | ⌘B | Toggle the project panel |
-| ⌘⇧E | Switch between Rendered and Source |
+| ⌘⇧E | Switch between Visual and Source |
+| ⌃⇧↑ / ⌃⇧↓ | Move the paragraph at the caret (or the selected blocks) up / down |
 
 Settings (⌘, or the gear in the status bar): theme, interface and source font sizes, default
 zoom, live formula preview, line numbers, soft wrap, auto-save, and the rtex binary and TeX
@@ -89,6 +102,7 @@ src/
     blocks.rs          editable blocks: spans, with display math split out
     outline.rs         the section outline
     glyphmap.rs        click-to-source: glyph text aligned with the visible source
+    caret.rs           where a caret stands among glyphs; typing, Enter, Tab, Backspace as edits
   render/              rasterizing (skrifa, tiny-skia, hayro)
     mod.rs             display lists to pixels, dark paper
     resources.rs       fonts (OpenType, Type1 via pdftex.map) and images (PNG, JPG, PDF)
@@ -100,6 +114,7 @@ src/
     editor/            one open file (Doc)
       session.rs       keeping in step with rtex: layouts, live paragraphs, page images
       pages.rs         drawing a page, split around the source box, with the compile spinner
+      typing.rs        Visual mode's caret: moving, typing, input methods, the typed-text overlay
       source_box.rs    the inline source box
       editing.rs       opening, typing in and leaving the box; insert spots; undo
       selection.rs     block selection and block commands
@@ -112,6 +127,10 @@ src/
 
 `RTD_INSPECT=file.tex cargo test --release inspect -- --ignored --nocapture` prints each block's
 source and typeset text; `RTD_INSPECT_PNG=dir` also writes the pages as PNGs, and
-`RTD_INSPECT_EDIT='find|replace'` makes one live edit first.
+`RTD_INSPECT_EDIT='find|replace'` makes one live edit first, and `RTD_INSPECT_CARET=1` marks
+where the caret can stand (`RTD_INSPECT_CHARS=text` also lists the char map of blocks containing
+`text`). `RTD_TYPE=/abs/copy/main.tex cargo test --release type_on_pages -- --ignored
+--nocapture` types on a real document through rtex (caret, escaping, undo steps, Enter,
+Backspace, lists, an input method) and prints how long typing took to typeset.
 
 Set `RTD_LOG=1` to print the rtex protocol traffic to stderr.

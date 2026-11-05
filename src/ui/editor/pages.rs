@@ -8,37 +8,28 @@ impl Doc {
         n: u32,
         dl: &engine::DisplayList,
         at: Option<&BoxPlace>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (w, h) = (
             page_px(dl.page_width.unwrap_or(40258437.0), self.zoom),
             page_px(dl.page_height.unwrap_or(52099153.0), self.zoom),
         );
-        // a full LaTeX run is under way: the pages are out of date, so a spinner stands in for
-        // them (the source box stays and keeps working)
+        // a full LaTeX run is under way: the last pages stay (with what was typed drawn over
+        // them) and a small spinner in the corner says they are out of date
         let compiling = self.compiling;
-        let image = self
-            .images
-            .get(&n)
-            .map(|im| im.img.clone())
-            .filter(|_| !compiling);
+        let image = self.images.get(&n).map(|im| im.img.clone());
         let muted = cx.theme().muted_foreground;
-        let spinner = move || {
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    Spinner::new()
-                        .icon(Icon::default().path("icons/loader-circle.svg"))
-                        .ease(|t| t)
-                        .with_size(Size::Large)
-                        .color(muted),
-                )
-        };
-        let slice = |top: f32, height: f32, spin: bool| {
+        let spinner = compiling.then(|| {
+            div().absolute().top_2().right_2().child(
+                Spinner::new()
+                    .icon(Icon::default().path("icons/loader-circle.svg"))
+                    .ease(|t| t)
+                    .with_size(Size::Small)
+                    .color(muted),
+            )
+        });
+        let slice = |top: f32, height: f32| {
             div()
                 .relative()
                 .w(px(w))
@@ -49,7 +40,6 @@ impl Doc {
                         .clone()
                         .map(|i| img(i).absolute().top(px(-top)).left_0().w(px(w)).h(px(h))),
                 )
-                .children((compiling && spin).then(spinner))
         };
         let bounds = self.page_bounds.clone();
         let page = div()
@@ -119,6 +109,7 @@ impl Doc {
                         .map(|i| this.blocks[i].range.start);
                     this.menu_target.set(hit.map(|(_, y, _)| (n, y, off)));
                     if this.active.is_none() {
+                        this.caret = None;
                         let ix = off.and_then(|o| this.block_at(o));
                         let inside = ix.is_some_and(|i| this.selection_with(i) != (i, i));
                         match (ix, this.selected) {
@@ -196,18 +187,19 @@ impl Doc {
             self.box_cut.set(None);
             return page
                 .h(px(h))
-                .child(slice(0.0, h, true))
+                .child(slice(0.0, h))
                 .children(blank)
                 .children(outline)
                 .children(insert)
+                .children(self.render_caret(n, window, cx))
+                .children(spinner)
                 .into_any_element();
         };
         // the source box replaces the block's lines; the rest of the page moves down
         let (editor, top, bottom) = self.render_box(at, dl, cx);
         self.box_cut.set(Some((n, bottom - top)));
-        // the spinner goes in the taller part of the page around the box
         let rest = (h - bottom).max(0.0);
-        page.child(slice(0.0, top, top >= rest))
+        page.child(slice(0.0, top))
             .child(editor)
             .child(
                 div()
@@ -222,9 +214,9 @@ impl Doc {
                             .left_0()
                             .w(px(w))
                             .h(px(h))
-                    }))
-                    .children((compiling && rest > top).then(spinner)),
+                    })),
             )
+            .children(spinner)
             .into_any_element()
     }
 

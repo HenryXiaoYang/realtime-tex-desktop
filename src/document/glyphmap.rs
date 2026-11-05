@@ -6,6 +6,7 @@
 use crate::engine::FontDesc;
 use crate::render::Row;
 use std::collections::HashMap;
+use std::ops::Range;
 
 /// A glyph that has text, in sp.
 struct Glyph {
@@ -172,6 +173,33 @@ pub fn char_at(gt: &GlyphText, x: f64, y: f64) -> Option<(usize, bool)> {
         0.0
     };
     Some((g.start + f as usize, f.fract() >= 0.5))
+}
+
+/// Each char of `gt.text`: its box (x, baseline y, width, font size) in sp, None for a space
+/// TeX drew as glue. A ligature's box is split evenly between its chars.
+pub fn char_boxes(gt: &GlyphText) -> Vec<Option<[f64; 4]>> {
+    let mut out = vec![None; gt.text.len()];
+    for g in &gt.glyphs {
+        let w = g.adv / g.len.max(1) as f64;
+        for k in 0..g.len {
+            out[g.start + k] = Some([g.x + w * k as f64, g.y, w, g.size]);
+        }
+    }
+    out
+}
+
+/// Each char of `gt.text`: the bytes of `src` it shows, None for text a macro printed.
+pub fn char_sources(gt: &GlyphText, src: &str) -> Vec<Option<Range<usize>>> {
+    let vis = visible_source(src);
+    let (at, ..) = char_map(gt, &vis, gt.text.len() / 2);
+    at.iter()
+        .map(|&v| usize::try_from(v).ok().map(|v| vis.start[v]..vis.end[v]))
+        .collect()
+}
+
+/// Whether `src` prints any text (markup and spaces do not).
+pub fn has_visible(src: &str) -> bool {
+    visible_source(src).text.iter().any(|c| *c != ' ')
 }
 
 /// Source text with the markup that prints nothing removed; `start`/`end` give each character's
@@ -568,6 +596,36 @@ mod tests {
         // a click inside the second glyph of "world"
         let (i, _) = char_at(&gt, 5.0 * 5.0 * PT + 3.3 * PT + 7.0 * PT, 98.0 * PT).unwrap();
         assert_eq!(gt.text[i], 'o');
+    }
+
+    #[test]
+    fn the_caret_stands_beside_text_not_inside_macros_or_math() {
+        use crate::document::caret::{CharMap, char_map};
+        let src = "see $x$ and \\ref{s} more";
+        let r = row("see x and 3 more", 100.0);
+        let m = char_map(&glyph_text_of(&[&r]), src, 0);
+        let offs: Vec<usize> = m.stops.iter().map(|s| s.off).collect();
+        assert!(offs.contains(&src.find("and").unwrap()));
+        assert!(offs.contains(&src.find("more").unwrap()));
+        // nowhere inside the formula
+        let x = src.find('x').unwrap();
+        assert!(!offs.contains(&x) && !offs.contains(&(x + 1)));
+        let stop = |m: &CharMap, off: usize| m.stops.iter().position(|s| s.off == off).unwrap();
+        // a space goes as the source's whitespace beside the caret; a letter as itself
+        let and = src.find("and").unwrap() + 3;
+        assert_eq!(m.deletion(stop(&m, and), false, src), Some(and..and + 1));
+        let more = src.find("more").unwrap();
+        assert_eq!(m.deletion(stop(&m, more), true, src), Some(more - 1..more));
+        assert_eq!(m.deletion(stop(&m, 3), true, src), Some(2..3));
+        // a reference goes whole, from either side
+        let src = "a\\ref{s}b";
+        let r = row("a3b", 100.0);
+        let m = char_map(&glyph_text_of(&[&r]), src, 0);
+        assert_eq!(m.deletion(stop(&m, 1), false, src), Some(1..8));
+        assert_eq!(m.deletion(stop(&m, 8), true, src), Some(1..8));
+        // a click lands on the nearest stop
+        let i = m.stop_near(0.0, 98.0 * PT).unwrap();
+        assert_eq!(m.stops[i].off, 0);
     }
 
     #[test]

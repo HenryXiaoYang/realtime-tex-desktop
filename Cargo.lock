@@ -6096,6 +6096,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.49.0",
  "tiny-skia 0.12.0",
+ "unicode-segmentation",
 ]
 
 [[package]]

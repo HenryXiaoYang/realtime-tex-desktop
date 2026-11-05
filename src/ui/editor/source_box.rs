@@ -140,6 +140,12 @@ impl Doc {
         if !chosen.is_empty() {
             return chosen.into();
         }
+        self.doc_family(desc, cx)
+    }
+
+    /// The family of the document's own font `desc`, registered with the window's text system
+    /// the first time; Menlo when it cannot be loaded.
+    pub(super) fn doc_family(&self, desc: Option<&engine::FontDesc>, cx: &App) -> SharedString {
         let Some(file) = desc.and_then(|d| d.filename.clone()) else {
             return MONO.into();
         };

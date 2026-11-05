@@ -30,6 +30,7 @@ impl Doc {
             return;
         };
         self.selected = Some((a.range.start, h.range.start));
+        self.caret = None;
         let off = h.range.start;
         self.scroll_to(off, true, cx);
         cx.notify();

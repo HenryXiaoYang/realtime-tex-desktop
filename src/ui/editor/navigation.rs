@@ -42,9 +42,10 @@ impl Doc {
         Some((x, y, bi))
     }
 
-    /// A click selects the block under it (Shift: up to it); a double-click edits it, with the
-    /// caret at the clicked character. A click beside the lines while a box is open only closes
-    /// the box. (New blocks come from the insert line, `gap_at`.)
+    /// A click on text puts the caret there; on a formula or a picture it selects that block
+    /// (Shift: blocks up to it). A double-click on a formula, a macro's text or a picture edits
+    /// its source, with the caret at the clicked character. A click beside the lines while a
+    /// box is open only closes the box. (New blocks come from the insert line, `gap_at`.)
     pub(super) fn on_page_click(
         &mut self,
         page: u32,
@@ -91,9 +92,15 @@ impl Doc {
                     .any(|r| r.page == page && x >= r.bbox[0] - near && x <= r.bbox[2] + near)
         });
         if clicks < 2 {
-            // the first click of a double-click lands here too: it selects, the second edits
+            // the first click of a double-click lands here too: it places the caret (or
+            // selects), the second edits
             self.leave(window, cx);
-            self.selected = bi.map(|i| (self.blocks[i].range.start, self.blocks[i].range.start));
+            self.caret = None;
+            let placed = bi.is_some_and(|i| self.caret_click(i, page, x, y, cx));
+            if !placed {
+                self.selected =
+                    bi.map(|i| (self.blocks[i].range.start, self.blocks[i].range.start));
+            }
             self.focus.focus(window, cx);
             cx.notify();
             return;
@@ -101,6 +108,10 @@ impl Doc {
         let Some(bi) = bi else {
             return;
         };
+        // a word of running text: the caret stays (selecting words comes with selection)
+        if self.is_plain_text_at(bi, page, x, y) {
+            return;
+        }
         let b = &self.blocks[bi];
         // the character under the click, among the block's glyphs on that page
         let rows: Vec<&render::Row> = b

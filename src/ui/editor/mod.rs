@@ -10,6 +10,7 @@ mod pages;
 mod selection;
 mod session;
 mod source_box;
+mod typing;
 
 use crate::document::{self, glyphmap};
 use crate::engine;
@@ -22,15 +23,17 @@ use gpui_kit::component::input::{
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarMode};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size, spinner::Spinner};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use source_box::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use typing::*;
 
 const SP_PER_BP: f64 = 65781.76;
 pub const ZOOMS: [f32; 9] = [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
@@ -57,21 +60,68 @@ actions!(
         SelectNextBlock,
         ExtendSelectionUp,
         ExtendSelectionDown,
-        ClearSelection
+        ClearSelection,
+        CaretLeft,
+        CaretRight,
+        CaretUp,
+        CaretDown,
+        CaretWordLeft,
+        CaretWordRight,
+        CaretLineStart,
+        CaretLineEnd,
+        CaretDocStart,
+        CaretDocEnd,
+        Backspace,
+        DeleteForward,
+        NewParagraph,
+        LineBreak,
+        Indent,
+        Outdent,
+        SelectCaretBlock,
+        InsertMath,
+        MoveParagraphUp,
+        MoveParagraphDown
     ]
 );
 
-/// Keys for the selected blocks: on the pages, while no source box is open. Inside a box the
-/// editor's own bindings win, so ⌘A, ⇧↑ and the rest act on its text.
+/// Keys on the pages, while no source box is open: for the caret ("Caret"), or for the selected
+/// blocks ("Pages"). Inside a box the editor's own bindings win, so ⌘A, ⇧↑ and the rest act on
+/// its text.
 pub fn bind_keys(cx: &mut App) {
+    let caret = Some("Caret");
+    cx.bind_keys([
+        KeyBinding::new("left", CaretLeft, caret),
+        KeyBinding::new("right", CaretRight, caret),
+        KeyBinding::new("up", CaretUp, caret),
+        KeyBinding::new("down", CaretDown, caret),
+        KeyBinding::new("alt-left", CaretWordLeft, caret),
+        KeyBinding::new("alt-right", CaretWordRight, caret),
+        KeyBinding::new("cmd-left", CaretLineStart, caret),
+        KeyBinding::new("cmd-right", CaretLineEnd, caret),
+        KeyBinding::new("home", CaretLineStart, caret),
+        KeyBinding::new("end", CaretLineEnd, caret),
+        KeyBinding::new("cmd-up", CaretDocStart, caret),
+        KeyBinding::new("cmd-down", CaretDocEnd, caret),
+        KeyBinding::new("backspace", Backspace, caret),
+        KeyBinding::new("delete", DeleteForward, caret),
+        KeyBinding::new("enter", NewParagraph, caret),
+        KeyBinding::new("shift-enter", LineBreak, caret),
+        KeyBinding::new("tab", Indent, caret),
+        KeyBinding::new("shift-tab", Outdent, caret),
+        KeyBinding::new("escape", SelectCaretBlock, caret),
+        KeyBinding::new("cmd-m", InsertMath, caret),
+        KeyBinding::new("ctrl-shift-up", MoveParagraphUp, caret),
+        KeyBinding::new("ctrl-shift-down", MoveParagraphDown, caret),
+        KeyBinding::new("cmd-v", Paste, caret),
+    ]);
     let pages = Some("Pages");
     cx.bind_keys([
         KeyBinding::new("enter", EditBlock, pages),
         KeyBinding::new("backspace", DeleteBlock, pages),
         KeyBinding::new("delete", DeleteBlock, pages),
         KeyBinding::new("cmd-d", DuplicateBlock, pages),
-        KeyBinding::new("alt-up", MoveBlockUp, pages),
-        KeyBinding::new("alt-down", MoveBlockDown, pages),
+        KeyBinding::new("ctrl-shift-up", MoveBlockUp, pages),
+        KeyBinding::new("ctrl-shift-down", MoveBlockDown, pages),
         KeyBinding::new("up", SelectPrevBlock, pages),
         KeyBinding::new("down", SelectNextBlock, pages),
         KeyBinding::new("shift-up", ExtendSelectionUp, pages),
@@ -217,6 +267,18 @@ pub struct Doc {
     code_opts: (bool, bool),
     autosave: Option<Task<()>>,
     active: Option<Active>,
+    /// Visual mode's text caret, while no source box is open.
+    caret: Option<Caret>,
+    /// Text typed since the pages last caught up, drawn at the caret until they do.
+    overlay: Option<Overlay>,
+    /// The undo step typing is in.
+    typing: Option<Typing>,
+    /// Caret maps by (block start, page), until the blocks or the source change.
+    maps: RefCell<HashMap<(usize, u32), Rc<document::caret::CharMap>>>,
+    /// Where the caret was last drawn (window coordinates), for an input method's window.
+    caret_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// What the last edit made: the bytes it wrote.
+    last_edit: Range<usize>,
     _tasks: Vec<Task<()>>,
     _subs: [Subscription; 3],
 }
@@ -320,6 +382,12 @@ impl Doc {
             code_opts: (true, true),
             autosave: None,
             active: None,
+            caret: None,
+            overlay: None,
+            typing: None,
+            maps: Default::default(),
+            caret_bounds: Default::default(),
+            last_edit: 0..0,
             _tasks: vec![],
             _subs: [sub, keys, code_sub],
         };
@@ -464,6 +532,7 @@ impl Render for Doc {
                 .into_any_element();
         }
         self.ensure_images(window, cx);
+        self.settle_overlay();
         // the source box's page, or the last one if the document got shorter
         let at = self.box_place();
         let box_page = at.as_ref().map(|at| {
@@ -486,7 +555,7 @@ impl Render for Doc {
             .iter()
             .map(|(&n, dl)| {
                 let here = at.as_ref().filter(|_| box_page == Some(n));
-                self.render_page(n, dl, here, cx)
+                self.render_page(n, dl, here, window, cx)
             })
             .collect();
         let width = |dl: Option<&Arc<engine::DisplayList>>| {
@@ -516,9 +585,10 @@ impl Render for Doc {
                 None => cx.propagate(),
             }
         };
-        let view = div()
-            .id("pages")
-            .key_context("Pages")
+        let typing = self.caret.is_some() && self.active.is_none();
+        let view = caret_actions(div().id("pages"), cx);
+        let view = view
+            .key_context(if typing { "Caret" } else { "Pages" })
             .track_focus(&self.focus)
             .on_action(cx.listener({
                 let f = on_sel(|d, lo, hi, w, cx| d.activate_range(lo, hi, w, cx));
@@ -591,9 +661,33 @@ impl Render for Doc {
                         d.insert_at(Spot::Below(hi), &t, w, cx);
                     }
                 });
-                move |this, _: &Paste, w, cx| f(this, w, cx)
+                move |this, _: &Paste, w, cx| {
+                    if this.caret.is_some() && this.active.is_none() {
+                        paste_at_caret(this, cx)
+                    } else {
+                        f(this, w, cx)
+                    }
+                }
             }))
             .size_full()
+            // typing and input methods reach the caret through the pages' input handler
+            .when(typing, |v| {
+                let (focus, doc) = (self.focus.clone(), cx.entity());
+                v.child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            window.handle_input(
+                                &focus,
+                                ElementInputHandler::new(bounds, doc.clone()),
+                                cx,
+                            )
+                        },
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+            })
             // dark theme: a near-black desk, between the gray sidebar and the black page
             .bg(if theme.mode.is_dark() {
                 rgb(0x141414).into()

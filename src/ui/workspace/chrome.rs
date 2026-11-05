@@ -135,7 +135,7 @@ impl Workspace {
             .when_some(viewing, |bar, zoom| bar.suffix(zoom))
     }
 
-    /// Rendered (the typeset pages, edited in place) or Source (the file in a code editor).
+    /// Visual (the typeset pages, edited in place) or Source (the file in a code editor).
     pub(super) fn render_mode_switch(
         &self,
         source: bool,
@@ -151,7 +151,7 @@ impl Workspace {
                 .tooltip(if to {
                     "Source: edit the LaTeX file (⌘⇧E)"
                 } else {
-                    "Rendered: edit on the typeset pages (⌘⇧E)"
+                    "Visual: edit on the typeset pages (⌘⇧E)"
                 })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.with_doc(cx, |d, cx| d.set_source_mode(to, window, cx))
@@ -165,7 +165,7 @@ impl Workspace {
             .rounded_md()
             .border_1()
             .border_color(theme.border)
-            .child(option("mode-rendered", "icons/eye.svg", !source, false))
+            .child(option("mode-visual", "icons/eye.svg", !source, false))
             .child(option("mode-source", "icons/code.svg", source, true))
     }
 

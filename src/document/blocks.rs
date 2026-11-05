@@ -25,6 +25,16 @@ const MATH_ENVS: &[&str] = &[
     "displaymath",
 ];
 
+/// A block that is a display formula (`\[…\]`, `$$…$$`, an equation environment).
+pub fn is_display_math(block: &str) -> bool {
+    block.starts_with("\\[")
+        || block.starts_with("$$")
+        || block
+            .strip_prefix("\\begin{")
+            .and_then(|r| r.split('}').next())
+            .is_some_and(|name| MATH_ENVS.contains(&name))
+}
+
 /// Byte at `i` starts a command `\x` (not an escaped backslash `\\x`).
 fn is_cmd(s: &[u8], i: usize) -> bool {
     s[i] == b'\\' && s[..i].iter().rev().take_while(|&&b| b == b'\\').count() % 2 == 0

@@ -263,6 +263,7 @@ impl Doc {
         redo.push(self.source.clone());
         self.replace(0..self.source.len(), &prev, cx);
         self.redo = redo;
+        self.after_history();
     }
 
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -272,6 +273,18 @@ impl Doc {
         let redo = std::mem::take(&mut self.redo);
         self.replace(0..self.source.len(), &next, cx);
         self.redo = redo;
+        self.after_history();
+    }
+
+    /// After undo or redo: the caret at the end of what changed, a new typing step.
+    fn after_history(&mut self) {
+        self.typing = None;
+        self.overlay = None;
+        let end = self.last_edit.end.min(self.source.len());
+        if let Some(c) = self.caret.as_mut() {
+            c.off = end;
+            c.goal_x = None;
+        }
     }
 
     pub(super) fn edit_in_box(
@@ -385,7 +398,31 @@ impl Doc {
             r.request_spans();
             self.spans_pending += 1;
         }
+        // the spans and the caret follow the edit until rtex's spans come back: the blocks stay
+        // on their text, and new text at a block's start or end joins that block
+        let mv = |o: usize| o + text.len() - (end - start);
+        let to_next = start == end && self.spans.iter().any(|s| s.range.start == start);
+        for sp in &mut self.spans {
+            let r = &mut sp.range;
+            if r.start > end || (r.start == end && start < end) {
+                (r.start, r.end) = (mv(r.start), mv(r.end));
+            } else if r.end > start || (r.end == start && !to_next) {
+                (r.start, r.end) = (r.start.min(start), mv(r.end.max(end)));
+            }
+        }
+        if let Some(c) = self.caret.as_mut()
+            && c.off > start
+        {
+            c.off = if c.off >= end {
+                mv(c.off)
+            } else {
+                start + text.len()
+            };
+        }
+        self.last_edit = start..start + text.len();
         self.source.replace_range(start..end, text);
+        self.blocks = document::blocks(&self.spans, &self.source, &self.preview);
+        self.maps.borrow_mut().clear();
         self.outline = document::outline(&self.source);
         self.dirty = true;
         if AppSettings::get(cx).autosave {

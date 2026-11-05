@@ -19,6 +19,7 @@ impl Doc {
                 self.bump(dirty);
                 self.status.clear();
                 self.compiling = stale_since.is_some();
+                self.overlay_seen();
             }
             engine::Msg::Paragraph {
                 par_id,
@@ -35,6 +36,7 @@ impl Doc {
                 );
                 self.bump(dirty);
                 self.status.clear();
+                self.overlay_seen();
             }
             engine::Msg::Spans(spans) => {
                 self.spans_pending = self.spans_pending.saturating_sub(1);
@@ -63,6 +65,7 @@ impl Doc {
             }
         }
         self.blocks = document::blocks(&self.spans, &self.source, &self.preview);
+        self.maps.borrow_mut().clear();
         self.render_live(window, cx);
         cx.notify();
     }
