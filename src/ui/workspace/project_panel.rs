@@ -19,7 +19,7 @@ impl Workspace {
         let file_tree = tree(&self.tree, move |ix, entry, _selected, _, cx| {
             let item = entry.item();
             let id = item.id.to_string();
-            let guides = indent_guides(entry.depth(), cx);
+            let guides = indent_guides(entry.depth(), entry.is_folder(), cx);
             if id.ends_with(PLACEHOLDER) {
                 return ListItem::new(ix).children(guides).child(
                     div()
@@ -228,22 +228,24 @@ impl Workspace {
     }
 }
 
-/// A tree row's indent guides: a thin line under each folder it is in, at that folder's
-/// chevron, running the row's height so the rows' lines join up (as VS Code draws them).
-fn indent_guides(depth: usize, cx: &App) -> Vec<AnyElement> {
+/// A tree row's indent guides: a thin line for each folder it is in, running the row's height so
+/// the rows' lines join up (as VS Code draws them). A folder's arrow sits on the line of the
+/// folder it is in: there the line stops, clear of the arrow.
+fn indent_guides(depth: usize, folder: bool, cx: &App) -> Vec<AnyElement> {
     // the panel's text, faint: it shows on any panel (the theme's border is the dark panel's
     // own gray)
     let color = cx.theme().sidebar_foreground.opacity(0.2);
     (0..depth)
+        .filter(|level| !(folder && level + 1 == depth))
         .map(|level| {
             // from the row's content (an absolute child sits in its parent, inside the row's
-            // padding): the levels before, then the chevron's middle (12 px wide)
-            // through the row's padding above and below (4 px), so the rows' lines join up
+            // padding): a level in, at the middle of the arrow column (12 px wide); through
+            // the row's padding above and below (4 px)
             div()
                 .absolute()
                 .top(px(-4.0))
                 .bottom(px(-4.0))
-                .left(px(level as f32 * 12.0 + 5.5))
+                .left(px((level + 1) as f32 * 12.0 + 5.5))
                 .w(px(1.0))
                 .bg(color)
                 .into_any_element()
