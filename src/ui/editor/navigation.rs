@@ -147,7 +147,10 @@ impl Doc {
         self.scroll_to(offset, false, cx);
     }
 
-    /// Scroll block at `offset` to near the top; with `if_hidden`, only when it is out of view.
+    /// Bring the block at `offset` into view. Without `if_hidden` (a jump from the outline) its
+    /// top goes near the view's top. With it, the view moves only if what is at hand is out of
+    /// sight (the caret's line when the caret is at `offset`, else any of the block), and then
+    /// only as far as it must: a click never moves the page under the pointer.
     pub(super) fn scroll_to(&mut self, offset: usize, if_hidden: bool, cx: &mut Context<Self>) {
         let Some(b) = self
             .blocks
@@ -156,29 +159,53 @@ impl Doc {
         else {
             return;
         };
-        let Some(r) = b.rows.first() else { return };
-        let mut y = PAGES_TOP;
-        for (&n, dl) in &self.preview.pages {
-            if n == r.page {
-                break;
-            }
-            y += page_px(dl.page_height.unwrap_or(0.0), self.zoom) + PAGE_GAP;
-        }
-        let (top, bottom) = (
-            y + page_px(r.bbox[1], self.zoom),
-            y + page_px(r.bbox[3], self.zoom),
+        let (Some(first), Some(last)) = (b.rows.first(), b.rows.last()) else {
+            return;
+        };
+        let block = (
+            self.page_y(first.page) + page_px(first.bbox[1], self.zoom),
+            self.page_y(last.page) + page_px(last.bbox[3], self.zoom),
         );
         let view = (
             -f32::from(self.scroll.offset().y),
             f32::from(self.scroll.bounds().size.height),
         );
-        if if_hidden && top >= view.0 && bottom <= view.0 + view.1 {
-            return;
-        }
-        y = top - 40.0;
+        let top = if !if_hidden {
+            block.0 - MARGIN
+        } else {
+            // the caret's line, from its baseline and font size; else the block
+            let caret = self
+                .caret
+                .as_ref()
+                .filter(|c| c.off == offset)
+                .and_then(|_| self.caret_at())
+                .map(|(page, _, base, size)| {
+                    let y = self.page_y(page);
+                    (
+                        y + page_px(base - size, self.zoom),
+                        y + page_px(base + size * 0.3, self.zoom),
+                    )
+                });
+            match into_view(caret.unwrap_or(block), view, caret.is_none()) {
+                Some(top) => top,
+                None => return,
+            }
+        };
         let x = self.scroll.offset().x;
-        self.scroll.set_offset(point(x, px(-y.max(0.0))));
+        self.scroll.set_offset(point(x, px(-top.max(0.0))));
         cx.notify();
+    }
+
+    /// Where page `page`'s top is in the column, in px.
+    fn page_y(&self, page: u32) -> f32 {
+        let mut y = PAGES_TOP;
+        for (&n, dl) in &self.preview.pages {
+            if n == page {
+                break;
+            }
+            y += page_px(dl.page_height.unwrap_or(0.0), self.zoom) + PAGE_GAP;
+        }
+        y
     }
 
     /// Zoom to `z`, keeping the point `anchor` (window coordinates; default the view's centre)
@@ -236,5 +263,50 @@ impl Doc {
         if let Some(&v) = next {
             self.set_zoom(v, None, window, cx);
         }
+    }
+}
+
+/// Room kept between what scrolls into view and the view's edge, in px.
+const MARGIN: f32 = 40.0;
+
+/// The view's new top to bring `span` (top, bottom, px) into `view` (top, height), moving as
+/// little as it can; None when it is in view already (`any`: when any of it shows, else all).
+fn into_view(span: (f32, f32), view: (f32, f32), any: bool) -> Option<f32> {
+    let (top, bottom) = span;
+    let (v, h) = view;
+    let shows = if any {
+        bottom > v && top < v + h
+    } else {
+        top >= v && bottom <= v + h
+    };
+    if shows {
+        None
+    } else if top < v || bottom - top > h - 2.0 * MARGIN {
+        // above, or too tall to fit: its top near the view's top
+        Some(top - MARGIN)
+    } else {
+        // below: its bottom near the view's bottom
+        Some(bottom - h + MARGIN)
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::{MARGIN, into_view};
+
+    #[test]
+    fn the_view_moves_only_for_what_is_out_of_sight() {
+        let view = (1000.0, 600.0);
+        // a caret line in view: nothing moves
+        assert_eq!(into_view((1200.0, 1220.0), view, false), None);
+        // a tall block whose top is above the view, clicked inside: nothing moves
+        assert_eq!(into_view((500.0, 1300.0), view, true), None);
+        // a line just below the view: only so far that it shows
+        assert_eq!(
+            into_view((1610.0, 1630.0), view, false),
+            Some(1630.0 - 600.0 + MARGIN)
+        );
+        // a line above: its top near the view's top
+        assert_eq!(into_view((900.0, 920.0), view, false), Some(900.0 - MARGIN));
     }
 }
