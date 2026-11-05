@@ -3,6 +3,7 @@
 // Settings window. Plain editing keys (arrows, Enter, Backspace, Delete, Tab, Escape, ⌘C ⌘X
 // ⌘V ⌘A) stay fixed; they are bound with the editor.
 use crate::ui::editor::*;
+use crate::ui::projects::{NewProject, OpenProject};
 use crate::ui::settings::AppSettings;
 use crate::ui::workspace::*;
 use gpui_kit::component::input::{Redo, Undo};
@@ -40,6 +41,15 @@ macro_rules! cmd {
 /// Every command you can give a shortcut, in the order the settings list them.
 pub fn commands() -> Vec<Command> {
     vec![
+        cmd!(
+            "new-project",
+            "File",
+            "New Project",
+            ANY,
+            "cmd-shift-n",
+            NewProject
+        ),
+        cmd!("open", "File", "Open", ANY, "cmd-o", OpenProject),
         cmd!("save", "File", "Save", ANY, "cmd-s", Save),
         cmd!("close-tab", "File", "Close Tab", ANY, "cmd-w", CloseTab),
         cmd!("export", "File", "Export PDF", ANY, "cmd-alt-e", Export),

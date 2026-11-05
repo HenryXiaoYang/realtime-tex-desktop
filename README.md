@@ -15,6 +15,10 @@ scripts/bundle.sh                           # builds "Realtime Tex Desktop.app"
 scripts/dmg.sh                              # a .dmg to share: the app with rtex inside, ad-hoc signed
 ```
 
+- At launch the app opens again the projects whose windows were open when it quit. With none, the
+  welcome window lists the projects opened before (type to search, ↑ ↓ and Return to open one,
+  ⌘⌫ to take one off the list), with **New Project** (a folder with a main.tex to start from,
+  ⌘⇧N) and **Open** (a folder or a .tex file, ⌘O). Closing the last project window brings it back.
 - The window is laid out like Zed: the project name and **Export PDF** in the title bar, a
   project panel (files and outline) you can resize or hide, tabs for open files, and a status bar
   with the engine state and page number.

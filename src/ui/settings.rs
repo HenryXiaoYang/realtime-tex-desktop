@@ -68,9 +68,14 @@ impl Default for AppSettings {
 
 impl Global for AppSettings {}
 
-fn file() -> PathBuf {
+/// Where the app keeps what it remembers.
+pub fn support_dir() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join("Library/Application Support/Realtime Tex Desktop/settings.json")
+    PathBuf::from(home).join("Library/Application Support/Realtime Tex Desktop")
+}
+
+fn file() -> PathBuf {
+    support_dir().join("settings.json")
 }
 
 impl AppSettings {

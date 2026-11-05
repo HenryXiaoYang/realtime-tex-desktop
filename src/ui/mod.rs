@@ -2,7 +2,9 @@
 pub mod editor;
 pub mod keymap;
 pub mod palette;
+pub mod projects;
 pub mod settings;
+pub mod welcome;
 pub mod workspace;
 
 use gpui_kit::SharedString;

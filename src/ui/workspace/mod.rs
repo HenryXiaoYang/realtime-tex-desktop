@@ -172,6 +172,11 @@ impl Workspace {
         this
     }
 
+    /// The file shown, relative to the folder.
+    pub fn shown_file(&self, cx: &App) -> Option<String> {
+        self.doc().map(|d| d.read(cx).path.clone())
+    }
+
     fn doc(&self) -> Option<&Entity<Doc>> {
         self.tabs.get(self.active)
     }

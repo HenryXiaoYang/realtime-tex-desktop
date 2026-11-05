@@ -12,7 +12,7 @@ impl Workspace {
     }
 
     /// Show `path` in a tab, opening it if needed. Binary files (images, PDFs) do not open.
-    pub(super) fn open(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.tabs.iter().position(|d| d.read(cx).path == path) {
             self.activate(ix, cx);
             return;
