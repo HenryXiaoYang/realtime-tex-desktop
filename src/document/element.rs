@@ -201,6 +201,40 @@ pub fn parse_opts(s: &str) -> Vec<(String, Option<String>)> {
     out
 }
 
+/// `key=value` options as parse_opts reads them.
+type Opts = Vec<(String, Option<String>)>;
+
+/// The `[options]` inside `opts` (the brackets' inside; None: there are none yet, and they
+/// would go at `at`) rewritten by `f`, needing `packages`: the change, the brackets gone when
+/// no option is left.
+fn edit_opts(
+    src: &str,
+    opts: Option<Range<usize>>,
+    at: usize,
+    packages: Vec<&'static str>,
+    f: impl FnOnce(&mut Opts),
+) -> Option<Change> {
+    let mut list = opts
+        .clone()
+        .map(|o| parse_opts(&src[o]))
+        .unwrap_or_default();
+    f(&mut list);
+    let text = if list.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", render_opts(&list))
+    };
+    let range = match opts {
+        Some(o) => o.start - 1..o.end + 1,
+        None => at..at,
+    };
+    (src[range.clone()] != text).then_some(Change {
+        range,
+        text,
+        packages,
+    })
+}
+
 fn render_opts(opts: &[(String, Option<String>)]) -> String {
     opts.iter()
         .map(|(k, v)| match v {
@@ -428,13 +462,7 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
         }
         Kind::Heading => {
             let t = &src[el.range.clone()];
-            let level = HEADINGS
-                .iter()
-                .find(|(h, _)| {
-                    t[1..].starts_with(h)
-                        && !t[1 + h.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
-                })
-                .map_or("section", |(h, _)| *h);
+            let level = heading_level(src, el).unwrap_or("section");
             let cmd = find_cmd(src, el.range.clone(), level);
             let starred = t[1 + level.len()..].starts_with('*');
             let short = cmd
@@ -656,13 +684,18 @@ fn equation_choices(src: &str, el: &Element, now: &str) -> Vec<(&'static str, &'
         .collect()
 }
 
+/// The heading command a heading element starts with (`section` for `\\section*{…}`).
+fn heading_level(src: &str, el: &Element) -> Option<&'static str> {
+    let t = src[el.range.clone()].strip_prefix('\\')?;
+    HEADINGS.iter().map(|(h, _)| *h).find(|h| {
+        t.strip_prefix(h)
+            .is_some_and(|r| !r.starts_with(|c: char| c.is_ascii_alphabetic()))
+    })
+}
+
 /// Where a heading's command ends (after its title's `}`).
 fn heading_end(src: &str, el: &Element) -> Option<usize> {
-    let t = &src[el.range.clone()];
-    let (h, _) = HEADINGS.iter().find(|(h, _)| {
-        t[1..].starts_with(h) && !t[1 + h.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
-    })?;
-    find_cmd(src, el.range.clone(), h).map(|c| c.end)
+    find_cmd(src, el.range.clone(), heading_level(src, el)?).map(|c| c.end)
 }
 
 /// A heading's `\label{…}` right after it (on its line or the next): its range and text.
@@ -861,17 +894,12 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
             }
         }
         (Kind::Heading, "level") => {
-            let t = &src[el.range.clone()];
-            let (old, _) = HEADINGS.iter().find(|(h, _)| {
-                t[1..].starts_with(h)
-                    && !t[1 + h.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
-            })?;
+            let old = heading_level(src, el)?;
             let at = el.range.start + 1;
             change(at..at + old.len(), v)
         }
         (Kind::Heading, "numbered") => {
-            let t = &src[el.range.clone()];
-            let (h, _) = HEADINGS.iter().find(|(h, _)| t[1..].starts_with(h))?;
+            let h = heading_level(src, el)?;
             let at = el.range.start + 1 + h.len();
             let starred = src[at..].starts_with('*');
             match (v == "true", starred) {
@@ -885,9 +913,8 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
             }
         }
         (Kind::Heading, "short") => {
-            let t = &src[el.range.clone()];
-            let (h, _) = HEADINGS.iter().find(|(h, _)| t[1..].starts_with(h))?;
-            if t[1 + h.len()..].starts_with('*') {
+            let h = heading_level(src, el)?;
+            if src[el.range.start + 1 + h.len()..].starts_with('*') {
                 return None;
             }
             let cmd = find_cmd(src, el.range.clone(), h)?;
@@ -930,30 +957,14 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
         }
         (Kind::List, "label" | "start" | "nosep") => {
             let (_, opts, end) = env_head(src, el)?;
-            let mut list = opts
-                .clone()
-                .map(|o| parse_opts(&src[o]))
-                .unwrap_or_default();
-            list.retain(|(k, _)| k != key);
-            match key {
-                "nosep" if v == "true" => list.push(("nosep".into(), None)),
-                "nosep" => {}
-                _ if !v.is_empty() => list.push((key.to_string(), Some(v.to_string()))),
-                _ => {}
-            }
-            let text = if list.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", render_opts(&list))
-            };
-            let range = match opts {
-                Some(o) => o.start - 1..o.end + 1,
-                None => end..end,
-            };
-            Some(Change {
-                range,
-                text,
-                packages: vec!["enumitem"],
+            edit_opts(src, opts, end, vec!["enumitem"], |list| {
+                list.retain(|(k, _)| k != key);
+                match key {
+                    "nosep" if v == "true" => list.push(("nosep".into(), None)),
+                    "nosep" => {}
+                    _ if !v.is_empty() => list.push((key.to_string(), Some(v.to_string()))),
+                    _ => {}
+                }
             })
         }
         (Kind::Document, "class") => {
@@ -962,33 +973,20 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
         }
         (Kind::Document, "fontsize" | "paper" | "twoside" | "twocolumn") => {
             let c = find_cmd(src, 0..src.len(), "documentclass")?;
-            let mut opts = c
-                .opts
-                .clone()
-                .map(|o| parse_opts(&src[o]))
-                .unwrap_or_default();
             let group: &[&str] = match key {
                 "fontsize" => &["10pt", "11pt", "12pt"],
                 "paper" => &["a4paper", "letterpaper", "a5paper", "legalpaper"],
                 "twoside" => &["twoside", "oneside"],
                 _ => &["twocolumn", "onecolumn"],
             };
-            opts.retain(|(k, _)| !group.contains(&k.as_str()));
-            match key {
-                "twoside" | "twocolumn" if v == "true" => opts.push((key.to_string(), None)),
-                "twoside" | "twocolumn" => {}
-                _ => opts.push((v.to_string(), None)),
-            }
-            let text = if opts.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", render_opts(&opts))
-            };
-            let range = match c.opts {
-                Some(o) => o.start - 1..o.end + 1,
-                None => c.after_name..c.after_name,
-            };
-            change(range, text)
+            edit_opts(src, c.opts, c.after_name, vec![], |opts| {
+                opts.retain(|(k, _)| !group.contains(&k.as_str()));
+                match key {
+                    "twoside" | "twocolumn" if v == "true" => opts.push((key.to_string(), None)),
+                    "twoside" | "twocolumn" => {}
+                    _ => opts.push((v.to_string(), None)),
+                }
+            })
         }
         (Kind::Document, "margin") => set_margin(src, v),
         _ => None,
@@ -1050,33 +1048,16 @@ fn set_cmd_arg(src: &str, el: &Element, name: &str, v: &str) -> Option<Change> {
 
 fn set_graphics_opt(src: &str, el: &Element, key: &str, value: Option<String>) -> Option<Change> {
     let g = graphics(src, el)?;
-    let mut opts = g
-        .opts
-        .clone()
-        .map(|o| parse_opts(&src[o]))
-        .unwrap_or_default();
-    let at = opts.iter().position(|(k, _)| k == key);
-    match (at, value) {
-        (Some(i), Some(v)) => opts[i].1 = (!v.is_empty()).then_some(v),
-        (None, Some(v)) => opts.push((key.to_string(), (!v.is_empty()).then_some(v))),
-        (Some(i), None) => {
-            opts.remove(i);
+    edit_opts(src, g.opts, g.after_name, vec!["graphicx"], |opts| {
+        let at = opts.iter().position(|(k, _)| k == key);
+        match (at, value) {
+            (Some(i), Some(v)) => opts[i].1 = (!v.is_empty()).then_some(v),
+            (None, Some(v)) => opts.push((key.to_string(), (!v.is_empty()).then_some(v))),
+            (Some(i), None) => {
+                opts.remove(i);
+            }
+            (None, None) => {}
         }
-        (None, None) => return None,
-    }
-    let text = if opts.is_empty() {
-        String::new()
-    } else {
-        format!("[{}]", render_opts(&opts))
-    };
-    let range = match g.opts {
-        Some(o) => o.start - 1..o.end + 1,
-        None => g.after_name..g.after_name,
-    };
-    Some(Change {
-        range,
-        text,
-        packages: vec!["graphicx"],
     })
 }
 
@@ -1141,25 +1122,12 @@ fn set_margin(src: &str, v: &str) -> Option<Change> {
             .as_ref()
             .is_some_and(|a| src[a.clone()].trim() == "geometry")
         {
-            let mut opts = c
-                .opts
-                .clone()
-                .map(|o| parse_opts(&src[o]))
-                .unwrap_or_default();
-            opts.retain(|(k, _)| k != "margin");
-            if !v.is_empty() {
-                opts.push(("margin".into(), Some(v.to_string())));
-            }
-            let text = if opts.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", render_opts(&opts))
-            };
-            let range = match c.opts {
-                Some(o) => o.start - 1..o.end + 1,
-                None => c.after_name..c.after_name,
-            };
-            return change(range, text);
+            return edit_opts(src, c.opts, c.after_name, vec![], |opts| {
+                opts.retain(|(k, _)| k != "margin");
+                if !v.is_empty() {
+                    opts.push(("margin".into(), Some(v.to_string())));
+                }
+            });
         }
         from = c.end;
     }

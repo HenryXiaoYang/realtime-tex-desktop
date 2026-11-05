@@ -2,6 +2,8 @@
 // cursor (a paragraph, a heading, a display formula) turns into its TeX source in place and every
 // keystroke goes to rtex, which re-typesets it in milliseconds. Other text files open as source.
 mod complete;
+#[cfg(test)]
+mod e2e;
 mod editing;
 mod element_edit;
 mod file_view;

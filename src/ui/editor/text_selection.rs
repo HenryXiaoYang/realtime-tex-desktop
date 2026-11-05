@@ -336,21 +336,8 @@ impl Doc {
                     (!tex.is_empty() && caret::balanced(&tex)).then_some(tex)
                 })
         };
-        if !self.delete_selection(cx) {
-            self.checkpoint();
-        }
-        self.overlay = None;
-        self.typing = None;
-        let Some(off) = self.caret.as_ref().map(|c| c.off) else {
-            return;
-        };
         let ins = tex.unwrap_or_else(|| caret::escape(&text));
-        if self.replace(off..off, &ins, cx)
-            && let Some(c) = self.caret.as_mut()
-        {
-            c.off = off + ins.len();
-        }
-        self.add_packages(&packages, cx);
+        self.insert_inline(&ins, &packages, cx);
     }
 }
 
