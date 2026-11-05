@@ -231,7 +231,9 @@ impl Workspace {
 /// A tree row's indent guides: a thin line under each folder it is in, at that folder's
 /// chevron, running the row's height so the rows' lines join up (as VS Code draws them).
 fn indent_guides(depth: usize, cx: &App) -> Vec<AnyElement> {
-    let color = cx.theme().border;
+    // the panel's text, faint: it shows on any panel (the theme's border is the dark panel's
+    // own gray)
+    let color = cx.theme().sidebar_foreground.opacity(0.2);
     (0..depth)
         .map(|level| {
             // the row's padding (12), the levels before, the chevron's middle (12 px wide)
