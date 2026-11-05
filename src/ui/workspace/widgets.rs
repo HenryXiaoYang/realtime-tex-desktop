@@ -41,6 +41,15 @@ pub(super) fn color_spec(c: Hsla) -> String {
     }
 }
 
+/// A TeX colour spec as a person reads it: xcolor's name, or the hex code; empty, Automatic.
+fn color_name(spec: &str) -> String {
+    match XCOLORS.iter().find(|(n, ..)| *n == spec) {
+        Some((_, label, _)) => label.to_string(),
+        None if spec.is_empty() => "Automatic".into(),
+        None => format!("#{spec}"),
+    }
+}
+
 /// The colour a TeX spec names (an xcolor name, or HTML hex), to show it.
 pub(super) fn color_of(spec: &str) -> Option<Hsla> {
     if let Some((_, _, x)) = XCOLORS.iter().find(|(n, ..)| *n == spec) {
@@ -166,41 +175,50 @@ fn shade_name(h: usize, l: f32) -> String {
     }
 }
 
-/// The text-colour palette: xcolor's named colours (which read well in the TeX), shades of
-/// each hue, and any colour by its hex code (`hex`, a field the caller keeps).
+/// The text-colour button, split as Word's: the A puts on `last` (the colour last picked, shown
+/// under it); the arrow opens the palette (`now` checked, the colour at the caret): xcolor's
+/// named colours (which read well in the TeX), shades of each hue, and any colour by its hex
+/// code (`hex`, a field the caller keeps). A pick becomes the button's colour too.
 pub(super) fn color_palette(
     now: Option<String>,
+    last: &str,
     hex: Entity<InputState>,
     on_pick: OnPick<String>,
+    on_apply: OnPick<()>,
+    enabled: bool,
     cx: &App,
-) -> Popover {
-    // no colour at the caret: the text's own (black on paper, but visible in dark mode)
-    let shown = now
-        .as_deref()
-        .and_then(color_of)
-        .unwrap_or(cx.theme().foreground);
-    Popover::new("rb-color-palette")
-        .trigger(
-            Button::new("rb-color")
-                .ghost()
-                .small()
-                .dropdown_caret(true)
-                .tip("Text colour")
+) -> AnyElement {
+    // automatic: the text's own colour (black on paper, but visible in dark mode)
+    let shown = color_of(last).unwrap_or(cx.theme().foreground);
+    let apply = Button::new("rb-color")
+        .ghost()
+        .small()
+        .disabled(!enabled)
+        .tip(format!("Text colour: {}", color_name(last)))
+        .on_click(move |_, window, cx| on_apply((), window, cx))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                // an A over the colour (the baseline icon's own rule would be a second)
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        // an A over the colour (the baseline icon's own rule would be a second)
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .line_height(px(14.0))
-                                .child("A"),
-                        )
-                        .child(div().w(px(14.0)).h(px(5.0)).rounded_sm().bg(shown)),
-                ),
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .line_height(px(14.0))
+                        .child("A"),
+                )
+                .child(div().w(px(14.0)).h(px(5.0)).rounded_sm().bg(shown)),
+        );
+    let menu = Popover::new("rb-color-palette")
+        .trigger(
+            Button::new("rb-color-more")
+                .ghost()
+                .xsmall()
+                .disabled(!enabled)
+                .icon(Icon::default().path("icons/chevron-down.svg"))
+                .tip("More colours"),
         )
         .content(move |_, _, cx| {
             let popover = cx.entity();
@@ -266,7 +284,13 @@ pub(super) fn color_palette(
                 .child(shades)
                 .child(label("Hex (Enter to apply)"))
                 .child(Input::new(&hex).small())
-        })
+        });
+    div()
+        .flex()
+        .items_center()
+        .child(apply)
+        .child(menu)
+        .into_any_element()
 }
 
 /// The grid that sizes a new table: hover over it to choose rows × columns, click to insert;

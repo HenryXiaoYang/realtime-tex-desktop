@@ -711,6 +711,30 @@ fn format_on_pages(cx: &mut TestAppContext) {
         );
         calm(cx, &doc);
     }
+    // a colour at a caret between words: what is typed next takes it, as in Word
+    doc.update_in(cx, |d, window, cx| {
+        d.set_caret(off - 1, cx);
+        d.replace_text_in_range(None, " ", window, cx);
+        d.format(FormatOp::Color("red".into()), window, cx);
+        for ch in "xy".chars() {
+            d.replace_text_in_range(None, &ch.to_string(), window, cx);
+        }
+    });
+    let src = cx.read(|cx| doc.read(cx).source.clone());
+    assert!(
+        src.contains("Used \\textcolor{red}{xy} together"),
+        "typed in the colour: {:?}",
+        &src[off.saturating_sub(30)..(off + 60).min(src.len())]
+    );
+    calm(cx, &doc);
+    for _ in 0..4 {
+        if cx.read(|cx| doc.read(cx).source == base) {
+            break;
+        }
+        doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+    }
+    assert_eq!(cx.read(|cx| doc.read(cx).source.clone()), base, "undone");
+    calm(cx, &doc);
     // Find: every printed "together"; ⌘G steps through them; Replace All in one undo step
     doc.update_in(cx, |d, window, cx| {
         d.set_caret(0, cx);

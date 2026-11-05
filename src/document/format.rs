@@ -491,8 +491,10 @@ pub fn set_color(src: &str, block: Range<usize>, sel: Range<usize>, color: &str)
     } else {
         format!("{{{color}}}")
     };
+    // the caret in a word: the word; between words, an empty group to type into (in an empty
+    // one already, its colour changes)
     let sel = if sel.is_empty() {
-        word_at(src, sel.start)?
+        word_at(src, sel.start).unwrap_or(sel)
     } else {
         sel
     };
@@ -510,7 +512,17 @@ pub fn set_color(src: &str, block: Range<usize>, sel: Range<usize>, color: &str)
             packages: vec!["xcolor"],
         });
     }
-    let (range, text, select) = wrap(src, sel, &format!("\\textcolor{spec}{{"), "}")?;
+    let open = format!("\\textcolor{spec}{{");
+    if sel.is_empty() {
+        let at = sel.start;
+        return Some(Fmt {
+            range: at..at,
+            text: format!("{open}}}"),
+            select: at + open.len()..at + open.len(),
+            packages: vec!["xcolor"],
+        });
+    }
+    let (range, text, select) = wrap(src, sel, &open, "}")?;
     Some(Fmt {
         range,
         text,
@@ -962,6 +974,14 @@ mod tests {
         );
         let red = |s: &str, b, r| set_color(s, b, r, "red");
         assert_eq!(run("a [hot] b", red), "a \\textcolor{red}{[hot]} b");
+        // between words: a group to type into; in it, another colour changes it
+        assert_eq!(run("a | b", red), "a \\textcolor{red}{[]} b");
+        assert_eq!(
+            run("a \\textcolor{red}{|} b", |s, b, r| set_color(
+                s, b, r, "blue"
+            )),
+            "a \\textcolor{blue}{[]} b"
+        );
         assert_eq!(
             run("a \\textcolor{red}{[hot]} b", |s, b, r| set_color(
                 s, b, r, "1f77b4"

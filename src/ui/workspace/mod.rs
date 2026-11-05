@@ -81,6 +81,8 @@ pub struct Workspace {
     fit: layout::Fit,
     /// The colour palette's hex field.
     color_hex: Entity<InputState>,
+    /// The colour the text colour button puts on (the last one picked), as Word's does.
+    last_color: String,
     /// The table grid's size fields, for sizing a table from the keyboard.
     table_rows: Entity<InputState>,
     table_cols: Entity<InputState>,
@@ -115,6 +117,7 @@ impl Workspace {
             ribbon_tab: Default::default(),
             fit: Default::default(),
             color_hex: cx.new(|cx| InputState::new(window, cx).placeholder("e.g. 1A2B3C")),
+            last_color: "red".into(),
             table_rows: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             table_cols: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             status: String::new(),
@@ -141,11 +144,7 @@ impl Workspace {
                     .trim_start_matches('#')
                     .to_string();
                 if v.len() == 6 && v.chars().all(|c| c.is_ascii_hexdigit()) {
-                    this.format(
-                        crate::ui::editor::FormatOp::Color(v.to_ascii_uppercase()),
-                        window,
-                        cx,
-                    );
+                    this.pick_color(v.to_ascii_uppercase(), window, cx);
                     input.update(cx, |s, cx| s.set_value("", window, cx));
                 }
             },

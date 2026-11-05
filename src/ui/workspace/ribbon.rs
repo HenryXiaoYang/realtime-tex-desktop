@@ -180,6 +180,12 @@ impl Workspace {
         Some(ribbon.child(body).into_any_element())
     }
 
+    /// Colour `spec` on the selection (or at the caret), and the colour button's from now on.
+    pub(super) fn pick_color(&mut self, spec: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.last_color = spec.clone();
+        self.format(FormatOp::Color(spec), window, cx);
+    }
+
     /// A group of the ribbon: its tools, and its name under them; a rule after it.
     pub(super) fn group(name: &'static str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
         Self::group_ruled(name, rows, true, cx)
@@ -394,15 +400,20 @@ impl Workspace {
                 })
         };
         let color_menu = {
-            let weak = weak.clone();
+            let (pick, put) = (weak.clone(), weak.clone());
             widgets::color_palette(
                 st.color.clone(),
+                &self.last_color,
                 self.color_hex.clone(),
                 Rc::new(move |spec, window, cx| {
-                    let _ = weak.update(cx, |this, cx| {
-                        this.format(FormatOp::Color(spec), window, cx)
+                    let _ = pick.update(cx, |this, cx| this.pick_color(spec, window, cx));
+                }),
+                Rc::new(move |(), window, cx| {
+                    let _ = put.update(cx, |this, cx| {
+                        this.format(FormatOp::Color(this.last_color.clone()), window, cx)
                     });
                 }),
+                en,
                 cx,
             )
         };
