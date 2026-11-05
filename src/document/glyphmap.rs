@@ -98,7 +98,8 @@ pub fn glyph_text_of(rows: &[&Row]) -> GlyphText {
     };
     for (ri, r) in rows.iter().enumerate() {
         let mut prev: Option<(f64, f64)> = None; // y, end x
-        for it in &r.dl.lines[r.line].items {
+        let line = &r.dl.lines[r.line];
+        for it in &line.items {
             let Some(a) = it.as_array().filter(|a| a.len() >= 7 && a[0] == "g") else {
                 continue;
             };
@@ -116,6 +117,10 @@ pub fn glyph_text_of(rows: &[&Row]) -> GlyphText {
                 a[5].as_f64().unwrap_or(0.0) + r.dy,
                 a[6].as_f64().unwrap_or(0.0),
             );
+            // a list's label (bullet, number) hangs left of its line: LaTeX's, not the text's
+            if x + adv <= line.x + r.dx + 32768.0 {
+                continue;
+            }
             let gap = match prev {
                 None => ri > 0 && !gt.text.is_empty(),
                 Some((py, end)) => {
@@ -260,6 +265,28 @@ const HIDDEN_ARG: &[&str] = &[
     "addtolength",
 ];
 
+/// Environments whose arguments print nothing.
+const SILENT_ARGS: &[&str] = &[
+    "minipage",
+    "tabular",
+    "tabular*",
+    "tabularx",
+    "tabulary",
+    "array",
+    "longtable",
+    "multicols",
+    "wrapfigure",
+    "figure",
+    "table",
+    "figure*",
+    "table*",
+    "center",
+    "itemize",
+    "enumerate",
+    "description",
+    "tikzpicture",
+];
+
 fn visible_source(src: &str) -> Visible {
     let s: Vec<(usize, char)> = src.char_indices().collect();
     let at = |k: usize| s.get(k).map_or('\0', |c| c.1);
@@ -333,7 +360,24 @@ fn visible_source(src: &str) -> Visible {
                             }
                             k = j;
                         }
+                        let name_at = k;
                         k = group(k, '{', '}');
+                        // the arguments of an environment that prints none of them (a
+                        // minipage's width, a table's columns)
+                        let env: String = s[name_at.min(k)..k]
+                            .iter()
+                            .map(|c| c.1)
+                            .filter(|c| *c != '{' && *c != '}')
+                            .collect();
+                        if name == "begin" && SILENT_ARGS.contains(&env.as_str()) {
+                            loop {
+                                let j = group(group(k, '[', ']'), '{', '}');
+                                if j == k {
+                                    break;
+                                }
+                                k = j;
+                            }
+                        }
                         // a table cell's span and column spec: \multicolumn{2}{c}{text}
                         if name == "multicolumn" || name == "multirow" {
                             k = group(k, '{', '}');
@@ -578,6 +622,17 @@ mod tests {
     }
 
     #[test]
+    fn environment_arguments_that_print_nothing_are_markup() {
+        let v = visible_source(
+            "\\begin{minipage}[t]{0.52\\textwidth}x \\begin{tabular}{@{}cc@{}}a & b\\end{tabular}",
+        );
+        assert_eq!(v.text.iter().collect::<String>(), "x a b");
+        // a theorem-like environment's title prints
+        let v = visible_source("\\begin{definition}{Flowchart} text");
+        assert_eq!(v.text.iter().collect::<String>(), "Flowchart text");
+    }
+
+    #[test]
     fn visible_source_drops_markup() {
         let v = visible_source(
             "Hello \\textbf{world} see~\\ref{sec:x} % note\nnext \\& \\cite[p.~2]{k} ``q'' a--b",
@@ -623,7 +678,17 @@ mod tests {
         // nowhere inside the formula
         let x = src.find('x').unwrap();
         assert!(!offs.contains(&x) && !offs.contains(&(x + 1)));
-        let stop = |m: &CharMap, off: usize| m.stops.iter().position(|s| s.off == off).unwrap();
+        let stop = |m: &CharMap, off: usize| {
+            m.stops
+                .iter()
+                .position(|s| s.off == off)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no stop at {off}: {:?}",
+                        m.stops.iter().map(|s| s.off).collect::<Vec<_>>()
+                    )
+                })
+        };
         // a space goes as the source's whitespace beside the caret; a letter as itself
         let and = src.find("and").unwrap() + 3;
         assert_eq!(m.deletion(stop(&m, and), false, src), Some(and..and + 1));
@@ -639,6 +704,32 @@ mod tests {
         // a click lands on the nearest stop
         let i = m.stop_near(0.0, 98.0 * PT).unwrap();
         assert_eq!(m.stops[i].off, 0);
+        // at a block's edge a macro's text goes only as far as the block, and only whole
+        let src = "\\section*{Title \\hl}";
+        let r = row("Title [HL]", 100.0);
+        let m = char_map(&glyph_text_of(&[&r]), src, 0);
+        let end = src.find("\\hl").unwrap();
+        assert_eq!(
+            m.deletion(stop(&m, end - 1), false, src),
+            Some(15..16),
+            "the space first"
+        );
+        assert_eq!(
+            m.deletion(stop(&m, end), false, src),
+            Some(16..19),
+            "then \\hl, not the brace"
+        );
+        // a numbered heading's number is LaTeX's: the first stop is before the title
+        let src = "\\section{B1 Intro}";
+        let r = row("1 B1 Intro", 100.0);
+        let m = char_map(&glyph_text_of(&[&r]), src, 0);
+        assert_eq!(m.stops[0].off, src.find('B').unwrap());
+        // text an environment prints before the caret (its title) is no piece to delete
+        let src = "\\begin{note}{Plan} text";
+        let r = row("Note (Plan): text", 100.0);
+        let m = char_map(&glyph_text_of(&[&r]), src, 0);
+        let p = src.find("Plan").unwrap();
+        assert_eq!(m.deletion(stop(&m, p), true, src), None);
     }
 
     #[test]

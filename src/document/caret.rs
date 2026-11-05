@@ -35,6 +35,8 @@ pub struct Stop {
 pub struct CharMap {
     pub chars: Vec<Char>,
     pub stops: Vec<Stop>,
+    /// The block's source bytes.
+    pub range: Range<usize>,
 }
 
 /// The caret map of a block's rows on one page: `gt` their glyphs, `src` the block's source,
@@ -43,7 +45,18 @@ pub fn char_map(gt: &GlyphText, src: &str, base: usize) -> CharMap {
     let boxes = glyphmap::char_boxes(gt);
     let fonts = glyphmap::char_fonts(gt);
     let srcs = glyphmap::char_sources(gt, src);
-    let math = math_regions(src);
+    let math = atom_regions(src);
+    // a numbered heading starts with LaTeX's number, which could match a digit of its title
+    let numbered = HEADINGS.iter().any(|h| {
+        src.strip_prefix('\\')
+            .and_then(|r| r.strip_prefix(h))
+            .is_some_and(|r| r.starts_with(['{', '[']))
+    });
+    let number = if numbered {
+        gt.text.iter().position(|c| *c == ' ').unwrap_or(0)
+    } else {
+        0
+    };
     let n = gt.text.len();
     let mut chars = Vec::with_capacity(n);
     for i in 0..n {
@@ -59,9 +72,10 @@ pub fn char_map(gt: &GlyphText, src: &str, base: usize) -> CharMap {
             (None, None, Some(q)) => [q[0], q[1], 0.0, q[3]],
             (None, None, None) => continue,
         };
-        // math is edited as source: its chars stand for the whole formula, like a macro's
+        // math and TikZ are edited as source: their chars stand for the whole, like a macro's
         let src = srcs[i]
             .clone()
+            .filter(|_| i >= number)
             .filter(|r| !math.iter().any(|m| m.start < r.start && r.end <= m.end))
             .map(|r| r.start + base..r.end + base);
         chars.push(Char {
@@ -98,20 +112,44 @@ pub fn char_map(gt: &GlyphText, src: &str, base: usize) -> CharMap {
             stops.push(Stop { k, off, x, y, size });
         }
     }
-    CharMap { chars, stops }
+    CharMap {
+        chars,
+        stops,
+        range: base..base + src.len(),
+    }
 }
 
 impl CharMap {
-    /// The stop for source offset `off`: the one at it, else the last one before it.
-    pub fn stop_for(&self, off: usize) -> Option<usize> {
-        self.stops.iter().position(|s| s.off == off).or_else(|| {
-            self.stops
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| s.off <= off)
-                .max_by_key(|(_, s)| s.off)
-                .map(|(i, _)| i)
-        })
+    /// The stop for source offset `off` of `src`: the one at it, else the last one before it
+    /// (text typed there, not typeset yet), but the next one when only markup comes before that
+    /// and a line ends before the caret (`\\item |\\textbf{text}`, a new paragraph).
+    pub fn stop_for(&self, off: usize, src: &str) -> Option<usize> {
+        if let Some(i) = self.stops.iter().position(|s| s.off == off) {
+            return Some(i);
+        }
+        let at = |pick: Option<(usize, &Stop)>| pick.map(|(i, _)| i);
+        let prev = at(self
+            .stops
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.off <= off)
+            .max_by_key(|(_, s)| s.off));
+        let next = at(self
+            .stops
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.off > off)
+            .min_by_key(|(_, s)| s.off));
+        let breaks = |t: &str| t.contains("\\item") || t.contains("\n\n") || t.contains("\\\\");
+        if let Some(n) = next
+            && src
+                .get(off..self.stops[n].off)
+                .is_some_and(|t| !glyphmap::has_visible(t))
+            && prev.is_none_or(|p| src.get(self.stops[p].off..off).is_some_and(breaks))
+        {
+            return Some(n);
+        }
+        prev
     }
 
     /// The stop nearest (`x`, `y`) sp: on the nearest line, then the nearest across.
@@ -163,17 +201,115 @@ impl CharMap {
         let hi = self.chars[at..]
             .iter()
             .find_map(|c| mapped(c).map(|s| s.start));
+        // at the block's edge, up to its edge: never past it
         let (lo, hi) = match (lo, hi) {
             (Some(a), Some(b)) if a < b => (a, b),
-            (Some(a), None) => (a, a + src.get(a..)?.trim_end().len()),
-            (None, Some(b)) => (b - src.get(..b)?.trim_start().len(), b),
+            (Some(a), None) => (a, self.range.end),
+            (None, Some(b)) => (self.range.start, b),
             _ => return None,
         };
         let t = src.get(lo..hi)?;
-        let start = lo + (t.len() - t.trim_start().len());
-        Some(start..(start + t.trim().len()).max(start))
+        let mut start = lo + (t.len() - t.trim_start().len());
+        let mut end = (start + t.trim().len()).max(start);
+        // the closing braces of the groups it sits in (a heading's) are not its own
+        while depth(&src[start..end]) < 0 && src[..end].ends_with('}') {
+            end = src[start..end - 1].trim_end().len() + start;
+        }
+        while depth(&src[start..end]) > 0 && src[start..].starts_with('{') {
+            start += 1;
+        }
+        // only a whole piece of TeX goes: no half group, environment or item
+        let piece = &src[start..end];
+        let whole = depth(piece) == 0
+            && min_depth(piece) >= 0
+            && !piece.contains("\\begin")
+            && !piece.contains("\\end")
+            && !piece.contains("\\item")
+            && !piece.is_empty();
+        whole.then_some(start..end)
     }
 }
+
+/// The brace depth `s` ends at (escaped braces aside).
+fn depth(s: &str) -> i64 {
+    brace_depths(s).last().copied().unwrap_or(0)
+}
+
+/// The lowest brace depth `s` reaches.
+fn min_depth(s: &str) -> i64 {
+    brace_depths(s).into_iter().min().unwrap_or(0)
+}
+
+fn brace_depths(s: &str) -> Vec<i64> {
+    let b = s.as_bytes();
+    let (mut d, mut out, mut i) = (0, vec![], 0);
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 1,
+            b'{' => d += 1,
+            b'}' => d -= 1,
+            _ => {}
+        }
+        out.push(d);
+        i += 1;
+    }
+    out
+}
+
+/// What the caret does not go into, as it is edited as source: inline math, TikZ pictures
+/// (`\begin{tikzpicture}…`, `\tikz…;`), delimiters included.
+pub fn atom_regions(src: &str) -> Vec<Range<usize>> {
+    let mut out = math_regions(src);
+    out.extend(picture_regions(src));
+    out
+}
+
+/// TikZ and other pictures in `src`: `\begin{tikzpicture}…`, `\tikz…;`.
+fn picture_regions(src: &str) -> Vec<Range<usize>> {
+    let mut out = vec![];
+    let toks = tokens(src);
+    for (k, (a, _, t)) in toks.iter().enumerate() {
+        if let Tok::Begin(n) = t
+            && PICTURES.contains(&n.as_str())
+            && let Some((_, b, _)) = toks[k..].iter().find(|(_, _, e)| *e == Tok::End(n.clone()))
+        {
+            out.push(*a..*b);
+        }
+    }
+    // \tikz… up to its ; outside braces
+    let mut from = 0;
+    while let Some(i) = src[from..].find("\\tikz").map(|i| i + from) {
+        let rest = &src[i + 5..];
+        if rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            from = i + 5;
+            continue;
+        }
+        let mut depth = 0i64;
+        let mut end = src.len();
+        for (j, c) in rest.char_indices() {
+            match c {
+                '{' | '[' => depth += 1,
+                '}' | ']' => depth -= 1,
+                ';' if depth <= 0 => {
+                    end = i + 5 + j + 1;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        out.push(i..end);
+        from = end;
+    }
+    out
+}
+
+const PICTURES: &[&str] = &[
+    "tikzpicture",
+    "pgfpicture",
+    "picture",
+    "circuitikz",
+    "forest",
+];
 
 /// `$…$` and `\(…\)` in `src`, delimiters included.
 pub fn math_regions(src: &str) -> Vec<Range<usize>> {
@@ -507,17 +643,34 @@ fn drop_empty_lists(text: &str) -> String {
 }
 
 /// Enter at `off` in list item `it`: a new item; on an empty item, leave the list there.
-pub fn enter_in_item(src: &str, it: &Item, off: usize) -> Edit {
-    let empty = !glyphmap::has_visible(&src[it.text.clone()]);
-    if !empty {
-        let at = off.clamp(it.text.start, it.text.end.max(off));
-        return Edit::marked(at..at, &format!("\n{}\\item {MARK}", it.indent));
+pub fn enter_in_item(src: &str, it: &Item, off: usize) -> Option<Edit> {
+    let indent = &it.indent;
+    if glyphmap::has_visible(&src[it.text.clone()]) {
+        let off = off.clamp(it.text.start, it.text.end);
+        return Some(match split_at(src, it.text.clone(), off)? {
+            // before its text: a new empty item above, the caret staying with the text
+            Split::Start => {
+                let text = format!("{indent}\\item\n");
+                Edit {
+                    range: it.line..it.line,
+                    caret: off + text.len(),
+                    text,
+                }
+            }
+            Split::End => {
+                let at = it.text.end;
+                Edit::marked(at..at, &format!("\n{indent}\\item {MARK}"))
+            }
+            Split::Mid(at, close, reopen) => {
+                Edit::marked(at..at, &format!("{close}\n{indent}\\item {reopen}{MARK}"))
+            }
+        });
     }
     // split the list around the empty item: what is left of either half stays a list
     let (start, li, head, tail) = list_parts(src, it);
     let env = &it.env;
     let text = format!("{head}\n{li}\\end{{{env}}}\n\n{MARK}\n\n{li}\\begin{{{env}}}{tail}");
-    Edit::marked(start..it.list.end, &tidy(&text))
+    Some(Edit::marked(start..it.list.end, &tidy(&text)))
 }
 
 /// Item `it`'s list split around it: where its `\\begin` line starts, that line's indent, the
@@ -692,7 +845,8 @@ fn group_command(src: &str, open: usize) -> (usize, String) {
             None => break,
         }
     }
-    let name_end = i;
+    // a starred command: \section*{
+    let name_end = if i > 0 && s[i - 1] == b'*' { i - 1 } else { i };
     let name_start = src[..name_end]
         .trim_end_matches(|c: char| c.is_ascii_alphabetic())
         .len();
@@ -703,31 +857,167 @@ fn group_command(src: &str, open: usize) -> (usize, String) {
     }
 }
 
-/// Enter at `off` in a paragraph (`block` its source from `base`): a paragraph break, closing
-/// the formatting open there and reopening it after. In a heading or other command's argument,
-/// the new paragraph starts after the block. None when there is nothing to break (`at_start`
-/// of a paragraph with no text before the caret is still a break: an empty line above).
-pub fn enter_in_paragraph(block: &str, base: usize, off: usize) -> Edit {
-    let groups = open_groups(block, base, off);
-    if groups.iter().all(|(n, ..)| FORMAT.contains(&n.as_str())) {
-        let close = "}".repeat(groups.len());
-        let reopen: String = groups
-            .iter()
-            .map(|(_, start, open)| &block[start - base..=open - base])
-            .collect();
-        return Edit::marked(off..off, &format!("{close}\n\n{reopen}{MARK}"));
+/// Headings: Enter inside one splits it in two, as it splits formatting.
+const HEADINGS: &[&str] = &[
+    "part",
+    "chapter",
+    "section",
+    "subsection",
+    "subsubsection",
+    "paragraph",
+    "subparagraph",
+];
+
+/// Environments whose lines are rows (`&`, `\\`): Enter waits for table editing there.
+const TABLES: &[&str] = &[
+    "tabular",
+    "tabular*",
+    "tabularx",
+    "tabulary",
+    "longtable",
+    "array",
+    "tabu",
+];
+
+/// The environments open at `off`, outermost first.
+pub fn envs_at(src: &str, off: usize) -> Vec<String> {
+    let mut open: Vec<String> = vec![];
+    for (a, _, t) in tokens(src) {
+        if a >= off {
+            break;
+        }
+        match t {
+            Tok::Begin(n) => open.push(n),
+            Tok::End(n) => {
+                if let Some(i) = open.iter().rposition(|o| *o == n) {
+                    open.truncate(i);
+                }
+            }
+            Tok::Item => {}
+        }
     }
-    let end = base + block.len();
-    Edit::marked(end..end, &format!("\n\n{MARK}"))
+    open
 }
 
-/// Shift-Enter: a line break, except inside a heading or a command's argument.
-pub fn line_break(block: &str, base: usize, off: usize) -> Option<Edit> {
-    let groups = open_groups(block, base, off);
-    groups
+/// Whether `off` is in a table's cells.
+pub fn in_table(src: &str, off: usize) -> bool {
+    envs_at(src, off)
         .iter()
-        .all(|(n, ..)| FORMAT.contains(&n.as_str()))
-        .then(|| Edit::marked(off..off, &format!("\\\\\n{MARK}")))
+        .any(|e| TABLES.contains(&e.as_str()))
+}
+
+/// Where a break at `off` in `text` (a paragraph's or an item's) falls.
+#[derive(Debug, PartialEq)]
+enum Split {
+    /// No text before it, or none after.
+    Start,
+    End,
+    /// Between text: at this offset, closing and reopening the groups open there.
+    Mid(usize, String, String),
+}
+
+/// Where a break at `off` in `text` falls; None inside a group that cannot be split (a
+/// command's argument other than formatting or a heading). A caret at the edge of a group
+/// (`\textbf{word|} more`) breaks outside it rather than leaving it empty on one side.
+fn split_at(src: &str, text: Range<usize>, off: usize) -> Option<Split> {
+    if !shows_text(src, text.start..off) {
+        return Some(Split::Start);
+    }
+    if !shows_text(src, off..text.end) {
+        return Some(Split::End);
+    }
+    let mut off = off;
+    let mut groups = open_groups(&src[text.clone()], text.start, off);
+    while let Some(&(_, start, open)) = groups.last() {
+        let close = group_close(src, open).unwrap_or(text.end);
+        if !glyphmap::has_visible(&src[off..close]) {
+            off = close + 1;
+        } else if !glyphmap::has_visible(&src[open + 1..off]) {
+            off = start;
+        } else {
+            break;
+        }
+        groups.pop();
+    }
+    // the new line starts at its text, not with the space after the break
+    off = src[..text.end]
+        .len()
+        .min(off + src[off..].len() - src[off..].trim_start_matches([' ', '\t']).len());
+    let split = |n: &str| FORMAT.contains(&n) || HEADINGS.contains(&n);
+    if !groups.iter().all(|(n, ..)| split(n)) {
+        return None;
+    }
+    let close = "}".repeat(groups.len());
+    let reopen = groups.iter().map(|(_, s, o)| &src[*s..=*o]).collect();
+    Some(Split::Mid(off, close, reopen))
+}
+
+/// Whether `src[r]` prints text, a picture's labels aside (a TikZ flowchart beside the text
+/// is not text the caret is after).
+fn shows_text(src: &str, r: Range<usize>) -> bool {
+    let mut t = String::new();
+    let mut at = r.start;
+    let mut pics = picture_regions(src);
+    pics.sort_by_key(|p| p.start);
+    for p in pics
+        .into_iter()
+        .filter(|p| p.end > r.start && p.start < r.end)
+    {
+        t.push_str(&src[at..p.start.max(at)]);
+        at = p.end.min(r.end).max(at);
+    }
+    t.push_str(&src[at..r.end]);
+    glyphmap::has_visible(&t)
+}
+
+/// Where the group opening at `open` closes.
+fn group_close(src: &str, open: usize) -> Option<usize> {
+    let s = src.as_bytes();
+    let mut depth = 0;
+    let mut i = open;
+    while i < s.len() {
+        match s[i] {
+            b'\\' => i += 1,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Enter at `off` in a paragraph, `block` its range: before its text, a new paragraph above
+/// it (the caret in it); after its text, one below; between, a paragraph break that closes the
+/// formatting or heading open there and reopens it after. None where a break cannot go.
+pub fn enter_in_paragraph(src: &str, block: Range<usize>, off: usize) -> Option<Edit> {
+    Some(match split_at(src, block.clone(), off)? {
+        Split::Start => Edit::marked(block.start..block.start, &format!("{MARK}\n\n")),
+        Split::End => Edit::marked(block.end..block.end, &format!("\n\n{MARK}")),
+        Split::Mid(at, close, reopen) => {
+            Edit::marked(at..at, &format!("{close}\n\n{reopen}{MARK}"))
+        }
+    })
+}
+
+/// Shift-Enter: a line break between text, in formatting but not in a heading or a command's
+/// argument (where `\\` breaks the TeX).
+pub fn line_break(src: &str, block: Range<usize>, off: usize) -> Option<Edit> {
+    match split_at(src, block.clone(), off)? {
+        Split::Mid(at, _, _) => {
+            let groups = open_groups(&src[block.clone()], block.start, at);
+            groups
+                .iter()
+                .all(|(n, ..)| FORMAT.contains(&n.as_str()))
+                .then(|| Edit::marked(at..at, &format!("\\\\\n{MARK}")))
+        }
+        _ => None,
+    }
 }
 
 /// After `range` of `src` was deleted (now at `at`): an empty `\cmd{}` left around `at`.
@@ -815,7 +1105,7 @@ mod tests {
     fn enter_adds_an_item_and_leaves_on_an_empty_one() {
         let off = LIST.find("one").unwrap() + 3;
         let it = item_at(LIST, off).unwrap();
-        let e = enter_in_item(LIST, &it, off);
+        let e = enter_in_item(LIST, &it, off).unwrap();
         assert_eq!(
             apply(LIST, &e),
             "\\begin{itemize}\n  \\item one\n  \\item |\n  \\item two\n\\end{itemize}"
@@ -825,7 +1115,7 @@ mod tests {
         let off = src.rfind("\\item").unwrap() + 6;
         let it = item_at(src, off).unwrap();
         assert_eq!(
-            apply(src, &enter_in_item(src, &it, off)),
+            apply(src, &enter_in_item(src, &it, off).unwrap()),
             "\\begin{itemize}\n  \\item one\n\\end{itemize}\n\n|"
         );
     }
@@ -870,28 +1160,129 @@ mod tests {
         );
     }
 
+    /// Enter at the `|` of `src` (a whole paragraph), as the source after it with the caret `|`.
+    fn enter(src: &str) -> Option<String> {
+        let off = src.find('|').unwrap();
+        let s = src.replace('|', "");
+        let e = enter_in_paragraph(&s, 0..s.len(), off)?;
+        Some(apply(&s, &e))
+    }
+
     #[test]
     fn enter_closes_and_reopens_formatting() {
-        let b = "Some \\textbf{bold \\emph{and} more} text";
-        let off = 10 + b.find("more").unwrap() + 2;
-        let e = enter_in_paragraph(b, 10, off);
-        let mut s = format!("{}{b}", " ".repeat(10));
-        s.replace_range(e.range.clone(), &e.text);
         assert_eq!(
-            &s[10..],
-            "Some \\textbf{bold \\emph{and} mo}\n\n\\textbf{re} text"
+            enter("Some \\textbf{bold \\emph{and} mo|re} text").unwrap(),
+            "Some \\textbf{bold \\emph{and} mo}\n\n\\textbf{|re} text"
         );
         assert_eq!(
-            e.caret,
-            10 + "Some \\textbf{bold \\emph{and} mo}\n\n\\textbf{".len()
+            enter("\\textcolor{red}{a|b}").unwrap(),
+            "\\textcolor{red}{a}\n\n\\textcolor{red}{|b}"
         );
-        // in a heading the new paragraph follows the block
-        let h = "\\section{Intro}";
-        let e = enter_in_paragraph(h, 0, 10);
-        assert_eq!((e.range, e.text.as_str(), e.caret), (15..15, "\n\n", 17));
-        assert!(line_break(h, 0, 10).is_none());
-        let e = enter_in_paragraph("\\textcolor{red}{ab}", 0, 17);
-        assert_eq!(e.text, "}\n\n\\textcolor{red}{");
+        // at a group's edge the break goes outside it, leaving no empty \textbf{}
+        assert_eq!(
+            enter("\\textbf{Note:|} more").unwrap(),
+            "\\textbf{Note:} \n\n|more"
+        );
+        assert_eq!(
+            enter("some \\textbf{|bold} text").unwrap(),
+            "some \n\n|\\textbf{bold} text"
+        );
+    }
+
+    #[test]
+    fn enter_at_a_paragraphs_edges_adds_one_there() {
+        // before the text (a heading's too): a new paragraph above, the caret in it
+        assert_eq!(
+            enter("\\subsection*{|Which one?}").unwrap(),
+            "|\n\n\\subsection*{Which one?}"
+        );
+        assert_eq!(enter("|Plain text.").unwrap(), "|\n\nPlain text.");
+        // after it: one below
+        assert_eq!(enter("\\section{Intro|}").unwrap(), "\\section{Intro}\n\n|");
+        assert_eq!(enter("Text \\emph{end|}").unwrap(), "Text \\emph{end}\n\n|");
+        // in a heading: two headings
+        assert_eq!(
+            enter("\\subsection*{Which |one?}").unwrap(),
+            "\\subsection*{Which }\n\n\\subsection*{|one?}"
+        );
+        // a command's argument that cannot split: nothing
+        assert_eq!(enter("\\fbox{in a |box} after"), None);
+        // a line break only between text, and not in a heading
+        let lb = |src: &str| {
+            let off = src.find('|').unwrap();
+            let s = src.replace('|', "");
+            line_break(&s, 0..s.len(), off).map(|e| apply(&s, &e))
+        };
+        assert_eq!(lb("one |two").unwrap(), "one \\\\\n|two");
+        assert_eq!(lb("|two"), None);
+        assert_eq!(lb("\\section{A |B}"), None);
+    }
+
+    #[test]
+    fn enter_in_an_item_adds_one_above_below_or_splits() {
+        let src = "\\begin{itemize}\n  \\item \\textbf{Rapid dev} text\n\\end{itemize}";
+        let at = |s: &str| src.find(s).unwrap();
+        let go = |off: usize| {
+            let it = item_at(src, off).unwrap();
+            apply(src, &enter_in_item(src, &it, off).unwrap())
+        };
+        // before its text: an empty item above, the caret staying with the text
+        assert_eq!(
+            go(at("Rapid")),
+            "\\begin{itemize}\n  \\item\n  \\item \\textbf{|Rapid dev} text\n\\end{itemize}"
+        );
+        // inside bold: the bold closes and reopens around the new item
+        assert_eq!(
+            go(at("dev")),
+            "\\begin{itemize}\n  \\item \\textbf{Rapid }\n  \\item \\textbf{|dev} text\n\\end{itemize}"
+        );
+        assert_eq!(
+            go(at(" text") + 5),
+            "\\begin{itemize}\n  \\item \\textbf{Rapid dev} text\n  \\item |\n\\end{itemize}"
+        );
+    }
+
+    #[test]
+    fn a_break_skips_the_space_after_it() {
+        let src = "\\begin{itemize}\n  \\item \\textbf{Speed:} fast\n\\end{itemize}";
+        let off = src.find(':').unwrap() + 2;
+        let it = item_at(src, off).unwrap();
+        assert_eq!(
+            apply(src, &enter_in_item(src, &it, off).unwrap()),
+            "\\begin{itemize}\n  \\item \\textbf{Speed:} \n  \\item |fast\n\\end{itemize}"
+        );
+    }
+
+    #[test]
+    fn tikz_is_an_atom() {
+        let s = "a \\tikz\\node[x]{Start}; b \\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture} c";
+        let r: Vec<&str> = atom_regions(s).into_iter().map(|r| &s[r]).collect();
+        assert_eq!(
+            r,
+            vec![
+                "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}",
+                "\\tikz\\node[x]{Start};"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_picture_beside_text_is_not_text_before_it() {
+        let s = "\\begin{minipage}{.5\\textwidth}\\begin{tikzpicture}\\node{Start};\\end{tikzpicture}\\end{minipage}\nlimit = 7";
+        let e = enter_in_paragraph(s, 0..s.len(), s.find("limit").unwrap()).unwrap();
+        assert_eq!(
+            (e.range.start, e.caret),
+            (0, 0),
+            "a new paragraph before the block"
+        );
+    }
+
+    #[test]
+    fn tables_are_known() {
+        let s = "a \\begin{tabular}{ll} x & y \\end{tabular} b";
+        assert!(in_table(s, s.find('x').unwrap()));
+        assert!(!in_table(s, 1));
+        assert!(!in_table(s, s.len() - 1));
     }
 
     #[test]

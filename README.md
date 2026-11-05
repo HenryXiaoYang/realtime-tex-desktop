@@ -27,7 +27,10 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   (`\\`); Tab and Shift-Tab nest and un-nest list items; Backspace and Delete remove a character,
   a whole `\ref`/`\cite` or formula, or join two paragraphs or items. Undo takes back a word at a
   time (in Chinese, Japanese, Thai…, one input-method commit). ⌘M opens a formula in the
-  paragraph's source box.
+  paragraph's source box, and typing `\` opens that box with the command begun (with its
+  completions), so `\title{…}` goes in as TeX. Enter at the start of a paragraph or heading
+  opens a new paragraph above it; in a heading's middle it splits it in two; in a table it does
+  nothing yet.
 - Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
   it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
   the clicked character; Up on the first line or Down on the last moves to the neighbouring
@@ -133,6 +136,10 @@ source and typeset text; `RTD_INSPECT_PNG=dir` also writes the pages as PNGs, an
 where the caret can stand (`RTD_INSPECT_CHARS=text` also lists the char map of blocks containing
 `text`; `RTD_INSPECT_FONTS=1` lists the first page's fonts). `RTD_TYPE=/abs/copy/main.tex cargo test --release type_on_pages -- --ignored
 --nocapture` types on a real document through rtex (caret, escaping, undo steps, Enter,
-Backspace, lists, an input method) and prints how long typing took to typeset.
+Backspace, lists, an input method) and prints how long typing took to typeset. `RTD_TYPE=… cargo
+test --release edit_everywhere -- --ignored --nocapture` types, presses Enter, Shift-Enter,
+Backspace and Delete at the start, middle and end of every block, through rtex, and fails on a
+LaTeX error, a lost caret, a caret Enter moved the wrong way or an undo that does not restore the
+source (`RTD_SWEEP_ONLY=26:` or `26:enter@end` runs one block or edit and shows it).
 
 Set `RTD_LOG=1` to print the rtex protocol traffic to stderr.

@@ -104,7 +104,7 @@ impl Doc {
             let Some(m) = self.map_of(bi, page) else {
                 continue;
             };
-            if let Some(i) = m.stop_for(off) {
+            if let Some(i) = m.stop_for(off, &self.source) {
                 let exact = m.stops[i].off == off;
                 best = Some((bi, page, m, i));
                 if exact {
@@ -126,6 +126,11 @@ impl Doc {
         let off = self.caret.as_ref()?.off;
         if let Some((_, page, m, i)) = self.caret_stop() {
             let s = m.stops[i];
+            if s.off != off
+                && let Some(at) = self.item_spot(&m, off)
+            {
+                return Some((page, at.0, at.1, s.size));
+            }
             return Some((page, s.x, s.y, s.size));
         }
         let size = |b: &document::Block| {
@@ -141,20 +146,71 @@ impl Doc {
                 .filter(|x| *x < f64::MAX)
                 .unwrap_or(72.0 * 65536.0)
         };
-        match self.blocks.iter().rposition(|b| b.range.end <= off) {
-            Some(i) => {
-                let b = &self.blocks[i];
-                let r = b.rows.last()?;
-                let s = size(b);
-                Some((r.page, left(r.page), r.bbox[3] + 1.5 * s, s))
+        // in the gap between the blocks around it, above the text it precedes; blocks that
+        // print nothing (\\newpage) have nowhere to draw it
+        let shown = |b: &&document::Block| !b.rows.is_empty();
+        let prev = self
+            .blocks
+            .iter()
+            .rposition(|b| b.range.end <= off && shown(&b))
+            .map(|i| &self.blocks[i]);
+        let next = self
+            .blocks
+            .iter()
+            .find(|b| b.range.start >= off && shown(b));
+        let below = |b: &document::Block| {
+            let r = b.rows.last()?;
+            Some((r.page, r.bbox[3]))
+        };
+        let above = |b: &document::Block| {
+            let r = b.rows.first()?;
+            Some((r.page, r.bbox[1]))
+        };
+        match (prev.and_then(below), next.and_then(above)) {
+            (Some((p, bottom)), Some((q, top))) if p == q && top > bottom => {
+                let s = size(prev.or(next)?);
+                // a line's baseline in the middle of the gap, never into the text below
+                let y = ((bottom + top) / 2.0 + 0.35 * s)
+                    .min(top - 0.05 * s)
+                    .max(bottom + 0.1 * s);
+                Some((p, left(p), y, s))
             }
-            None => {
-                let b = self.blocks.first()?;
-                let r = b.rows.first()?;
-                let s = size(b);
-                Some((r.page, left(r.page), r.bbox[1] - 0.5 * s, s))
+            (_, Some((q, top))) => Some((q, left(q), top - 0.25 * size(next?), size(next?))),
+            (Some((p, bottom)), None) => {
+                let s = size(prev?);
+                Some((p, left(p), bottom + 1.5 * s, s))
             }
+            (None, None) => None,
         }
+    }
+
+    /// Where an empty item at `off` with no line of its own goes (inside a box, a minipage's
+    /// list): under the item before, at its text's column, as far below as items are apart.
+    fn item_spot(&self, m: &CharMap, off: usize) -> Option<(f64, f64)> {
+        let src = &self.source;
+        let it = caret::item_at(src, off).filter(|it| it.text.is_empty())?;
+        let before = |it: &caret::Item| {
+            caret::item_at(src, it.line.checked_sub(1)?)
+                .filter(|p| p.list == it.list && p.item < it.item)
+        };
+        let lines = |it: &caret::Item| {
+            let st: Vec<&caret::Stop> = m
+                .stops
+                .iter()
+                .filter(|s| s.off >= it.text.start && s.off <= it.text.end)
+                .collect();
+            let first = **st.first()?;
+            let last = st.iter().map(|s| s.y).fold(first.y, f64::max);
+            Some((first, last))
+        };
+        let prev = before(&it)?;
+        let (first, last) = lines(&prev)?;
+        let gap = before(&prev)
+            .and_then(|pp| lines(&pp))
+            .map(|(_, pp_last)| first.y - pp_last)
+            .filter(|g| *g > 0.0)
+            .unwrap_or(1.5 * first.size);
+        Some((first.x, last + gap))
     }
 
     /// The font of the text at the caret, for text typed there before it is typeset: the char
@@ -170,9 +226,11 @@ impl Doc {
             }
         }
         let off = self.caret.as_ref()?.off;
-        let bi = self
-            .block_of(off)
-            .or_else(|| self.blocks.iter().rposition(|b| b.range.end <= off))?;
+        let bi = self.block_of(off).or_else(|| {
+            self.blocks
+                .iter()
+                .rposition(|b| b.range.end <= off && !b.rows.is_empty())
+        })?;
         let b = &self.blocks[bi];
         glyphmap::main_font(&b.rows.iter().map(|r| &r.row).collect::<Vec<_>>())
     }
@@ -245,10 +303,22 @@ impl Doc {
         let base = |r: &document::PlacedRow| r.bbox[3] - r.row.dl.lines[r.row.line].d;
         let stops = m.stops.clone();
         let bare = |y: f64| !stops.iter().any(|s| (s.y - y).abs() < 0.5 * s.size);
+        // an empty item's line holds its label, hanging left of the line, and nothing else (a
+        // picture's lines have no stops either)
+        let label_only = |r: &document::PlacedRow| {
+            let l = &r.row.dl.lines[r.row.line];
+            let glyphs: Vec<(f64, f64)> = l
+                .items
+                .iter()
+                .filter_map(|it| it.as_array().filter(|a| a.len() >= 7 && a[0] == "g"))
+                .map(|a| (a[4].as_f64().unwrap_or(0.0), a[6].as_f64().unwrap_or(0.0)))
+                .collect();
+            !glyphs.is_empty() && glyphs.iter().all(|(x, w)| x + w <= l.x + 32768.0)
+        };
         let mut rows: Vec<&document::PlacedRow> = b
             .rows
             .iter()
-            .filter(|r| r.page == page && bare(base(r)))
+            .filter(|r| r.page == page && bare(base(r)) && label_only(r))
             .collect();
         rows.sort_by(|a, b| base(a).total_cmp(&base(b)));
         let src = &self.source;
@@ -361,9 +431,13 @@ impl Doc {
             // between blocks: into the one on that side
             None => {
                 let bi = if dir < 0 {
-                    self.blocks.iter().rposition(|b| b.range.end <= off)
+                    self.blocks
+                        .iter()
+                        .rposition(|b| b.range.end <= off && !b.rows.is_empty())
                 } else {
-                    self.blocks.iter().position(|b| b.range.start >= off)
+                    self.blocks
+                        .iter()
+                        .position(|b| b.range.start >= off && !b.rows.is_empty())
                 };
                 bi.and_then(|b| {
                     let p = if dir < 0 {
@@ -696,10 +770,12 @@ impl Doc {
     /// (after) when both are running text; otherwise the caret goes into that block, or it is
     /// selected (a formula, a picture).
     fn join(&mut self, bi: usize, back: bool, cx: &mut Context<Self>) {
+        // the nearest block that prints something (not a \\newpage)
+        let shown = |&o: &usize| !self.blocks[o].rows.is_empty();
         let other = if back {
-            bi.checked_sub(1)
+            (0..bi).rev().find(shown)
         } else {
-            Some(bi + 1).filter(|&o| o < self.blocks.len())
+            (bi + 1..self.blocks.len()).find(shown)
         };
         let Some(other) = other else {
             return;
@@ -735,30 +811,28 @@ impl Doc {
         }
     }
 
-    /// Enter: a new list item, or a paragraph break; Shift-Enter (`line`): a line break.
+    /// Enter: a new list item, or a paragraph break; Shift-Enter (`line`): a line break. Not
+    /// in a table's cells (rows come with table editing).
     fn enter(&mut self, line: bool, cx: &mut Context<Self>) {
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
-        if !line
-            && let Some(it) = caret::item_at(&self.source, off)
-            && off >= it.text.start
-        {
-            let e = caret::enter_in_item(&self.source, &it, off);
-            return self.apply(e, cx);
+        if caret::in_table(&self.source, off) {
+            return;
         }
-        // an empty paragraph stays one: TeX has no blank paragraphs
-        let Some(bi) = self.block_of(off) else {
-            return;
-        };
-        let b = self.blocks[bi].range.clone();
-        let Some(src) = self.source.get(b.clone()) else {
-            return;
-        };
-        let e = if line {
-            caret::line_break(src, b.start, off)
-        } else {
-            Some(caret::enter_in_paragraph(src, b.start, off))
+        let item = caret::item_at(&self.source, off).filter(|it| off >= it.text.start);
+        let e = match (&item, line) {
+            (Some(it), false) => caret::enter_in_item(&self.source, it, off),
+            (Some(it), true) => caret::line_break(&self.source, it.text.clone(), off),
+            // an empty paragraph stays one: TeX has no blank paragraphs
+            (None, _) => self.block_of(off).and_then(|bi| {
+                let b = self.blocks[bi].range.clone();
+                if line {
+                    caret::line_break(&self.source, b, off)
+                } else {
+                    caret::enter_in_paragraph(&self.source, b, off)
+                }
+            }),
         };
         if let Some(e) = e {
             self.apply(e, cx);
@@ -796,6 +870,13 @@ impl Doc {
 
     /// ⌘M: a formula at the caret, edited as source in its paragraph's box.
     fn insert_math(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = format!("${}$", complete::MARK);
+        self.edit_tex_at_caret(&text, window, cx);
+    }
+
+    /// The caret's paragraph opened as source, with `text` (TeX, the caret at its MARK) typed
+    /// at the caret: a formula (⌘M), or a command begun with `\\`.
+    fn edit_tex_at_caret(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
@@ -804,9 +885,8 @@ impl Doc {
         if let Some(bi) = self.block_of(off) {
             let start = self.blocks[bi].range.start;
             self.activate(bi, off - start, window, cx);
-            let text = format!("${}$", complete::MARK);
             self.input
-                .update(cx, |s, cx| s.replace_text_in_range(None, &text, window, cx));
+                .update(cx, |s, cx| s.replace_text_in_range(None, text, window, cx));
             return;
         }
         // in a new paragraph: a box of its own there
@@ -824,7 +904,8 @@ impl Doc {
                 sep_before: false,
             }),
         ));
-        self.edit_in_box("$$".into(), 1, window, cx);
+        let caret = text.find(complete::MARK).unwrap_or(text.len());
+        self.edit_in_box(text.replace(complete::MARK, ""), caret, window, cx);
         self.on_input(window, cx);
     }
 
@@ -1047,12 +1128,18 @@ impl EntityInputHandler for Doc {
         &mut self,
         range: Option<Range<usize>>,
         text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(c) = self.caret.as_mut() else { return };
         if c.marked.take().is_some() {
             return self.type_text(text, true, cx);
+        }
+        // a backslash starts a command: nobody types one to print it, so TeX it is, in the
+        // paragraph's source box (with its completions) at the caret
+        if text.starts_with('\\') {
+            let text = format!("{text}{}", complete::MARK);
+            return self.edit_tex_at_caret(&text, window, cx);
         }
         // a range other than the caret: the accent menu replacing the char before it
         if let Some(r) = range {
@@ -1160,7 +1247,7 @@ pub(super) fn paste_at_caret(d: &mut Doc, cx: &mut Context<Doc>) {
 
 #[cfg(test)]
 mod tests {
-    use super::Doc;
+    use super::{Doc, caret};
     use crate::document::{self, glyphmap};
     use crate::engine;
     use crate::ui::settings::AppSettings;
@@ -1182,6 +1269,23 @@ mod tests {
             }
             assert!(Instant::now() < until, "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Run until rtex has typeset everything and stays so for a while: LaTeX may run again
+    /// (references) just after a layout comes in.
+    fn calm(cx: &mut VisualTestContext, doc: &Entity<Doc>) {
+        let settled = |d: &Doc| d.spans_pending == 0 && !d.compiling;
+        let mut since = Instant::now();
+        loop {
+            wait(cx, doc, "the edit typeset", settled);
+            std::thread::sleep(Duration::from_millis(30));
+            cx.run_until_parked();
+            if !cx.read(|cx| settled(doc.read(cx))) {
+                since = Instant::now();
+            } else if since.elapsed() > Duration::from_millis(300) {
+                return;
+            }
         }
     }
 
@@ -1350,6 +1454,31 @@ mod tests {
         doc.update_in(cx, |d, window, cx| d.undo(window, cx));
         assert_eq!(cx.read(|cx| doc.read(cx).source.clone()), base);
         wait(cx, &doc, "the undo typeset", |d| d.spans_pending == 0);
+        // a backslash opens the paragraph's source with the command begun at the caret
+        let base = cx.read(|cx| doc.read(cx).source.clone());
+        doc.update_in(cx, |d, window, cx| {
+            d.set_caret(off, cx);
+            d.replace_text_in_range(None, "\\", window, cx);
+        });
+        cx.run_until_parked();
+        doc.update_in(cx, |d, window, cx| {
+            assert!(d.active.is_some(), "the source box is open");
+            let v = d.input.read(cx).value().to_string();
+            let cur = d.input.read(cx).cursor();
+            assert!(!v.contains(super::complete::MARK), "the caret mark is gone");
+            assert_eq!(&v[cur - 1..cur], "\\", "the caret after the backslash");
+            assert!(!d.source.contains("textbackslash"));
+            assert!(d.source.contains(&format!("{}\\", &base[off - 5..off])));
+            d.leave(window, cx);
+        });
+        doc.update_in(cx, |d, window, cx| {
+            while d.source != base {
+                d.undo(window, cx);
+            }
+        });
+        wait(cx, &doc, "the undo", |d| {
+            d.spans_pending == 0 && !d.compiling
+        });
         // Enter at the end of a list item adds one; Tab nests it; undo takes both back
         let item = cx.read(|cx| {
             let d = doc.read(cx);
@@ -1357,9 +1486,12 @@ mod tests {
             d.source.find("\n\\end{itemize}").unwrap()
         });
         let base = cx.read(|cx| doc.read(cx).source.clone());
-        doc.update(cx, |d, cx| {
+        // where the caret was, at the end of the item before
+        let (_, x0, y0, _) = doc.update(cx, |d, cx| {
             d.set_caret(item, cx);
+            let at = d.caret_at().unwrap();
             d.enter(false, cx);
+            at
         });
         let one = cx.read(|cx| doc.read(cx).source.clone());
         assert!(
@@ -1367,11 +1499,11 @@ mod tests {
             "{:?}",
             &one[item..item + 20]
         );
-        // the caret stands on the new item's line, not after the item before
-        let (_, x0, y0, _) = cx.read(|cx| doc.read(cx).caret_at().unwrap());
-        wait(cx, &doc, "the new item typeset", |d| {
-            d.spans_pending == 0 && !d.compiling && d.caret_at().is_some_and(|c| c.2 > y0)
-        });
+        // the caret stands on the new item's line, not after the item before, at once and
+        // once it is typeset
+        let (_, _, y_now, _) = cx.read(|cx| doc.read(cx).caret_at().unwrap());
+        assert!(y_now > y0, "below the item before at once: {y0} → {y_now}");
+        calm(cx, &doc);
         let (_, x1, y1, size) = cx.read(|cx| doc.read(cx).caret_at().unwrap());
         assert!(y1 > y0 + size, "a line lower: {y0} → {y1}");
         assert!(x1 < x0, "at the line's start: {x0} → {x1}");
@@ -1410,6 +1542,28 @@ mod tests {
             doc.update_in(cx, |d, window, cx| d.undo(window, cx));
         }
         assert_eq!(cx.read(|cx| doc.read(cx).source.clone()), base);
+        // Enter at the start of a heading: a new paragraph before it, the caret there
+        let heading = cx.read(|cx| doc.read(cx).source.find("\\subsection*{Which").unwrap());
+        let start = heading + "\\subsection*{".len();
+        let (hp, _, hy, _) = doc.update(cx, |d, cx| {
+            d.set_caret(start, cx);
+            let at = d.caret_at().unwrap();
+            d.enter(false, cx);
+            at
+        });
+        calm(cx, &doc);
+        let (p, _, y, _) = cx.read(|cx| doc.read(cx).caret_at().unwrap());
+        assert!((p, y) < (hp, hy), "the caret is above the heading");
+        doc.update(cx, |d, cx| d.type_text("New", false, cx));
+        let s = cx.read(|cx| doc.read(cx).source.clone());
+        assert!(s[heading..].starts_with("New\n\n\\subsection*{Which"));
+        doc.update_in(cx, |d, window, cx| {
+            d.undo(window, cx);
+            d.undo(window, cx);
+        });
+        wait(cx, &doc, "the undo", |d| {
+            d.spans_pending == 0 && !d.compiling
+        });
         // the caret moves through the text and back
         wait(cx, &doc, "one paragraph", |d| d.spans_pending == 0);
         doc.update(cx, |d, cx| {
@@ -1422,5 +1576,172 @@ mod tests {
             d.move_v(1, cx);
             d.move_v(-1, cx);
         });
+    }
+
+    /// Every edit at the start, middle and end of every block of a real document, through
+    /// rtex: none may break the TeX, lose the caret or fail to undo. `RTD_TYPE=/abs/copy.tex
+    /// cargo test --release edit_everywhere -- --ignored --nocapture`.
+    #[gpui_kit::test]
+    #[ignore]
+    fn edit_everywhere(cx: &mut TestAppContext) {
+        let file = std::env::var("RTD_TYPE").expect("RTD_TYPE=/abs/path/main.tex");
+        let path = std::path::PathBuf::from(&file);
+        let (root, main) = (
+            path.parent().unwrap().to_path_buf(),
+            path.file_name().unwrap().to_string_lossy().to_string(),
+        );
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        engine::configure("", "/Library/TeX/texbin");
+        let (doc, cx) = cx.add_window_view(|window: &mut Window, cx| {
+            Doc::new(root, main, Default::default(), window, cx)
+        });
+        let settled = |d: &Doc| d.spans_pending == 0 && !d.compiling;
+        wait(cx, &doc, "the first layout", |d| {
+            settled(d) && d.blocks.iter().filter(|b| !b.rows.is_empty()).count() > 3
+        });
+        let base = cx.read(|cx| doc.read(cx).source.clone());
+        // the spots to edit at: each text block's first, middle and last stop
+        let spots: Vec<(usize, String, [usize; 3])> = cx.read(|cx| {
+            let d = doc.read(cx);
+            (0..d.blocks.len())
+                .filter(|&b| d.is_text_block(b))
+                .filter_map(|b| {
+                    let page = d.blocks[b].rows.first()?.page;
+                    let m = d.map_of(b, page)?;
+                    let st: Vec<usize> = m.stops.iter().map(|s| s.off).collect();
+                    let name: String = d.source[d.blocks[b].range.clone()]
+                        .chars()
+                        .take(40)
+                        .collect();
+                    Some((b, name, [st[0], st[st.len() / 2], *st.last()?]))
+                })
+                .collect()
+        });
+        type Op = (
+            &'static str,
+            usize,
+            fn(&mut Doc, &mut gpui_kit::Context<Doc>),
+        );
+        let ops: [Op; 7] = [
+            ("type", 1, |d, cx| d.type_text("Zq", false, cx)),
+            ("enter@start", 0, |d, cx| d.enter(false, cx)),
+            ("enter@mid", 1, |d, cx| d.enter(false, cx)),
+            ("enter@end", 2, |d, cx| d.enter(false, cx)),
+            ("shift-enter@mid", 1, |d, cx| d.enter(true, cx)),
+            ("backspace@start", 0, |d, cx| d.delete(true, cx)),
+            ("delete@end", 2, |d, cx| d.delete(false, cx)),
+        ];
+        let mut failures = vec![];
+        let t0 = Instant::now();
+        // RTD_SWEEP_ONLY=7:enter@end runs one edit and shows it
+        let only = std::env::var("RTD_SWEEP_ONLY").ok();
+        for (bi, name, at) in &spots {
+            for (op, pos, f) in &ops {
+                if only
+                    .as_ref()
+                    .is_some_and(|o| !format!("{bi}:{op}").starts_with(o.as_str()))
+                {
+                    continue;
+                }
+                let off = at[*pos];
+                let (before, in_item) = doc.update(cx, |d, cx| {
+                    d.status.clear();
+                    d.set_caret(off, cx);
+                    let at = d.caret_at();
+                    let item =
+                        caret::item_at(&d.source, off).is_some_and(|it| off >= it.text.start);
+                    f(d, cx);
+                    (at, item)
+                });
+                calm(cx, &doc);
+                let (changed, status, caret) = cx.read(|cx| {
+                    let d = doc.read(cx);
+                    // a caret, or (Backspace reaching a picture) that block selected, on the page
+                    let shown = d.caret_at().is_some()
+                        || d.caret.is_none()
+                            && d.selection()
+                                .is_some_and(|(lo, _)| !d.blocks[lo].rows.is_empty());
+                    (d.source != base, d.status.clone(), shown)
+                });
+                let what = format!("block {bi} {name:?}: {op}");
+                if status.contains("LaTeX") {
+                    let edit = cx.read(|cx| {
+                        let d = doc.read(cx);
+                        let r = d.last_edit.clone();
+                        d.source[r.start.saturating_sub(20)..(r.end + 20).min(d.source.len())]
+                            .to_string()
+                    });
+                    failures.push(format!("{what} → {status} (around {edit:?})"));
+                }
+                // Enter moves the caret up into a new paragraph before the text (at its start),
+                // or down to the new line (in its middle, at its end)
+                let after = cx.read(|cx| doc.read(cx).caret_at());
+                if only.is_some() {
+                    cx.read(|cx| {
+                        let d = doc.read(cx);
+                        let c = d.caret.as_ref().unwrap().off;
+                        let r = d.last_edit.clone();
+                        println!("edit {r:?} caret {c} before {before:?} after {after:?}");
+                        println!(
+                            "around: {:?}",
+                            &d.source[r.start.saturating_sub(60)..(r.end + 60).min(d.source.len())]
+                        );
+                        let bi = d.block_of(c);
+                        println!(
+                            "caret block {bi:?} stop {:?}",
+                            d.caret_stop().map(|(b, p, m, i)| (b, p, m.stops[i]))
+                        );
+                        if let Some(bi) = bi {
+                            for r in &d.blocks[bi].rows {
+                                println!(
+                                    "  row p{} top {:.1} bottom {:.1}",
+                                    r.page,
+                                    r.bbox[1] / 65536.0,
+                                    r.bbox[3] / 65536.0
+                                );
+                            }
+                        }
+                    });
+                }
+                if changed
+                    && op.starts_with("enter")
+                    && let (Some(b), Some(a)) = (before, after)
+                {
+                    let (b, a) = ((b.0, b.2), (a.0, a.2));
+                    // before an item's text, a new item opens above and the caret stays with
+                    // the text, which moves down
+                    let ok = if *pos == 0 && !in_item { a < b } else { a > b };
+                    if !ok {
+                        failures.push(format!("{what} → caret went from {b:?} to {a:?}"));
+                    }
+                }
+                if !caret {
+                    failures.push(format!("{what} → no caret, nothing selected"));
+                }
+                if changed {
+                    doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+                    calm(cx, &doc);
+                    if cx.read(|cx| doc.read(cx).source != base) {
+                        failures.push(format!("{what} → undo did not restore the source"));
+                        let b = base.clone();
+                        doc.update(cx, |d, cx| {
+                            d.replace(0..d.source.len(), &b, cx);
+                        });
+                        calm(cx, &doc);
+                    }
+                }
+            }
+        }
+        println!(
+            "{} edits at {} spots in {:?}",
+            spots.len() * ops.len(),
+            spots.len(),
+            t0.elapsed()
+        );
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 }
