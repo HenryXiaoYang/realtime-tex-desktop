@@ -73,7 +73,8 @@ pub fn outline(src: &str) -> Vec<Heading> {
         out.push(Heading {
             level,
             number,
-            title: src[open + 1..end].trim().to_string(),
+            // as it prints: no \\textcolor or braces in the panel
+            title: crate::document::glyphmap::plain_text(&src[open + 1..end]),
             offset,
         });
     }
@@ -87,7 +88,7 @@ mod tests {
     #[test]
     fn numbers_sections() {
         let o = outline(
-            "\\section{A}\n%\\section{no}\n\\subsection*{B}\n\\subsection{C {x}}\n\\section[s]{D}",
+            "\\section{A}\n%\\section{no}\n\\subsection*{B}\n\\subsection{C {x}}\n\\section[s]{D \\textcolor{red}{ab}}",
         );
         let got: Vec<(Option<&str>, &str)> = o
             .iter()
@@ -98,8 +99,8 @@ mod tests {
             vec![
                 (Some("1"), "A"),
                 (None, "B"),
-                (Some("1.1"), "C {x}"),
-                (Some("2"), "D")
+                (Some("1.1"), "C x"),
+                (Some("2"), "D ab")
             ]
         );
     }

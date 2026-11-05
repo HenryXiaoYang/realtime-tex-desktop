@@ -1,5 +1,5 @@
 // Typing, editing keys, commands and the ribbon's formatting on a real document.
-use super::{calm, open, rtd_type, wait};
+use super::{calm, open, rtd_type, scratch, wait};
 use crate::document::{self, caret, glyphmap};
 use crate::engine;
 use crate::ui::editor::Doc;
@@ -766,4 +766,53 @@ fn format_on_pages(cx: &mut TestAppContext) {
         base,
         "Replace All: one undo step"
     );
+}
+
+#[gpui_kit::test]
+#[ignore]
+fn type_in_a_colour(cx: &mut TestAppContext) {
+    use super::super::FormatOp;
+    let tex = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\n\n\\subsection{i type}\n\nsome words here\n\n\\subsection{}\n\nlast words\n\n\\end{document}\n";
+    let dir = scratch("colour", tex);
+    let (doc, cx) = open(cx, dir, "main.tex", 2);
+    // the caret at the end of a heading's title, then at the end of a paragraph: a colour
+    // picked there, what is typed next takes it
+    for (after, want) in [
+        ("i type", "\\subsection{i type\\textcolor{red}{ab}}"),
+        ("words here", "words here\\textcolor{red}{ab}"),
+        // an empty heading, as the Subsection style leaves one
+        (
+            "here\\textcolor{red}{ab}\n\n\\subsection{",
+            "\\subsection{\\textcolor{red}{ab}}\n\nlast",
+        ),
+    ] {
+        doc.update_in(cx, |d, window, cx| {
+            let at = d.source.find(after).unwrap() + after.len();
+            d.set_caret(at, cx);
+            d.format(FormatOp::Color("red".into()), window, cx);
+        });
+        // as a person does: the pages laid out again before the first key
+        calm(cx, &doc);
+        doc.update_in(cx, |d, window, cx| {
+            for ch in "ab".chars() {
+                d.replace_text_in_range(None, &ch.to_string(), window, cx);
+            }
+        });
+        let src = cx.read(|cx| doc.read(cx).source.clone());
+        assert!(src.contains(want), "{want}: {src}");
+        calm(cx, &doc);
+    }
+    // through an input method: composed, then committed, it lands in the colour too
+    doc.update_in(cx, |d, window, cx| {
+        let at = d.source.find("last words").unwrap() + "last words".len();
+        d.set_caret(at, cx);
+        d.format(FormatOp::Color("blue".into()), window, cx);
+    });
+    calm(cx, &doc);
+    doc.update_in(cx, |d, window, cx| {
+        d.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+        d.replace_text_in_range(None, "你", window, cx);
+    });
+    let src = cx.read(|cx| doc.read(cx).source.clone());
+    assert!(src.contains("last words\\textcolor{blue}{你}"), "{src}");
 }
