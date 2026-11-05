@@ -239,13 +239,13 @@ fn indent_guides(depth: usize, folder: bool, cx: &App) -> Vec<AnyElement> {
         .filter(|level| !(folder && level + 1 == depth))
         .map(|level| {
             // from the row's content (an absolute child sits in its parent, inside the row's
-            // padding): a level in, at the middle of the arrow column (12 px wide); through
-            // the row's padding above and below (4 px)
+            // padding): under the middle of the folder's icon (its arrow 12 px, a 4 px gap, the
+            // icon 12 px); through the row's padding above and below (4 px)
             div()
                 .absolute()
                 .top(px(-4.0))
                 .bottom(px(-4.0))
-                .left(px((level + 1) as f32 * 12.0 + 5.5))
+                .left(px(level as f32 * 12.0 + 21.5))
                 .w(px(1.0))
                 .bg(color)
                 .into_any_element()
