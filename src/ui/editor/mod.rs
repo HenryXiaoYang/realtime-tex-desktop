@@ -115,8 +115,8 @@ actions!(
     ]
 );
 
-/// Keys on the pages, while no source box is open: for the caret ("Caret"), or for the selected
-/// blocks ("Pages"). Inside a box the editor's own bindings win, so ⌘A, ⇧↑ and the rest act on
+/// The fixed editing keys on the pages, while no source box is open: for the caret ("Caret"), or
+/// for the selected blocks ("Pages"); commands' keys are in ui::keymap, which you can change. Inside a box the editor's own bindings win, so ⌘A, ⇧↑ and the rest act on
 /// its text.
 pub fn bind_keys(cx: &mut App) {
     let caret = Some("Caret");
@@ -140,9 +140,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", Indent, caret),
         KeyBinding::new("shift-tab", Outdent, caret),
         KeyBinding::new("escape", SelectCaretBlock, caret),
-        KeyBinding::new("cmd-m", InsertMath, caret),
-        KeyBinding::new("ctrl-shift-up", MoveParagraphUp, caret),
-        KeyBinding::new("ctrl-shift-down", MoveParagraphDown, caret),
         KeyBinding::new("cmd-v", Paste, caret),
         KeyBinding::new("cmd-c", Copy, caret),
         KeyBinding::new("cmd-x", Cut, caret),
@@ -159,28 +156,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-end", SelectLineEnd, caret),
         KeyBinding::new("cmd-shift-up", SelectDocStart, caret),
         KeyBinding::new("cmd-shift-down", SelectDocEnd, caret),
-        // Word's formatting keys
-        KeyBinding::new("cmd-b", FormatBold, caret),
-        KeyBinding::new("cmd-i", FormatItalic, caret),
-        KeyBinding::new("cmd-u", FormatUnderline, caret),
-        KeyBinding::new("cmd-shift-.", FontBigger, caret),
-        KeyBinding::new("cmd-shift-,", FontSmaller, caret),
-        KeyBinding::new("cmd-alt-1", Heading1, caret),
-        KeyBinding::new("cmd-alt-2", Heading2, caret),
-        KeyBinding::new("cmd-alt-3", Heading3, caret),
-        KeyBinding::new("cmd-l", AlignLeft, caret),
-        KeyBinding::new("cmd-e", AlignCenter, caret),
-        KeyBinding::new("cmd-r", AlignRight, caret),
-        KeyBinding::new("cmd-j", AlignJustify, caret),
     ]);
-    for ctx in ["Caret", "Pages"] {
-        cx.bind_keys([
-            KeyBinding::new("cmd-f", OpenFind, Some(ctx)),
-            KeyBinding::new("cmd-alt-f", OpenReplace, Some(ctx)),
-            KeyBinding::new("cmd-g", FindNext, Some(ctx)),
-            KeyBinding::new("cmd-shift-g", FindPrev, Some(ctx)),
-        ]);
-    }
     cx.bind_keys([
         KeyBinding::new("escape", CloseFind, Some("FindBar")),
         KeyBinding::new("cmd-g", FindNext, Some("FindBar")),
@@ -191,9 +167,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", EditBlock, pages),
         KeyBinding::new("backspace", DeleteBlock, pages),
         KeyBinding::new("delete", DeleteBlock, pages),
-        KeyBinding::new("cmd-d", DuplicateBlock, pages),
-        KeyBinding::new("ctrl-shift-up", MoveBlockUp, pages),
-        KeyBinding::new("ctrl-shift-down", MoveBlockDown, pages),
         KeyBinding::new("up", SelectPrevBlock, pages),
         KeyBinding::new("down", SelectNextBlock, pages),
         KeyBinding::new("shift-up", ExtendSelectionUp, pages),

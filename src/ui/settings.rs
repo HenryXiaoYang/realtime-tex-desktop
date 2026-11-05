@@ -1,10 +1,12 @@
 // App settings: kept as a GPUI global, saved as JSON in
 // ~/Library/Application Support/Realtime Tex Desktop/settings.json, and edited in the Settings
 // window (⌘,), built from gpui-kit's settings components.
+use crate::ui::keymap;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
-use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, TitleBar};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, TitleBar};
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -35,6 +37,8 @@ pub struct AppSettings {
     pub tex_bin: String,
     /// The ribbon folded to its tab row.
     pub ribbon_collapsed: bool,
+    /// Shortcuts changed from their defaults: command to key (empty: none).
+    pub shortcuts: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AppSettings {
@@ -53,6 +57,7 @@ impl Default for AppSettings {
             rtex_path: String::new(),
             tex_bin: "/Library/TeX/texbin".into(),
             ribbon_collapsed: false,
+            shortcuts: Default::default(),
         }
     }
 }
@@ -87,7 +92,10 @@ impl AppSettings {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(&path, serde_json::to_string_pretty(s).unwrap_or_default());
+        // tests change settings too: never the real file
+        if !cfg!(test) {
+            let _ = std::fs::write(&path, serde_json::to_string_pretty(s).unwrap_or_default());
+        }
         Self::apply(cx);
         cx.refresh_windows();
     }
@@ -102,6 +110,144 @@ impl AppSettings {
         Theme::update(cx, |t| t.font_size = px(s.ui_font_size as f32));
         crate::engine::configure(&s.rtex_path, &s.tex_bin);
     }
+}
+
+/// Keyboard shortcuts: each command and its key; click the key and press a new one.
+fn shortcuts_page() -> SettingPage {
+    let all = keymap::commands();
+    let mut page = SettingPage::new("Keyboard shortcuts");
+    for group in ["File", "Edit", "Format", "View"] {
+        let items: Vec<SettingItem> = all
+            .iter()
+            .filter(|c| c.group == group)
+            .map(|c| {
+                let (id, label) = (c.id, c.label);
+                SettingItem::render(move |_, window, cx| shortcut_row(id, label, window, cx))
+                    .keywords([label, "shortcut", "key"])
+            })
+            .collect();
+        page = page.group(SettingGroup::new().title(group).items(items));
+    }
+    page.group(
+        SettingGroup::new().item(
+            SettingItem::render(|_, _, cx| {
+                let changed = !AppSettings::get(cx).shortcuts.is_empty();
+                div().flex().justify_end().child(
+                    Button::new("shortcuts-reset-all")
+                        .label("Reset all to defaults")
+                        .small()
+                        .outline()
+                        .disabled(!changed)
+                        .on_click(|_, window, cx| {
+                            keymap::reset_all(cx);
+                            window.refresh();
+                        }),
+                )
+            })
+            .keywords(["reset", "shortcuts"]),
+        ),
+    )
+}
+
+/// A command's row: its name, its key (click to record another), and reset; or, after a
+/// recorded key another command has, Replace and Cancel.
+fn shortcut_row(id: &'static str, label: &'static str, _: &mut Window, cx: &mut App) -> AnyElement {
+    let all = keymap::commands();
+    let Some(c) = all.iter().find(|c| c.id == id) else {
+        return div().into_any_element();
+    };
+    let key = keymap::key_of(c, cx);
+    let theme = cx.theme().clone();
+    let rec = cx.try_global::<keymap::Recording>();
+    let recording = rec.is_some_and(|r| r.id == Some(id));
+    let clash = rec
+        .and_then(|r| r.clash.clone())
+        .filter(|(who, ..)| *who == id);
+    let row = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(div().text_sm().child(label));
+    if let Some((_, new, other)) = clash {
+        let other_label = all
+            .iter()
+            .find(|c| c.id == other)
+            .map_or(other, |c| c.label);
+        return row
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.danger)
+                            .child(format!("{} is {other_label}'s", keymap::display(&new))),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("sc-replace-{id}")))
+                            .label("Replace")
+                            .xsmall()
+                            .primary()
+                            .on_click(move |_, window, cx| {
+                                cx.set_global(keymap::Recording::default());
+                                keymap::set_key(other, "", cx);
+                                keymap::set_key(id, &new, cx);
+                                window.refresh();
+                            }),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("sc-cancel-{id}")))
+                            .label("Cancel")
+                            .xsmall()
+                            .outline()
+                            .on_click(|_, window, cx| {
+                                cx.set_global(keymap::Recording::default());
+                                window.refresh();
+                            }),
+                    ),
+            )
+            .into_any_element();
+    }
+    let changed = key != c.key;
+    let default = c.key;
+    row.child(
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                Button::new(SharedString::from(format!("sc-{id}")))
+                    .label(if recording {
+                        "Press keys…".to_string()
+                    } else {
+                        keymap::display(&key)
+                    })
+                    .small()
+                    .outline()
+                    .w(px(120.0))
+                    .tooltip("Click, then press the new shortcut (Escape cancels)")
+                    .on_click(move |_, window, cx| {
+                        keymap::record(id, cx);
+                        window.refresh();
+                    }),
+            )
+            .child(
+                Button::new(SharedString::from(format!("sc-reset-{id}")))
+                    .icon(Icon::default().path("icons/undo.svg"))
+                    .ghost()
+                    .xsmall()
+                    .tooltip("Back to the default")
+                    .disabled(!changed)
+                    .on_click(move |_, window, cx| {
+                        keymap::set_key(id, default, cx);
+                        window.refresh();
+                    }),
+            ),
+    )
+    .into_any_element()
 }
 
 pub struct SettingsView;
@@ -284,7 +430,12 @@ impl Render for SettingsView {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(Settings::new("settings").pages([appearance, editor, engine])),
+                    .child(Settings::new("settings").pages([
+                        appearance,
+                        editor,
+                        engine,
+                        shortcuts_page(),
+                    ])),
             )
     }
 }

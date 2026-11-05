@@ -23,24 +23,10 @@ fn main() {
             gpui_kit::init(cx);
             settings::AppSettings::init(cx);
             cx.on_action(|_: &OpenSettings, cx| open_settings(cx));
-            cx.bind_keys([
-                KeyBinding::new("cmd-s", Save, None),
-                KeyBinding::new("cmd-q", Quit, None),
-                KeyBinding::new("cmd-w", CloseTab, None),
-                KeyBinding::new("cmd-alt-e", Export, None),
-                KeyBinding::new("cmd-shift-r", Recompile, None),
-                KeyBinding::new("cmd-,", OpenSettings, None),
-                KeyBinding::new("cmd-=", ZoomIn, None),
-                KeyBinding::new("cmd-+", ZoomIn, None),
-                KeyBinding::new("cmd--", ZoomOut, None),
-                KeyBinding::new("cmd-0", ZoomReset, None),
-                KeyBinding::new("cmd-\\", ToggleSidebar, None),
-                KeyBinding::new("cmd-shift-e", ToggleSource, None),
-                // the same actions an editor binds for itself: outside one, they undo page edits
-                KeyBinding::new("cmd-z", Undo, None),
-                KeyBinding::new("cmd-shift-z", Redo, None),
-            ]);
+            // the fixed editing keys first, then every command's key (the settings may have
+            // changed some): later bindings win
             editor::bind_keys(cx);
+            ui::keymap::bind_all(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus([
                 Menu {

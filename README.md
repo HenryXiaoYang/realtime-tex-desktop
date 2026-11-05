@@ -108,6 +108,11 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 | ⌘⇧E | Switch between Visual and Source |
 | ⌃⇧↑ / ⌃⇧↓ | Move the paragraph at the caret (or the selected blocks) up / down |
 
+Every shortcut above except the plain editing keys can be changed in Settings → Keyboard
+shortcuts: click a key and press the new one (Escape cancels); a key another command has asks
+whether to take it from that one; each row and the whole list reset to the defaults. Only the
+changes are saved, under `shortcuts` in the settings file.
+
 Settings (⌘, or the gear in the status bar): theme, interface and source font sizes, default
 zoom, live formula preview, line numbers, soft wrap, auto-save, and the rtex binary and TeX
 folder. They are saved in `~/Library/Application Support/Realtime Tex Desktop/settings.json`.
@@ -143,6 +148,7 @@ src/
     viewer.rs          PDF and image files opened as tabs
   ui/
     settings.rs        settings and the Settings window
+    keymap.rs          the shortcuts you can change: commands, defaults, overrides, recording
     workspace/         the window: title bar, tabs, status bar (chrome.rs), the ribbon
                        (ribbon.rs), project panel,
                        files and file commands (files.rs)
