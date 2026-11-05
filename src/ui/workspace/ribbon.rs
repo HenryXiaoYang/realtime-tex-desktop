@@ -106,37 +106,41 @@ impl Workspace {
         let theme = cx.theme().clone();
         let collapsed = settings::AppSettings::get(cx).ribbon_collapsed;
         let tab = self.ribbon_tab;
-        let mut tabs = div()
-            .id("ribbon-tabs")
+        // the kit's tab list: VoiceOver hears "Home, tab 1 of 2, selected"
+        let tab_ix = match tab {
+            RibbonTab::Home => 0,
+            RibbonTab::Insert => 1,
+        };
+        let mut bar = TabBar::new("ribbon-tabs")
+            .underline()
+            .small()
+            .selected_index(tab_ix);
+        for (name, t) in [("Home", RibbonTab::Home), ("Insert", RibbonTab::Insert)] {
+            bar = bar.child(Tab::new().label(name).on_click(cx.listener(
+                move |this, ev: &ClickEvent, _, cx| {
+                    // a double-click folds it or opens it again; a click on a folded one
+                    // (or another tab) opens it
+                    let folded = settings::AppSettings::get(cx).ribbon_collapsed;
+                    if ev.click_count() >= 2 || folded {
+                        settings::AppSettings::set(cx, |s| s.ribbon_collapsed = !folded);
+                    }
+                    this.ribbon_tab = t;
+                    cx.notify();
+                },
+            )));
+        }
+        let tabs = div()
+            .id("ribbon-tabs-row")
             .flex()
             .items_center()
             .gap_1()
             .px_2()
-            .h_7();
-        for (i, (name, t)) in [("Home", RibbonTab::Home), ("Insert", RibbonTab::Insert)]
-            .into_iter()
-            .enumerate()
-        {
-            tabs = tabs.child(
-                Button::new(("ribbon-tab", i))
-                    .label(name)
-                    .ghost()
-                    .small()
-                    .role(gpui_kit::Role::Tab)
-                    .selected(!collapsed && t == tab)
-                    .tooltip("Double-click to fold the ribbon")
-                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                        // a double-click folds it or opens it again; a click on a folded one
-                        // (or another tab) opens it
-                        let folded = settings::AppSettings::get(cx).ribbon_collapsed;
-                        if ev.click_count() >= 2 || folded {
-                            settings::AppSettings::set(cx, |s| s.ribbon_collapsed = !folded);
-                        }
-                        this.ribbon_tab = t;
-                        cx.notify();
-                    })),
-            );
-        }
+            .h_7()
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new("Double-click a tab to fold the ribbon")
+                    .build(window, cx)
+            })
+            .child(bar);
         // nothing to act on yet: say how to get something, beside the tabs where it shows
         let tabs = tabs.when(!state.enabled && !collapsed, |d| {
             d.child(

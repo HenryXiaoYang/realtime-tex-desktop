@@ -322,6 +322,12 @@ impl Doc {
             .child(
                 div()
                     .id("insert-block")
+                    .role(Role::Button)
+                    .aria_label("Insert a paragraph here")
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new("Insert a paragraph here")
+                            .build(window, cx)
+                    })
                     .size(px(size))
                     .flex()
                     .items_center()
