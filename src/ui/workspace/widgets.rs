@@ -191,8 +191,15 @@ pub(super) fn color_palette(
                         .flex()
                         .flex_col()
                         .items_center()
-                        .child(Icon::default().path("icons/baseline.svg").size(px(14.0)))
-                        .child(div().w(px(14.0)).h(px(3.0)).rounded_sm().bg(shown)),
+                        // an A over the colour (the baseline icon's own rule would be a second)
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .line_height(px(14.0))
+                                .child("A"),
+                        )
+                        .child(div().w(px(18.0)).h(px(3.0)).rounded_sm().bg(shown)),
                 ),
         )
         .content(move |_, _, cx| {
