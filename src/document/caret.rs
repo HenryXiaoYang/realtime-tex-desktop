@@ -2,6 +2,7 @@
 // glyphs (and the source offset each spot is), and the source edits that typing, Enter, Tab and
 // Backspace make: escaped text, list items, paragraph breaks that close and reopen formatting.
 use super::glyphmap::{self, GlyphText};
+use crate::engine::FontDesc;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -17,6 +18,8 @@ pub struct Char {
     pub bbox: [f64; 4],
     /// It is a glyph, not such a gap.
     pub glyph: bool,
+    /// The font the glyph is set in.
+    pub font: Option<FontDesc>,
 }
 
 /// A spot the caret can stand at: between chars `k - 1` and `k`.
@@ -38,6 +41,7 @@ pub struct CharMap {
 /// which starts at byte `base` of the file.
 pub fn char_map(gt: &GlyphText, src: &str, base: usize) -> CharMap {
     let boxes = glyphmap::char_boxes(gt);
+    let fonts = glyphmap::char_fonts(gt);
     let srcs = glyphmap::char_sources(gt, src);
     let math = math_regions(src);
     let n = gt.text.len();
@@ -65,6 +69,7 @@ pub fn char_map(gt: &GlyphText, src: &str, base: usize) -> CharMap {
             src,
             bbox,
             glyph: boxes[i].is_some(),
+            font: fonts[i].clone(),
         });
     }
     let mut stops: Vec<Stop> = vec![];

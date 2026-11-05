@@ -155,8 +155,18 @@ impl Doc {
         }
     }
 
-    /// The font of the text at the caret, for text typed there before it is typeset.
+    /// The font of the text at the caret, for text typed there before it is typeset: the char
+    /// before it (as typing takes its formatting), else the one after, else its block's.
     fn caret_font(&self) -> Option<engine::FontDesc> {
+        if let Some((_, _, m, i)) = self.caret_stop() {
+            let k = m.stops[i].k;
+            let font = |c: Option<&caret::Char>| c.filter(|c| c.glyph).and_then(|c| c.font.clone());
+            if let Some(f) =
+                font(k.checked_sub(1).and_then(|j| m.chars.get(j))).or_else(|| font(m.chars.get(k)))
+            {
+                return Some(f);
+            }
+        }
         let off = self.caret.as_ref()?.off;
         let bi = self
             .block_of(off)
@@ -798,10 +808,10 @@ impl Doc {
         }
     }
 
-    /// Width in px of `text` in `family` at `size` px.
-    fn text_width(family: &SharedString, size: f32, text: &str, cx: &App) -> f32 {
+    /// Width in px of `text` in `face` at `size` px.
+    fn text_width(face: &Font, size: f32, text: &str, cx: &App) -> f32 {
         let ts = cx.text_system();
-        let id = ts.resolve_font(&font(family.clone()));
+        let id = ts.resolve_font(face);
         text.chars()
             .map(|c| {
                 ts.advance(id, px(size), c)
@@ -834,7 +844,9 @@ impl Doc {
             return None;
         }
         let fs = page_px(size, self.zoom);
-        let family = self.doc_family(desc.as_ref(), cx);
+        let face = self
+            .doc_font(desc.as_ref(), cx)
+            .unwrap_or_else(|| font(MONO));
         let typed: String = overlay.map_or(String::new(), |o| {
             o.units.iter().map(|u| u.0.as_str()).collect()
         });
@@ -847,10 +859,15 @@ impl Doc {
             }
             None => marked.clone(),
         };
-        let w_typed = Self::text_width(&family, fs, &typed, cx);
-        let w_caret = w_typed + Self::text_width(&family, fs, &in_marked, cx);
+        let w_typed = Self::text_width(&face, fs, &typed, cx);
+        let w_caret = w_typed + Self::text_width(&face, fs, &in_marked, cx);
         let (left, top) = (page_px(x, self.zoom), page_px(y, self.zoom) - 0.8 * fs);
-        let (_, fg) = source_box_colors(self.dark_pages(cx));
+        // render's ink on its paper
+        let fg = rgb(if self.dark_pages(cx) {
+            0xe0e0e0
+        } else {
+            0x000000
+        });
         let paper = rgb(if self.dark_pages(cx) {
             0x000000
         } else {
@@ -866,7 +883,9 @@ impl Doc {
                 .flex()
                 .items_center()
                 .whitespace_nowrap()
-                .font_family(family.clone())
+                .font_family(face.family.clone())
+                .font_weight(face.weight)
+                .when(face.style == FontStyle::Italic, |d| d.italic())
                 .text_size(px(fs))
                 .text_color(fg)
                 // shortcut: hides what it covers and does not wrap; the pages catch up in ms
@@ -1193,6 +1212,27 @@ mod tests {
         wait(cx, &doc, "the caret drawn", |d| {
             d.caret_bounds.get().is_some()
         });
+        // typed text shows in the document's font, as the text before the caret is set: its
+        // OpenType twin here (the test text system has no fonts to register it with)
+        let twin = |d: &Doc| {
+            let name = d.caret_font().and_then(|f| f.name).unwrap_or_default();
+            let file = super::super::source_box::latin_modern(&name).expect("a Latin Modern twin");
+            assert!(
+                engine::kpsewhich(&file).is_some(),
+                "{file} is in the TeX tree"
+            );
+            file
+        };
+        assert!(cx.read(|cx| twin(doc.read(cx))).ends_with("-regular.otf"));
+        doc.update(cx, |d, cx| {
+            // in the body (the preamble's \\textbf is not on the pages)
+            let at = d.source.find("\\textbf{Mistakes").unwrap() + "\\textbf{".len() + 2;
+            d.set_caret(at, cx);
+        });
+        assert!(
+            cx.read(|cx| twin(doc.read(cx))).ends_with("-bold.otf"),
+            "bold inside \\textbf"
+        );
         // it blinks, and a move shows it again at once
         doc.update(cx, |d, cx| d.set_caret(off + 11, cx));
         assert!(cx.read(|cx| doc.read(cx).caret_on));

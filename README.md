@@ -34,8 +34,10 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   block; Escape leaves it. Escape on the caret selects its block instead.
 - The source box shows the source in the font the document sets that text in (Latin Modern,
   Times, whatever fontspec loaded), at its size and the zoom; Settings → Source box font can name
-  another family. Fonts the app cannot load (Type1 fonts from TFM-era documents) fall back to
-  Menlo.
+  another family. TFM-based Latin Modern and Computer Modern fonts (`ec-lmr12`, `cmbx10`) show
+  in their OpenType Latin Modern twins from the TeX tree; other fonts the app cannot load (Type1
+  fonts from TFM-era documents) fall back to Menlo. Text typed on the pages shows, until it is
+  typeset, in the font (and weight and slant) of the character before the caret.
 - Adding a block: hover between two blocks, or above the first or below the last, and an insert
   line with a + appears; click the + for an empty box there. What you type becomes a new
   paragraph at that point.
@@ -129,7 +131,7 @@ src/
 source and typeset text; `RTD_INSPECT_PNG=dir` also writes the pages as PNGs, and
 `RTD_INSPECT_EDIT='find|replace'` makes one live edit first, and `RTD_INSPECT_CARET=1` marks
 where the caret can stand (`RTD_INSPECT_CHARS=text` also lists the char map of blocks containing
-`text`). `RTD_TYPE=/abs/copy/main.tex cargo test --release type_on_pages -- --ignored
+`text`; `RTD_INSPECT_FONTS=1` lists the first page's fonts). `RTD_TYPE=/abs/copy/main.tex cargo test --release type_on_pages -- --ignored
 --nocapture` types on a real document through rtex (caret, escaping, undo steps, Enter,
 Backspace, lists, an input method) and prints how long typing took to typeset.
 

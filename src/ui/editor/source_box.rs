@@ -143,34 +143,36 @@ impl Doc {
         self.doc_family(desc, cx)
     }
 
-    /// The family of the document's own font `desc`, registered with the window's text system
-    /// the first time; Menlo when it cannot be loaded.
+    /// The family of the document's own font `desc`; Menlo when it cannot be loaded.
     pub(super) fn doc_family(&self, desc: Option<&engine::FontDesc>, cx: &App) -> SharedString {
-        let Some(file) = desc.and_then(|d| d.filename.clone()) else {
-            return MONO.into();
-        };
-        let mut known = self.doc_fonts.borrow_mut();
-        known
-            .entry(file.clone())
+        self.doc_font(desc, cx)
+            .map_or_else(|| MONO.into(), |f| f.family)
+    }
+
+    /// The document's own font `desc` as a GPUI font (family, weight, slant), registered with
+    /// the window's text system the first time. A TFM-based Latin Modern or Computer Modern font
+    /// (`ec-lmr12`, `cmbx10`), which GPUI cannot load, is its OpenType Latin Modern twin.
+    pub(super) fn doc_font(&self, desc: Option<&engine::FontDesc>, cx: &App) -> Option<Font> {
+        let desc = desc?;
+        let key = desc.filename.clone().or_else(|| desc.name.clone())?;
+        self.doc_fonts
+            .borrow_mut()
+            .entry(key)
             .or_insert_with(|| {
-                let bytes = std::fs::read(&file).ok()?;
-                let index = desc.and_then(|d| d.subfont).unwrap_or(1).saturating_sub(1);
-                let names = family_names(&bytes, index);
-                let ts = cx.text_system();
-                // an installed font (Times New Roman, say) is known already; a TeX tree's is not
-                let known = |ts: &TextSystem| {
-                    let all: HashSet<String> = ts.all_font_names().into_iter().collect();
-                    names.iter().find(|n| all.contains(*n)).cloned()
+                let file = desc.filename.as_ref().map(|f| {
+                    (
+                        std::path::PathBuf::from(f),
+                        desc.subfont.unwrap_or(1).saturating_sub(1),
+                    )
+                });
+                let twin = || {
+                    let name = latin_modern(desc.name.as_deref()?)?;
+                    Some((engine::kpsewhich(&name)?, 0))
                 };
-                known(ts)
-                    .or_else(|| {
-                        ts.add_fonts(vec![bytes.into()]).ok()?;
-                        known(ts)
-                    })
-                    .map(SharedString::from)
+                file.and_then(|(p, i)| load_font(&p, i, cx))
+                    .or_else(|| twin().and_then(|(p, i)| load_font(&p, i, cx)))
             })
             .clone()
-            .unwrap_or_else(|| MONO.into())
     }
 
     /// The source box's editor, as tall as its text: an editor does not grow by itself.
@@ -400,6 +402,60 @@ pub(super) fn source_box_colors(dark: bool) -> (Rgba, Rgba) {
     }
 }
 
+/// The font in file `path` (face `index`) as GPUI selects it: its family, registered unless it
+/// is installed already, and its weight and slant.
+fn load_font(path: &Path, index: u32, cx: &App) -> Option<Font> {
+    use skrifa::MetadataProvider;
+    let bytes = std::fs::read(path).ok()?;
+    let names = family_names(&bytes, index);
+    let attrs = skrifa::FontRef::from_index(&bytes, index)
+        .ok()?
+        .attributes();
+    let ts = cx.text_system();
+    // an installed font (Times New Roman, say) is known already; a TeX tree's is not
+    let known = |ts: &TextSystem| {
+        let all: HashSet<String> = ts.all_font_names().into_iter().collect();
+        names.iter().find(|n| all.contains(*n)).cloned()
+    };
+    let family = known(ts).or_else(|| {
+        ts.add_fonts(vec![bytes.clone().into()]).ok()?;
+        known(ts)
+    })?;
+    let mut f = font(family);
+    f.weight = FontWeight(attrs.weight.value());
+    if attrs.style != skrifa::attribute::Style::Normal {
+        f.style = FontStyle::Italic;
+    }
+    Some(f)
+}
+
+/// The OpenType Latin Modern file standing in for a TFM-based font of the Latin Modern or
+/// Computer Modern families (`ec-lmr12`, `cmbx10`): the same design, in a format GPUI loads.
+/// The design size nearest the one asked for.
+pub(super) fn latin_modern(name: &str) -> Option<String> {
+    let base = name.rsplit('-').next()?;
+    let rest = base
+        .strip_prefix("lm")
+        .or_else(|| base.strip_prefix("cm"))?;
+    let digits = rest.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let shape = &rest[..rest.len() - digits.len()];
+    let size: i64 = digits.parse().unwrap_or(10);
+    let (family, style, sizes): (&str, &str, &[i64]) = match shape {
+        "r" => ("roman", "regular", &[5, 6, 7, 8, 9, 10, 12, 17]),
+        "bx" => ("roman", "bold", &[5, 6, 7, 8, 9, 10, 12]),
+        "ri" | "ti" | "it" => ("roman", "italic", &[7, 8, 9, 10, 12]),
+        "bxi" | "bxti" => ("roman", "bolditalic", &[10]),
+        "sl" => ("romanslant", "regular", &[8, 9, 10, 12, 17]),
+        "csc" => ("romancaps", "regular", &[10]),
+        "tt" => ("mono", "regular", &[8, 9, 10, 12]),
+        "ss" => ("sans", "regular", &[8, 9, 10, 12, 17]),
+        "ssbx" => ("sans", "bold", &[10]),
+        _ => return None,
+    };
+    let size = sizes.iter().min_by_key(|s| (**s - size).abs())?;
+    Some(format!("lm{family}{size}-{style}.otf"))
+}
+
 /// The family names a font file gives itself: typographic family first, then the legacy one
 /// ("Latin Modern Roman", "LM Roman 10"). A Type1 font has none.
 pub(super) fn family_names(bytes: &[u8], index: u32) -> Vec<String> {
@@ -558,6 +614,42 @@ mod tests {
                 assert_eq!(s.scroll_offset().y, px(0.0));
             });
         }
+    }
+
+    #[test]
+    fn tfm_latin_modern_has_an_opentype_twin() {
+        use super::latin_modern;
+        assert_eq!(
+            latin_modern("ec-lmr12").as_deref(),
+            Some("lmroman12-regular.otf")
+        );
+        assert_eq!(
+            latin_modern("ec-lmbx12").as_deref(),
+            Some("lmroman12-bold.otf")
+        );
+        assert_eq!(
+            latin_modern("ec-lmri12").as_deref(),
+            Some("lmroman12-italic.otf")
+        );
+        assert_eq!(
+            latin_modern("rm-lmr17").as_deref(),
+            Some("lmroman17-regular.otf")
+        );
+        assert_eq!(
+            latin_modern("ec-lmbx8").as_deref(),
+            Some("lmroman8-bold.otf")
+        );
+        assert_eq!(
+            latin_modern("cmr10").as_deref(),
+            Some("lmroman10-regular.otf")
+        );
+        assert_eq!(
+            latin_modern("cmtt11").as_deref(),
+            Some("lmmono10-regular.otf")
+        );
+        // math fonts and other families have none
+        assert_eq!(latin_modern("lmsy10"), None);
+        assert_eq!(latin_modern("ptmr8r"), None);
     }
 
     #[test]

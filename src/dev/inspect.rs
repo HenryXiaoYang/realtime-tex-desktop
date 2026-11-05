@@ -80,6 +80,18 @@ fn inspect() {
             }
         }
     }
+    if std::env::var("RTD_INSPECT_FONTS").is_ok() {
+        for dl in preview.pages.values().take(1) {
+            for (id, f) in &dl.fonts {
+                println!(
+                    "font {id}: {:?} {:?} {:?}",
+                    f.name,
+                    f.filename,
+                    f.size.map(|s| s / 65536.0)
+                );
+            }
+        }
+    }
     for sp in &spans {
         println!(
             "span {} {:?} {:?}",

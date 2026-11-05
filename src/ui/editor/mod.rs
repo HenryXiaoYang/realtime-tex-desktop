@@ -241,7 +241,7 @@ pub struct Doc {
     /// What the source box was last sized with.
     box_fit: Rc<Cell<BoxFit>>,
     /// Document fonts registered for the source box: file to family (None: unusable).
-    doc_fonts: std::cell::RefCell<HashMap<String, Option<SharedString>>>,
+    doc_fonts: std::cell::RefCell<HashMap<String, Option<Font>>>,
     /// The insert line under the pointer: its page, height (sp) and where a new block goes.
     hover_gap: Option<(u32, f64, Spot)>,
     /// The last single click's page, point (sp) and block: the first half of a double-click.

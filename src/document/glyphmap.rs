@@ -14,6 +14,7 @@ struct Glyph {
     y: f64,
     adv: f64,
     size: f64,
+    font: Option<FontDesc>,
     /// Where its text starts in `GlyphText::text`, in chars.
     start: usize,
     len: usize,
@@ -105,11 +106,11 @@ pub fn glyph_text_of(rows: &[&Row]) -> GlyphText {
             if text.is_empty() {
                 continue;
             }
-            let size = a[1]
+            let font = a[1]
                 .as_i64()
                 .and_then(|f| r.dl.fonts.get(&f.to_string()))
-                .and_then(|d| d.size)
-                .unwrap_or(655360.0);
+                .cloned();
+            let size = font.as_ref().and_then(|d| d.size).unwrap_or(655360.0);
             let (x, y, adv) = (
                 a[4].as_f64().unwrap_or(0.0) + r.dx,
                 a[5].as_f64().unwrap_or(0.0) + r.dy,
@@ -131,6 +132,7 @@ pub fn glyph_text_of(rows: &[&Row]) -> GlyphText {
                 y,
                 adv,
                 size,
+                font,
                 start,
                 len: gt.text.len() - start,
             });
@@ -183,6 +185,17 @@ pub fn char_boxes(gt: &GlyphText) -> Vec<Option<[f64; 4]>> {
         let w = g.adv / g.len.max(1) as f64;
         for k in 0..g.len {
             out[g.start + k] = Some([g.x + w * k as f64, g.y, w, g.size]);
+        }
+    }
+    out
+}
+
+/// Each char of `gt.text`: the font its glyph is set in (None for a space TeX set as glue).
+pub fn char_fonts(gt: &GlyphText) -> Vec<Option<FontDesc>> {
+    let mut out = vec![None; gt.text.len()];
+    for g in &gt.glyphs {
+        for slot in &mut out[g.start..g.start + g.len] {
+            *slot = g.font.clone();
         }
     }
     out
