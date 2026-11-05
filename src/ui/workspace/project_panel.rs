@@ -19,8 +19,9 @@ impl Workspace {
         let file_tree = tree(&self.tree, move |ix, entry, _selected, _, cx| {
             let item = entry.item();
             let id = item.id.to_string();
+            let guides = indent_guides(entry.depth(), cx);
             if id.ends_with(PLACEHOLDER) {
-                return ListItem::new(ix).child(
+                return ListItem::new(ix).children(guides).child(
                     div()
                         .text_sm()
                         .italic()
@@ -57,6 +58,7 @@ impl Workspace {
             });
             let weak = weak.clone();
             ListItem::new(ix)
+                .children(guides)
                 .child(
                     div()
                         .flex()
@@ -224,4 +226,24 @@ impl Workspace {
                     ),
             )
     }
+}
+
+/// A tree row's indent guides: a thin line under each folder it is in, at that folder's
+/// chevron, running the row's height so the rows' lines join up (as VS Code draws them).
+fn indent_guides(depth: usize, cx: &App) -> Vec<AnyElement> {
+    let color = cx.theme().border;
+    (0..depth)
+        .map(|level| {
+            // the row's padding (12), the levels before, the chevron's middle (12 px wide)
+            // past the row's edges a little: the tree sets its rows apart, and the line runs on
+            div()
+                .absolute()
+                .top(px(-4.0))
+                .bottom(px(-4.0))
+                .left(px(12.0 + level as f32 * 12.0 + 5.5))
+                .w(px(1.0))
+                .bg(color)
+                .into_any_element()
+        })
+        .collect()
 }
