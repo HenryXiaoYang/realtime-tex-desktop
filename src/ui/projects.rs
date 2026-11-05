@@ -57,10 +57,14 @@ impl Projects {
 
 /// Read the list, and handle the project commands and the app's quitting.
 pub fn init(cx: &mut App) {
-    let list = std::fs::read_to_string(file())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default();
+    let list = match std::fs::read_to_string(file()) {
+        Ok(t) => serde_json::from_str(&t).unwrap_or_else(|_| {
+            // unreadable: kept aside, not written over by the next save
+            let _ = std::fs::rename(file(), file().with_extension("json.bad"));
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
+    };
     cx.set_global(Projects {
         list,
         ..Default::default()
@@ -237,7 +241,13 @@ fn open_in(root: PathBuf, file: Option<String>, cx: &mut App) {
         ..TitleBar::window_options()
     };
     let at = root.clone();
+    let title = root
+        .file_name()
+        .map_or(root.to_string_lossy(), |n| n.to_string_lossy())
+        .to_string();
     let opened = gpui_kit::open_window(options, cx, move |window, cx| {
+        // for the Window menu, Mission Control and VoiceOver
+        window.set_window_title(&title);
         let ws = cx.new(|cx| Workspace::new(at.clone(), file, window, cx));
         let weak = ws.downgrade();
         // nothing is lost on close: unsaved edits are written to their files
