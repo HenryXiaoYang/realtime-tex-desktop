@@ -4,6 +4,7 @@
 // --nocapture`, with RTD_TYPE=/abs/copy.tex for those that take a document (use a copy: rtex
 // writes beside it).
 mod insert;
+mod perf;
 mod sidebar;
 mod typing;
 
