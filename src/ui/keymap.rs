@@ -82,6 +82,7 @@ pub fn commands() -> Vec<Command> {
             FindPrev
         ),
         cmd!("math", "Edit", "Insert Formula", PAGES, "cmd-m", InsertMath),
+        cmd!("link", "Edit", "Insert Link", PAGES, "cmd-k", InsertLink),
         cmd!(
             "move-up",
             "Edit",
@@ -438,6 +439,7 @@ mod tests {
     use super::{bind_all, display, reset_all, set_key};
     use crate::ui::editor::FormatBold;
     use crate::ui::settings::AppSettings;
+    use crate::ui::workspace::InsertLink;
     use gpui_kit::{Action, App, KeyContext, Keystroke, TestAppContext};
 
     /// What `key` does in the caret's context: the action's name, if any.
@@ -459,6 +461,7 @@ mod tests {
             bind_all(cx);
             let bold = FormatBold.name().to_string();
             assert_eq!(does("cmd-b", cx), Some(bold.clone()));
+            assert_eq!(does("cmd-k", cx), Some(InsertLink.name().to_string()));
             set_key("bold", "cmd-shift-b", cx);
             assert_eq!(does("cmd-shift-b", cx), Some(bold.clone()));
             assert_ne!(

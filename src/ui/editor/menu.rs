@@ -105,6 +105,23 @@ impl Doc {
                     .separator()
                     .item(paste);
             }
+            // the clicked element's settings, in the sidebar (right-click selected it)
+            let kind = weak.upgrade().and_then(|d| {
+                let d = d.read(cx);
+                let r = d.blocks.get(d.block_at(off?)?)?.range.clone();
+                let el = document::element::element_at(&d.source, Some(r.clone()), r.start);
+                (el.kind != document::element::Kind::Document).then_some(el.kind)
+            });
+            let menu = match kind {
+                Some(k) => menu
+                    .item(
+                        PopupMenuItem::new(format!("{} Settings", k.title())).on_click(
+                            |_, _, cx| AppSettings::set(cx, |s| s.inspector_closed = false),
+                        ),
+                    )
+                    .separator(),
+                None => menu,
+            };
             menu.item(item(
                 "Edit Source",
                 Rc::new(|d, ix, w, cx| {

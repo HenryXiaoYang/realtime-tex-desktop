@@ -7,6 +7,7 @@ mod element_edit;
 mod file_view;
 mod find_bar;
 mod formatting;
+mod inserting;
 mod menu;
 mod navigation;
 mod pages;

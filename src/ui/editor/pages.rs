@@ -100,6 +100,20 @@ impl Doc {
                     this.on_page_hover(n, ev.position, cx)
                 }
             }))
+            // pictures dropped from the Finder: figures where they fall
+            .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
+                let files: Vec<PathBuf> = paths
+                    .paths()
+                    .iter()
+                    .filter(|p| inserting::is_picture(p))
+                    .cloned()
+                    .collect();
+                if files.is_empty() || this.active.is_some() {
+                    return;
+                }
+                this.on_page_click(n, window.mouse_position(), 1, false, window, cx);
+                this.insert_pictures(&files, cx);
+            }))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if !hovered && this.hover_gap.is_some_and(|g| g.0 == n) {
                     this.hover_gap = None;

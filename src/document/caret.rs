@@ -623,7 +623,7 @@ pub struct Edit {
 
 impl Edit {
     /// `range` becomes `text`, the caret at its MARK (or its end).
-    fn marked(range: Range<usize>, text: &str) -> Self {
+    pub fn marked(range: Range<usize>, text: &str) -> Self {
         let caret = range.start + text.find(MARK).unwrap_or(text.len());
         Self {
             text: text.replace(MARK, ""),
@@ -1150,6 +1150,44 @@ pub fn enter_in_paragraph(src: &str, block: Range<usize>, off: usize) -> Option<
     })
 }
 
+/// `tex` (its caret at MARK, else after it) as a block of its own at `off` in `block`: before
+/// the block with the caret at its start, after it at its end or in a heading, a table or an
+/// argument that cannot be split, else splitting the paragraph (or item) there.
+pub fn insert_block(src: &str, block: Range<usize>, off: usize, tex: &str) -> Edit {
+    let after = || Edit::marked(block.end..block.end, &format!("\n\n{}", mark_end(tex)));
+    if in_table(src, off) {
+        return after();
+    }
+    let text = item_at(src, off)
+        .filter(|it| off >= it.text.start)
+        .map_or(block.clone(), |it| it.text);
+    let heading = heading_title(&src[block.clone()], block.start).is_some();
+    match split_at(src, text.clone(), off) {
+        Some(Split::Start) if text == block => {
+            Edit::marked(block.start..block.start, &format!("{}\n\n", mark_end(tex)))
+        }
+        Some(Split::Mid(at, close, reopen)) if !heading => {
+            Edit::marked(at..at, &format!("{close}\n\n{}\n\n{reopen}", mark_end(tex)))
+        }
+        Some(Split::Start) => {
+            Edit::marked(text.start..text.start, &format!("{}\n\n", mark_end(tex)))
+        }
+        Some(Split::End) if text != block => {
+            Edit::marked(text.end..text.end, &format!("\n\n{}", mark_end(tex)))
+        }
+        _ => after(),
+    }
+}
+
+/// `tex` with a MARK at its end when it has none.
+fn mark_end(tex: &str) -> String {
+    if tex.contains(MARK) {
+        tex.to_string()
+    } else {
+        format!("{tex}{MARK}")
+    }
+}
+
 /// Shift-Enter: a line break between text, in formatting but not in a heading or a command's
 /// argument (where `\\` breaks the TeX).
 pub fn line_break(src: &str, block: Range<usize>, off: usize) -> Option<Edit> {
@@ -1331,6 +1369,36 @@ mod tests {
         assert_eq!(
             enter("some \\textbf{|bold} text").unwrap(),
             "some \n\n|\\textbf{bold} text"
+        );
+    }
+
+    #[test]
+    fn a_block_goes_in_at_the_caret() {
+        let ins = |src: &str| {
+            let off = src.find('|').unwrap();
+            let s = src.replace('|', "");
+            apply(&s, &insert_block(&s, 0..s.len(), off, "\\newpage"))
+        };
+        assert_eq!(ins("|Text."), "\\newpage|\n\nText.");
+        assert_eq!(ins("Text.|"), "Text.\n\n\\newpage|");
+        assert_eq!(
+            ins("Some \\textbf{bold |text} here"),
+            "Some \\textbf{bold }\n\n\\newpage|\n\n\\textbf{text} here"
+        );
+        // a heading is not split: after it
+        assert_eq!(
+            ins("\\section{A |title}"),
+            "\\section{A title}\n\n\\newpage|"
+        );
+        // in an item: a paragraph of the item
+        let s = "\\begin{itemize}\n\\item one two\n\\end{itemize}";
+        let off = s.find("two").unwrap();
+        let e = insert_block(s, 0..s.len(), off, "X");
+        let mut t = s.to_string();
+        t.replace_range(e.range, &e.text);
+        assert_eq!(
+            t,
+            "\\begin{itemize}\n\\item one \n\nX\n\ntwo\n\\end{itemize}"
         );
     }
 

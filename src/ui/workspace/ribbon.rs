@@ -1,10 +1,19 @@
 // The ribbon under the file tabs, as in Word: the Home tab's groups (clipboard, font, paragraph,
 // styles) acting on the selection or the caret of a .tex file in Visual mode, its buttons lit by
-// what the text at the caret is set in. A double-click on the tab folds it to its tab row.
+// what the text at the caret is set in; the Insert tab is in insert_tab.rs. A double-click on a
+// tab folds the ribbon to its tab row.
 use super::*;
 use crate::document::format::{Align, Font, SIZES, Size, Style};
 use crate::ui::editor::{FormatOp, RibbonState};
 use gpui_kit::component::input::{Copy, Cut, Paste};
+
+/// The ribbon's tabs.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub(super) enum RibbonTab {
+    #[default]
+    Home,
+    Insert,
+}
 
 /// Colours offered for text: xcolor's base names.
 const COLORS: &[(&str, &str)] = &[
@@ -60,38 +69,47 @@ impl Workspace {
         let state = doc.ribbon_state();
         let theme = cx.theme().clone();
         let collapsed = settings::AppSettings::get(cx).ribbon_collapsed;
-        let tabs = div()
+        let tab = self.ribbon_tab;
+        let mut tabs = div()
             .id("ribbon-tabs")
             .flex()
             .items_center()
             .gap_1()
             .px_2()
-            .h_7()
-            .child(
+            .h_7();
+        for (i, (name, t)) in [("Home", RibbonTab::Home), ("Insert", RibbonTab::Insert)]
+            .into_iter()
+            .enumerate()
+        {
+            tabs = tabs.child(
                 div()
-                    .id("ribbon-home")
+                    .id(("ribbon-tab", i))
                     .px_2()
                     .py_0p5()
                     .rounded_md()
                     .text_sm()
                     .cursor_pointer()
-                    .when(!collapsed, |d| d.bg(theme.secondary))
+                    .when(!collapsed && t == tab, |d| d.bg(theme.secondary))
                     .hover(|d| d.bg(theme.secondary))
-                    .child("Home")
+                    .child(name)
                     .tooltip(|window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(
                             "Double-click to fold the ribbon",
                         )
                         .build(window, cx)
                     })
-                    .on_click(|ev, _, cx| {
-                        // a double-click folds it or opens it again; a click on a folded one opens it
+                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                        // a double-click folds it or opens it again; a click on a folded one
+                        // (or another tab) opens it
                         let folded = settings::AppSettings::get(cx).ribbon_collapsed;
                         if ev.click_count() >= 2 || folded {
                             settings::AppSettings::set(cx, |s| s.ribbon_collapsed = !folded);
                         }
-                    }),
+                        this.ribbon_tab = t;
+                        cx.notify();
+                    })),
             );
+        }
         let ribbon = div()
             .flex()
             .flex_col()
@@ -102,23 +120,29 @@ impl Workspace {
         if collapsed {
             return Some(ribbon.into_any_element());
         }
+        let groups = match tab {
+            RibbonTab::Home => vec![
+                self.clipboard_group(cx),
+                self.font_group(&state, cx),
+                self.paragraph_group(&state, cx),
+                self.styles_group(&state, cx),
+            ],
+            RibbonTab::Insert => self.insert_body(state.enabled, cx),
+        };
         let body = div()
-            .id("ribbon-home-body")
+            .id("ribbon-body")
             .flex()
             .items_start()
             .gap_3()
             .px_3()
             .pb_2()
             .overflow_x_scroll()
-            .child(self.clipboard_group(cx))
-            .child(self.font_group(&state, cx))
-            .child(self.paragraph_group(&state, cx))
-            .child(self.styles_group(&state, cx));
+            .children(groups);
         Some(ribbon.child(body).into_any_element())
     }
 
     /// A group of the ribbon: its tools, and its name under them.
-    fn group(name: &'static str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
+    pub(super) fn group(name: &'static str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
         let theme = cx.theme();
         div()
             .flex()

@@ -494,7 +494,7 @@ impl Doc {
     }
 
     /// ⌥← and ⌥→: to the start of this or the previous word, or the end of this or the next.
-    fn move_word(&mut self, dir: i32, cx: &mut Context<Self>) {
+    pub(super) fn move_word(&mut self, dir: i32, cx: &mut Context<Self>) {
         let Some((_, _, m, i)) = self.caret_stop() else {
             return self.move_h(dir, cx);
         };
@@ -715,7 +715,7 @@ impl Doc {
     }
 
     /// Apply `e`, the caret where it says, as an undo step of its own.
-    fn apply(&mut self, e: Edit, cx: &mut Context<Self>) {
+    pub(super) fn apply(&mut self, e: Edit, cx: &mut Context<Self>) {
         self.checkpoint();
         self.typing = None;
         self.overlay = None;
@@ -932,14 +932,19 @@ impl Doc {
     }
 
     /// ⌘M: a formula at the caret, edited as source in its paragraph's box.
-    fn insert_math(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn insert_math(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = format!("${}$", complete::MARK);
         self.edit_tex_at_caret(&text, window, cx);
     }
 
     /// The caret's paragraph opened as source, with `text` (TeX, the caret at its MARK) typed
     /// at the caret: a formula (⌘M), or a command begun with `\\`.
-    fn edit_tex_at_caret(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn edit_tex_at_caret(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
@@ -1386,7 +1391,7 @@ pub(super) fn caret_actions(view: Stateful<Div>, cx: &mut Context<Doc>) -> State
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::{Doc, caret};
     use crate::document::{self, glyphmap};
     use crate::engine;
@@ -1395,7 +1400,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// Run the app until `done` holds for the doc (rtex answers from its own process).
-    fn wait(
+    pub(in crate::ui::editor) fn wait(
         cx: &mut VisualTestContext,
         doc: &Entity<Doc>,
         what: &str,
@@ -1414,7 +1419,7 @@ mod tests {
 
     /// Run until rtex has typeset everything and stays so for a while: LaTeX may run again
     /// (references) just after a layout comes in.
-    fn calm(cx: &mut VisualTestContext, doc: &Entity<Doc>) {
+    pub(in crate::ui::editor) fn calm(cx: &mut VisualTestContext, doc: &Entity<Doc>) {
         let settled = |d: &Doc| d.spans_pending == 0 && !d.compiling;
         let mut since = Instant::now();
         loop {

@@ -4,6 +4,7 @@
 // paste back here), cut and pasted.
 use super::*;
 use document::caret;
+use inserting::is_picture;
 
 /// What a copy puts beside the plain text: the TeX, for a paste back into a document.
 const TEX_TAG: &str = "realtime-tex:";
@@ -288,6 +289,36 @@ impl Doc {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
+        // pictures: files copied in the Finder, or an image with no text beside it
+        if !plain {
+            let files: Vec<PathBuf> = item
+                .entries()
+                .iter()
+                .filter_map(|e| match e {
+                    ClipboardEntry::ExternalPaths(p) => Some(p.paths().to_vec()),
+                    _ => None,
+                })
+                .flatten()
+                .filter(|p| is_picture(p))
+                .collect();
+            if !files.is_empty() {
+                self.insert_pictures(&files, cx);
+                return;
+            }
+            let text = item
+                .entries()
+                .iter()
+                .any(|e| matches!(e, ClipboardEntry::String(_)));
+            if !text
+                && let Some(img) = item.entries().iter().find_map(|e| match e {
+                    ClipboardEntry::Image(i) => Some(i),
+                    _ => None,
+                })
+            {
+                self.insert_picture_bytes(&img.bytes, img.format.extension(), cx);
+                return;
+            }
+        }
         let Some(text) = item.text() else { return };
         let mut packages = vec![];
         let tex = if plain {

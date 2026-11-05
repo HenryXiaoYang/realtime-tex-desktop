@@ -7,6 +7,7 @@ pub mod find;
 pub mod format;
 pub mod glyphmap;
 pub mod html;
+pub mod insert;
 mod outline;
 mod preview;
 

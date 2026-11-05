@@ -2,6 +2,7 @@
 // laid out like Zed.
 mod chrome;
 mod files;
+mod insert_tab;
 mod inspector;
 mod project_panel;
 mod ribbon;
@@ -42,7 +43,8 @@ actions!(
         ToggleSource,
         Recompile,
         OpenSettings,
-        ToggleInspector
+        ToggleInspector,
+        InsertLink
     ]
 );
 
@@ -58,6 +60,8 @@ pub struct Workspace {
     sidebar: bool,
     /// The sidebar on the right, for the element at the caret.
     inspector: inspector::Inspector,
+    /// The ribbon's open tab.
+    ribbon_tab: ribbon::RibbonTab,
     status: String,
     /// Folders open in the project panel (paths): only they are read from disk, so a large
     /// folder (node_modules) costs nothing until it is opened.
@@ -66,6 +70,7 @@ pub struct Workspace {
     rename: Option<(String, Entity<InputState>)>,
     _subs: Vec<Subscription>,
     _rename_sub: Option<Subscription>,
+    _dialog_sub: Option<Subscription>,
 }
 
 impl Workspace {
@@ -85,11 +90,13 @@ impl Workspace {
             resources,
             sidebar: true,
             inspector: Default::default(),
+            ribbon_tab: Default::default(),
             status: String::new(),
             rename: None,
             expanded: Default::default(),
             _subs: vec![],
             _rename_sub: None,
+            _dialog_sub: None,
         };
         let sub = cx.subscribe(&this.tree, |this, _, ev: &TreeEvent, cx| {
             match ev {
@@ -202,6 +209,9 @@ impl Render for Workspace {
                 this.sidebar = !this.sidebar;
                 cx.notify();
             }))
+            .on_action(
+                cx.listener(|this, _: &InsertLink, window, cx| this.open_link_dialog(window, cx)),
+            )
             .on_action(cx.listener(|_, _: &ToggleInspector, _, cx| {
                 settings::AppSettings::set(cx, |s| s.inspector_closed = !s.inspector_closed);
             }))

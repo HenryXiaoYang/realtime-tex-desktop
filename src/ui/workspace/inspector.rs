@@ -21,11 +21,7 @@ pub struct Inspector {
 
 impl Workspace {
     pub(super) fn inspector_visible(&self, cx: &App) -> bool {
-        !settings::AppSettings::get(cx).inspector_closed
-            && self.doc().is_some_and(|d| {
-                let d = d.read(cx);
-                d.tex && !d.source_mode && d.view.is_none()
-            })
+        !settings::AppSettings::get(cx).inspector_closed && self.visual(cx)
     }
 
     /// The sidebar for the open document.

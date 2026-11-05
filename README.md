@@ -55,6 +55,15 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   cuts. ⌘V of rich text from another app (a web page, Word, Pages) keeps its bold, italic,
   underline, links (adding hyperref), headings, paragraphs, line breaks, lists, code and super-
   and subscripts as TeX, the rest as plain text; ⌘⇧V pastes plain text.
+- The Insert tab: a page break, space, the table of contents, a table, a picture, a formula
+  (⌘M) or a numbered equation, a link (⌘K: over the selection it becomes the link's text), a
+  cross-reference (the document's labels by kind, searchable; it goes in as "Figure~\\ref{…}"),
+  a footnote, and a citation (the entries of the .bib files the document names, or of those
+  beside it, searchable). Blocks go in at the caret, splitting the paragraph there. A picture
+  (chosen, pasted with ⌘V, or dragged from the Finder onto the pages) is copied into figures/
+  beside the document (GIF, TIFF, HEIC, WebP converted to PNG) and goes in as a figure with
+  its caption and label, graphicx added. Right-click on a figure, table, heading, equation or
+  list offers its settings in the sidebar.
 - The sidebar on the right (Visual mode; ⌘⌥\\ or its × hides it, remembered) shows the settings
   of what the caret is in or what is selected — a figure (width, placement, caption, label), an
   image, a table, a heading (level, numbered, short title, label), an equation (numbered,
