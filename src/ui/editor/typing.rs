@@ -2202,5 +2202,36 @@ mod tests {
             );
             calm(cx, &doc);
         }
+        // Find: every printed "together"; ⌘G steps through them; Replace All in one undo step
+        doc.update_in(cx, |d, window, cx| {
+            d.set_caret(0, cx);
+            d.open_find(true, window, cx);
+            let q = d.find.as_ref().unwrap().query.clone();
+            q.update(cx, |s, cx| s.set_value("together", window, cx));
+            d.refind(cx);
+            let n = d.find.as_ref().unwrap().matches.len();
+            assert!(n >= 2, "{n} matches");
+            d.find_step(1, window, cx);
+            let first = d.selection_range().unwrap();
+            assert!(d.source[first.clone()].eq_ignore_ascii_case("together"));
+            d.find_step(1, window, cx);
+            assert!(
+                d.selection_range().unwrap().start > first.start,
+                "the next one"
+            );
+            let w = d.find.as_ref().unwrap().with.clone();
+            w.update(cx, |s, cx| s.set_value("in step", window, cx));
+            d.replace_all(cx);
+            assert!(!d.source.to_lowercase().contains("used together"));
+            assert!(d.find.as_ref().unwrap().matches.is_empty(), "none left");
+        });
+        calm(cx, &doc);
+        assert!(cx.read(|cx| !doc.read(cx).status.contains("LaTeX")));
+        doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+        assert_eq!(
+            cx.read(|cx| doc.read(cx).source.clone()),
+            base,
+            "Replace All: one undo step"
+        );
     }
 }

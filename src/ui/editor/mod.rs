@@ -4,6 +4,7 @@
 mod complete;
 mod editing;
 mod file_view;
+mod find_bar;
 mod formatting;
 mod menu;
 mod navigation;
@@ -105,7 +106,12 @@ actions!(
         AlignLeft,
         AlignCenter,
         AlignRight,
-        AlignJustify
+        AlignJustify,
+        OpenFind,
+        OpenReplace,
+        FindNext,
+        FindPrev,
+        CloseFind
     ]
 );
 
@@ -166,6 +172,19 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-e", AlignCenter, caret),
         KeyBinding::new("cmd-r", AlignRight, caret),
         KeyBinding::new("cmd-j", AlignJustify, caret),
+    ]);
+    for ctx in ["Caret", "Pages"] {
+        cx.bind_keys([
+            KeyBinding::new("cmd-f", OpenFind, Some(ctx)),
+            KeyBinding::new("cmd-alt-f", OpenReplace, Some(ctx)),
+            KeyBinding::new("cmd-g", FindNext, Some(ctx)),
+            KeyBinding::new("cmd-shift-g", FindPrev, Some(ctx)),
+        ]);
+    }
+    cx.bind_keys([
+        KeyBinding::new("escape", CloseFind, Some("FindBar")),
+        KeyBinding::new("cmd-g", FindNext, Some("FindBar")),
+        KeyBinding::new("cmd-shift-g", FindPrev, Some("FindBar")),
     ]);
     let pages = Some("Pages");
     cx.bind_keys([
@@ -335,6 +354,8 @@ pub struct Doc {
     caret_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// A drag that began on text is under way: moving the pointer selects.
     dragging: bool,
+    /// The Find and Replace bar, while open.
+    find: Option<find_bar::Find>,
     /// What the last edit made: the bytes it wrote.
     last_edit: Range<usize>,
     _tasks: Vec<Task<()>>,
@@ -448,6 +469,7 @@ impl Doc {
             blink: None,
             caret_bounds: Default::default(),
             dragging: false,
+            find: None,
             last_edit: 0..0,
             _tasks: vec![],
             _subs: [sub, keys, code_sub],
@@ -647,7 +669,11 @@ impl Render for Doc {
             }
         };
         let typing = self.caret.is_some() && self.active.is_none();
-        let view = caret_actions(div().id("pages"), cx);
+        let view = caret_actions(div().id("pages"), cx)
+            .on_action(cx.listener(|d, _: &OpenFind, w, cx| d.open_find(false, w, cx)))
+            .on_action(cx.listener(|d, _: &OpenReplace, w, cx| d.open_find(true, w, cx)))
+            .on_action(cx.listener(|d, _: &FindNext, w, cx| d.find_step(1, w, cx)))
+            .on_action(cx.listener(|d, _: &FindPrev, w, cx| d.find_step(-1, w, cx)));
         let view = view
             .key_context(if typing { "Caret" } else { "Pages" })
             .track_focus(&self.focus)
@@ -807,6 +833,7 @@ impl Render for Doc {
                         .mode(ScrollbarMode::Always),
                 ),
             )
+            .children(self.render_find_bar(cx))
             .into_any_element()
     }
 }

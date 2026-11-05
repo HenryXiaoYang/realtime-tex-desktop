@@ -43,6 +43,10 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   buttons light up for the text at the caret and turn off what is on. They act on the
   selection (or the caret's word, or its paragraphs); a package an edit needs (xcolor, ulem,
   fontspec) goes into the preamble with a note in the status bar.
+- Find & Replace: ⌘F (⌘⌥F with the replace row) over the pages; matches are found in the printed
+  text (through markup, not in formulas or pictures) and highlighted, the current one stronger;
+  Enter or ⌘G next, ⇧Enter or ⌘⇧G previous, Escape closes. Replace puts the text in as typed,
+  keeping markup a match runs through; Replace All is one undo step.
 - Selecting text: drag over it, Shift-click, Shift with any caret move (⇧←/→/↑/↓, ⌥⇧ by word,
   ⌘⇧ to the line's or document's ends), double-click a word, triple-click a paragraph, ⌘A for
   all. Typing replaces the selection, Backspace/Delete removes it (markup it only partly holds,
@@ -130,6 +134,7 @@ src/
     outline.rs         the section outline
     glyphmap.rs        click-to-source: glyph text aligned with the visible source
     caret.rs           where a caret stands among glyphs; typing, Enter, Tab, Backspace as edits
+    find.rs            find and replace over the printed text
     format.rs          formatting as source edits: inline commands, sizes, colours, fonts, lists,
                        alignment, styles, packages
   render/              rasterizing (skrifa, tiny-skia, hayro)
@@ -147,6 +152,7 @@ src/
       typing.rs        Visual mode's caret: moving, typing, input methods, the typed-text overlay
       text_selection.rs  selecting text on the pages; deleting, typing over, copying, pasting it
       formatting.rs    the ribbon's side: the state at the caret, formatting operations
+      find_bar.rs      the Find and Replace bar and its highlights
       source_box.rs    the inline source box
       editing.rs       opening, typing in and leaving the box; insert spots; undo
       selection.rs     block selection and block commands

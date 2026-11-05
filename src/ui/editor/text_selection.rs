@@ -197,6 +197,11 @@ impl Doc {
         let Some(sel) = self.selection_range().filter(|_| self.active.is_none()) else {
             return vec![];
         };
+        self.highlights(n, sel, rgba(0x3b82f650))
+    }
+
+    /// Boxes in `color` over the glyphs on page `n` that show the source `sel`.
+    pub(super) fn highlights(&self, n: u32, sel: Range<usize>, color: Rgba) -> Vec<AnyElement> {
         let mut boxes: Vec<[f64; 4]> = vec![];
         for bi in 0..self.blocks.len() {
             let b = &self.blocks[bi];
@@ -254,7 +259,7 @@ impl Doc {
                     .top(px(page_px(r[1], self.zoom)))
                     .w(px(page_px(r[2] - r[0], self.zoom).max(1.0)))
                     .h(px(page_px(r[3] - r[1], self.zoom)))
-                    .bg(rgba(0x3b82f650))
+                    .bg(color)
                     .into_any_element()
             })
             .collect()

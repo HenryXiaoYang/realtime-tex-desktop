@@ -215,6 +215,16 @@ pub fn char_sources(gt: &GlyphText, src: &str) -> Vec<Option<Range<usize>>> {
         .collect()
 }
 
+/// Each char `src` prints, with the bytes of `src` it comes from.
+pub fn visible_chars(src: &str) -> Vec<(char, Range<usize>)> {
+    let v = visible_source(src);
+    v.text
+        .iter()
+        .zip(v.start.iter().zip(&v.end))
+        .map(|(&c, (&a, &b))| (c, a..b))
+        .collect()
+}
+
 /// The text `src` prints, as plain text: a line per paragraph.
 pub fn plain_text(src: &str) -> String {
     let mut out: Vec<String> = vec![];

@@ -198,6 +198,7 @@ impl Doc {
                 .children(blank)
                 .children(outline)
                 .children(insert)
+                .children(self.render_matches(n))
                 .children(self.render_selection(n))
                 .children(self.render_caret(n, window, cx))
                 .children(spinner)

@@ -2,6 +2,7 @@
 // source, the outline, and the map between typeset glyphs and source characters.
 mod blocks;
 pub mod caret;
+pub mod find;
 pub mod format;
 pub mod glyphmap;
 mod outline;
