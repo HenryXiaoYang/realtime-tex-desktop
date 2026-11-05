@@ -862,7 +862,15 @@ impl Doc {
                     .absolute()
                     .size_full(),
             );
-        Some(div().children(text).child(caret).into_any_element())
+        // over the whole page: an absolute element is placed in its parent
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .children(text)
+                .child(caret)
+                .into_any_element(),
+        )
     }
 }
 
@@ -1152,10 +1160,27 @@ mod tests {
         });
         println!("typed → typeset in {:?}", t0.elapsed());
         wait(cx, &doc, "the overlay to go", |d| d.overlay.is_none());
-        assert!(
-            cx.read(|cx| doc.read(cx).caret_bounds.get().is_some()),
-            "the caret was drawn"
-        );
+        // the caret is drawn on its page, at its line
+        doc.update(cx, |d, cx| {
+            d.caret_bounds.set(None);
+            cx.notify();
+        });
+        wait(cx, &doc, "the caret drawn", |d| {
+            d.caret_bounds.get().is_some()
+        });
+        cx.read(|cx| {
+            let d = doc.read(cx);
+            let b = d.caret_bounds.get().unwrap();
+            let (page, _, y, _) = d.caret_at().unwrap();
+            let pages = d.page_bounds.take();
+            d.page_bounds.set(pages.clone());
+            let (_, pb) = pages.iter().find(|(n, _)| *n == page).unwrap();
+            let want = pb.origin.y + gpui_kit::px(super::page_px(y, d.zoom));
+            assert!(
+                (b.origin.y - want).abs() < gpui_kit::px(30.0) && b.origin.x > pb.origin.x,
+                "caret at {b:?}, its line at y {want:?} on page {pb:?}"
+            );
+        });
         // the caret is on its text again, after what was typed
         cx.read(|cx| {
             let d = doc.read(cx);
