@@ -22,8 +22,12 @@ pub(super) struct Fit {
     pub(super) right: bool,
     /// The ribbon's width last frame.
     pub(super) ribbon_w: Rc<Cell<f32>>,
-    /// The Insert tab's groups with their names, as wide as they were last drawn.
-    pub(super) insert_full_w: Rc<Cell<f32>>,
+    /// The ribbon's scroll: how far its groups run past it.
+    pub(super) ribbon_scroll: ScrollHandle,
+    /// The Insert tab shows its buttons' names no more (they ran past the ribbon), and how wide
+    /// they made it then.
+    insert_compact: Rc<Cell<bool>>,
+    insert_full_w: Rc<Cell<f32>>,
 }
 
 impl Workspace {
@@ -66,22 +70,38 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The ribbon's width last frame (none measured yet: all the room it wants).
-    fn ribbon_room(&self) -> f32 {
-        match self.fit.ribbon_w.get() {
-            w if w > 0.0 => w,
-            _ => f32::MAX,
-        }
+    /// Whether the Insert tab shows its buttons as icons alone.
+    pub(super) fn insert_compact(&self) -> bool {
+        self.fit.insert_compact.get()
     }
 
-    /// Whether the Insert tab shows its buttons as icons alone: when its groups with their
-    /// names (as wide as last drawn so, else some 880 px) do not fit.
-    pub(super) fn insert_compact(&self) -> bool {
-        let full = match self.fit.insert_full_w.get() {
-            w if w > 0.0 => w,
-            _ => 880.0,
-        };
-        self.ribbon_room() < full + RIBBON_PAD
+    /// A canvas over the ribbon that, on the Insert tab (`on`), drops its buttons' names when
+    /// they ran past the ribbon last frame and gives them back once it is as wide as they made
+    /// it: measured, not guessed.
+    pub(super) fn watch_insert(&self, on: bool) -> impl IntoElement {
+        let (scroll, compact, full) = (
+            self.fit.ribbon_scroll.clone(),
+            self.fit.insert_compact.clone(),
+            self.fit.insert_full_w.clone(),
+        );
+        canvas(
+            move |b, window, _| {
+                let view = f32::from(b.size.width);
+                let over = f32::from(scroll.max_offset().x);
+                if !on {
+                } else if !compact.get() && over > 1.0 {
+                    full.set(view + over);
+                    compact.set(true);
+                    window.refresh();
+                } else if compact.get() && view >= full.get() {
+                    compact.set(false);
+                    window.refresh();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
     }
 
     /// A canvas that keeps the ribbon's width for the next frame, redrawing when it changed.
@@ -89,9 +109,6 @@ impl Workspace {
         measure(self.fit.ribbon_w.clone())
     }
 }
-
-/// The ribbon's padding either side of its groups.
-const RIBBON_PAD: f32 = 12.0 * 2.0;
 
 /// A canvas over an element (absolute, its size) that keeps the element's width in `w` for
 /// the next frame, redrawing when it changed.
@@ -108,18 +125,6 @@ pub(super) fn measure(w: Rc<Cell<f32>>) -> impl IntoElement {
     )
     .absolute()
     .size_full()
-}
-
-/// `groups` side by side as wide as they need, measured into `w` when given.
-pub(super) fn measured_row(groups: Vec<AnyElement>, w: Option<Rc<Cell<f32>>>) -> AnyElement {
-    div()
-        .relative()
-        .flex()
-        .flex_shrink_0()
-        .gap_3()
-        .children(w.map(measure))
-        .children(groups)
-        .into_any_element()
 }
 
 #[cfg(test)]

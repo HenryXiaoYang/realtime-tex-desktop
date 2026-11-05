@@ -153,20 +153,13 @@ impl Workspace {
         }
         let groups = match tab {
             // at full size: a narrow window scrolls the ribbon
-            RibbonTab::Home => vec![layout::measured_row(
-                vec![
-                    self.clipboard_group(cx),
-                    self.font_group(&state, cx),
-                    self.paragraph_group(&state, cx),
-                    self.styles_group(&state, cx),
-                ],
-                None,
-            )],
-            // measured while it shows its names, for when they stop fitting
-            RibbonTab::Insert => vec![layout::measured_row(
-                self.insert_body(state.enabled, cx),
-                (!self.insert_compact()).then(|| self.fit.insert_full_w.clone()),
-            )],
+            RibbonTab::Home => vec![
+                self.clipboard_group(cx),
+                self.font_group(&state, cx),
+                self.paragraph_group(&state, cx),
+                self.styles_group(&state, cx),
+            ],
+            RibbonTab::Insert => self.insert_body(state.enabled, cx),
         };
         let body = div()
             .id("ribbon-body")
@@ -176,9 +169,14 @@ impl Workspace {
             .pt_2()
             .pb_2()
             .overflow_x_scroll()
+            .track_scroll(&self.fit.ribbon_scroll)
             .children(groups);
-        // the ribbon's width, for what folds next frame
-        let body = div().relative().child(self.measure_ribbon()).child(body);
+        // the ribbon's width, and (the Insert tab) whether its buttons' names fit, for next frame
+        let body = div()
+            .relative()
+            .child(self.measure_ribbon())
+            .child(body)
+            .child(self.watch_insert(tab == RibbonTab::Insert));
         Some(ribbon.child(body).into_any_element())
     }
 
@@ -192,11 +190,17 @@ impl Workspace {
         Self::group_ruled(name, rows, false, cx)
     }
 
+    /// A group at least as wide as its tools (a narrow window scrolls the ribbon, it does not
+    /// squeeze them); the room the ribbon has beyond, shared out among its groups, its tools
+    /// in the middle of theirs.
     fn group_ruled(name: &'static str, rows: Vec<AnyElement>, rule: bool, cx: &App) -> AnyElement {
         let theme = cx.theme();
         div()
             .flex()
             .flex_col()
+            .flex_grow(1.0)
+            .flex_shrink_0()
+            .items_center()
             .gap_1()
             .when(rule, |d| d.pr_3().border_r_1().border_color(theme.border))
             .children(rows)
@@ -586,31 +590,29 @@ impl Workspace {
             styles.push((label, Style::Heading(h)));
         }
         styles.push(("Quote", Style::Quote));
-        // every style, in two rows as the font's and the paragraph's tools are: filled column
-        // by column (Normal over Title, Part over Section…), each column as wide as its names
-        let mut row = div().flex().gap_1();
+        // two rows of small buttons, as the font's and the paragraph's tools are, filled column
+        // by column (Normal over Title, Part over Section…) and spread across the group
+        let weight = |style: Style| match style {
+            Style::Heading(_) => FontWeight::BOLD,
+            _ => FontWeight::NORMAL,
+        };
+        let mut row = div().w_full().flex().justify_center().gap_1();
         for (c, pair) in styles.chunks(2).enumerate() {
-            let mut column = div().flex().flex_col().gap_1();
+            let mut column = div().flex_1().max_w(px(160.0)).flex().flex_col().gap_1();
             for (k, &(label, style)) in pair.iter().enumerate() {
-                let on = st.style == Some(style);
-                let weight = match style {
-                    Style::Heading(_) => FontWeight::BOLD,
-                    _ => FontWeight::NORMAL,
-                };
-                // each style named in its own look
                 column = column.child(
                     Button::new(("rb-style", c * 2 + k))
                         .ghost()
                         .small()
                         .w_full()
-                        .justify_start()
-                        .selected(on)
+                        .selected(st.style == Some(style))
                         .disabled(!st.enabled)
                         .accessibility_label(format!("Style: {label}"))
+                        // each style named in its own look
                         .child(
                             div()
                                 .text_sm()
-                                .font_weight(weight)
+                                .font_weight(weight(style))
                                 .whitespace_nowrap()
                                 .when(style == Style::Quote, |d| d.italic())
                                 .child(label),
