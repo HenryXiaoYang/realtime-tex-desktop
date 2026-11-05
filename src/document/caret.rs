@@ -1141,12 +1141,45 @@ pub fn group_close(src: &str, open: usize) -> Option<usize> {
 /// it (the caret in it); after its text, one below; between, a paragraph break that closes the
 /// formatting or heading open there and reopens it after. None where a break cannot go.
 pub fn enter_in_paragraph(src: &str, block: Range<usize>, off: usize) -> Option<Edit> {
+    // a format picked for what is typed next (its group still empty): the new paragraph has it,
+    // as Word's does, and this one is left without the empty group
+    if let Some((group, open, close)) = pending_format(src, block.clone(), off)
+        && matches!(split_at(src, block.clone(), off), Some(Split::End))
+    {
+        let rest = &src[group.end..block.end];
+        return Some(Edit::marked(
+            group.start..block.end,
+            &format!("{rest}\n\n{open}{MARK}{close}"),
+        ));
+    }
     Some(match split_at(src, block.clone(), off)? {
         Split::Start => Edit::marked(block.start..block.start, &format!("{MARK}\n\n")),
         Split::End => Edit::marked(block.end..block.end, &format!("\n\n{MARK}")),
         Split::Mid(at, close, reopen) => {
             Edit::marked(at..at, &format!("{close}\n\n{reopen}{MARK}"))
         }
+    })
+}
+
+/// The format groups around `off` in `block` with nothing in them yet (`\\textcolor{red}{|}`,
+/// nested ones too): their range, their opening and their closing.
+fn pending_format(
+    src: &str,
+    block: Range<usize>,
+    off: usize,
+) -> Option<(Range<usize>, String, String)> {
+    let groups = open_groups(&src[block.clone()], block.start, off);
+    let (mut from, mut to, mut n) = (off, off, 0);
+    for (name, start, open) in groups.iter().rev() {
+        // empty: its `{` right before what is inside, its `}` right after
+        if !FORMAT.contains(&name.as_str()) || open + 1 != from || !src[to..].starts_with('}') {
+            break;
+        }
+        (from, to, n) = (*start, to + 1, n + 1);
+    }
+    (n > 0).then(|| {
+        let inner_open = groups[groups.len() - 1].2;
+        (from..to, src[from..=inner_open].to_string(), "}".repeat(n))
     })
 }
 
@@ -1385,6 +1418,22 @@ mod tests {
         let s = src.replace('|', "");
         let e = enter_in_paragraph(&s, 0..s.len(), off)?;
         Some(apply(&s, &e))
+    }
+
+    #[test]
+    fn enter_carries_a_format_picked_for_what_comes_next() {
+        assert_eq!(
+            enter("some words\\textcolor{red}{|}").unwrap(),
+            "some words\n\n\\textcolor{red}{|}"
+        );
+        assert_eq!(
+            enter("end \\textbf{\\textcolor{red}{|}}").unwrap(),
+            "end \n\n\\textbf{\\textcolor{red}{|}}"
+        );
+        assert_eq!(
+            enter("\\subsection{Title\\textcolor{red}{|}}").unwrap(),
+            "\\subsection{Title}\n\n\\textcolor{red}{|}"
+        );
     }
 
     #[test]

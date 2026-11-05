@@ -802,6 +802,28 @@ fn type_in_a_colour(cx: &mut TestAppContext) {
         assert!(src.contains(want), "{want}: {src}");
         calm(cx, &doc);
     }
+    // Return after picking it: the new paragraph keeps the colour, as Word's does (after a
+    // heading as after a paragraph)
+    for (after, want) in [
+        ("words here\\textcolor{red}{ab}", "\\textcolor{red}{cd}"),
+        (
+            "\\subsection{i type\\textcolor{red}{ab}",
+            "}\n\n\\textcolor{red}{cd}",
+        ),
+    ] {
+        doc.update_in(cx, |d, window, cx| {
+            let at = d.source.find(after).unwrap() + after.len();
+            d.set_caret(at, cx);
+            d.format(FormatOp::Color("red".into()), window, cx);
+            d.enter(false, cx);
+            for ch in "cd".chars() {
+                d.replace_text_in_range(None, &ch.to_string(), window, cx);
+            }
+        });
+        let src = cx.read(|cx| doc.read(cx).source.clone());
+        assert!(src.contains(want), "Return then {want}: {src}");
+        calm(cx, &doc);
+    }
     // through an input method: composed, then committed, it lands in the colour too
     doc.update_in(cx, |d, window, cx| {
         let at = d.source.find("last words").unwrap() + "last words".len();
