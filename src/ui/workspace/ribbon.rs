@@ -141,17 +141,6 @@ impl Workspace {
                     .build(window, cx)
             })
             .child(bar);
-        // nothing to act on yet: say how to get something, beside the tabs where it shows
-        let tabs = tabs.when(!state.enabled && !collapsed, |d| {
-            d.child(
-                div()
-                    .ml_2()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .whitespace_nowrap()
-                    .child("Click in the text to format it or to insert there"),
-            )
-        });
         let ribbon = div()
             .flex()
             .flex_col()
