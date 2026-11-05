@@ -96,6 +96,10 @@ pub fn element_at(src: &str, block: Option<Range<usize>>, at: usize) -> Element 
         kind: Kind::Document,
         range: 0..src.len(),
     };
+    // in a figure, a table or a formula inside a list's item: that
+    if let Some(el) = inner_element(src, at) {
+        return el;
+    }
     // in a list item: the list (the innermost one)
     if let Some(it) = item_at(src, at)
         && block
@@ -142,6 +146,26 @@ pub fn element_at(src: &str, block: Option<Range<usize>>, at: usize) -> Element 
         return doc;
     };
     Element { kind, range: b }
+}
+
+/// The figure, table or display formula `at` is in when it sits inside a list.
+fn inner_element(src: &str, at: usize) -> Option<Element> {
+    let it = item_at(src, at)?;
+    let envs = super::caret::envs_at(src, at);
+    let env = envs.last()?;
+    let kind = match env.trim_end_matches('*') {
+        "figure" | "wrapfigure" => Kind::Figure,
+        "table" => Kind::Table,
+        "equation" | "align" | "gather" | "multline" | "displaymath" => Kind::Equation,
+        _ => return None,
+    };
+    let begin = src[..at].rfind(&format!("\\begin{{{env}}}"))?;
+    let close = format!("\\end{{{env}}}");
+    let end = src[at..].find(&close)? + at + close.len();
+    (begin > it.list.start).then_some(Element {
+        kind,
+        range: begin..end,
+    })
 }
 
 // --- reading the source ---
@@ -200,9 +224,10 @@ struct Cmd {
 
 fn find_cmd(src: &str, r: Range<usize>, name: &str) -> Option<Cmd> {
     let pat = format!("\\{name}");
-    let mut from = r.start;
+    let end = src.floor_char_boundary(r.end.min(src.len()));
+    let mut from = src.floor_char_boundary(r.start.min(end));
     loop {
-        let i = src[from..r.end].find(&pat)? + from;
+        let i = src[from..end].find(&pat)? + from;
         let after = i + pat.len();
         if src[after..].starts_with(|c: char| c.is_ascii_alphabetic()) {
             from = after;
@@ -245,6 +270,19 @@ fn env_head(src: &str, el: &Element) -> Option<(String, Option<Range<usize>>, us
     let rest = t.strip_prefix("\\begin{")?;
     let name = rest.split('}').next()?.to_string();
     let after = el.range.start + "\\begin{".len() + name.len() + 1;
+    // \begin{wrapfigure}[lines]{r}{width}: no placement, the head runs past its arguments
+    if name.starts_with("wrap") {
+        let mut end = after;
+        if src[end..].starts_with('[') {
+            end = src[end..].find(']').map(|e| end + e + 1)?;
+        }
+        for _ in 0..2 {
+            if src[end..].starts_with('{') {
+                end = group_close(src, end)? + 1;
+            }
+        }
+        return Some((name, None, end));
+    }
     let (opts, end) = if src[after..].starts_with('[') {
         let close = src[after..].find(']').map(|e| after + e)?;
         (Some(after + 1..close), close + 1)
@@ -368,7 +406,7 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
                 f("clip", "Clip to the trim", Input::Toggle, true, opt("clip")),
                 f("page", "PDF page", Input::Number, true, opt("page")),
             ]);
-            if el.kind == Kind::Figure {
+            if el.kind == Kind::Figure && !src[el.range.clone()].starts_with("\\begin{wrap") {
                 let placement = env_head(src, el)
                     .and_then(|(_, o, _)| o)
                     .map(|o| src[o].to_string())
@@ -416,7 +454,7 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
                 .and_then(|c| c.opts.clone())
                 .map(|o| src[o].to_string())
                 .unwrap_or_default();
-            vec![
+            let mut out = vec![
                 f(
                     "level",
                     "Level",
@@ -439,20 +477,27 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
                     (!starred).to_string(),
                 ),
                 f(
-                    "short",
-                    "Short title (for the contents)",
-                    Input::Text,
-                    true,
-                    short,
-                ),
-                f(
                     "label",
                     "Label",
                     Input::Text,
                     true,
                     label_after(src, el).map(|(_, l)| l).unwrap_or_default(),
                 ),
-            ]
+            ];
+            // an unnumbered heading is not in the contents: no short title for them
+            if !starred {
+                out.insert(
+                    2,
+                    f(
+                        "short",
+                        "Short title (for the contents)",
+                        Input::Text,
+                        true,
+                        short,
+                    ),
+                );
+            }
+            out
         }
         Kind::Equation => {
             let (env, starred) = equation_env(src, el);
@@ -468,7 +513,7 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
                 f(
                     "env",
                     "Environment",
-                    Input::Choice(EQUATIONS.to_vec()),
+                    Input::Choice(equation_choices(src, el, &env)),
                     true,
                     env,
                 ),
@@ -598,15 +643,48 @@ fn equation_env(src: &str, el: &Element) -> (String, bool) {
         .strip_prefix("\\begin{")
         .and_then(|r| r.split('}').next())
         .unwrap_or("equation");
+    if name == "displaymath" {
+        return ("equation".into(), true);
+    }
     (name.trim_end_matches('*').to_string(), name.ends_with('*'))
 }
 
-/// A heading's `\label{…}` right after it: its range and text.
+/// The environments an equation's body can be in: `&` needs align, `\\\\` more than one line.
+fn equation_choices(src: &str, el: &Element, now: &str) -> Vec<(&'static str, &'static str)> {
+    let t = &src[el.range.clone()];
+    let amp = t.match_indices('&').any(|(i, _)| !t[..i].ends_with('\\'));
+    let lines = t.contains("\\\\");
+    EQUATIONS
+        .iter()
+        .filter(|(e, _)| {
+            *e == now
+                || match *e {
+                    "align" => true,
+                    "equation" => !amp && !lines,
+                    _ => !amp,
+                }
+        })
+        .copied()
+        .collect()
+}
+
+/// Where a heading's command ends (after its title's `}`).
+fn heading_end(src: &str, el: &Element) -> Option<usize> {
+    let t = &src[el.range.clone()];
+    let (h, _) = HEADINGS.iter().find(|(h, _)| {
+        t[1..].starts_with(h) && !t[1 + h.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
+    })?;
+    find_cmd(src, el.range.clone(), h).map(|c| c.end)
+}
+
+/// A heading's `\label{…}` right after it (on its line or the next): its range and text.
 fn label_after(src: &str, el: &Element) -> Option<(Range<usize>, String)> {
-    let after = &src[el.range.end..];
+    let end = heading_end(src, el)?;
+    let after = &src[end..];
     let ws = after.len() - after.trim_start().len();
-    let at = el.range.end + ws;
-    let c = find_cmd(src, at..(at + 200).min(src.len()), "label").filter(|c| c.start == at)?;
+    let at = end + ws;
+    let line_end = src[at..].find('\n').map_or(src.len(), |i| at + i);
+    let c = find_cmd(src, at..line_end, "label").filter(|c| c.start == at)?;
     Some((c.start..c.end, src[c.arg?].to_string()))
 }
 
@@ -631,9 +709,94 @@ fn geometry_margin(src: &str) -> Option<String> {
 
 // --- setting a field ---
 
-/// The edit that gives field `key` of `el` the value `value` (empty: none / off).
+/// A TeX length: `2cm`, `.5in`, `0.8\linewidth`, `\textwidth`.
+fn is_length(s: &str) -> bool {
+    let s = s.trim();
+    let num_end = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(num_end);
+    let num_ok = num.is_empty() || num.parse::<f64>().is_ok();
+    let unit = unit.trim();
+    num_ok
+        && ([
+            "pt", "mm", "cm", "in", "em", "ex", "bp", "pc", "dd", "cc", "sp",
+        ]
+        .contains(&unit)
+            && !num.is_empty()
+            || unit.starts_with('\\')
+                && unit.len() > 1
+                && unit[1..].chars().all(|c| c.is_ascii_alphabetic()))
+}
+
+/// Text typed for TeX (a caption, a short title): its braces must balance; `%`, `#` and `&`
+/// (which would end or break the argument) are escaped, and so are `$` when they do not pair
+/// up and `_`/`^` outside a formula.
+fn tex_text(v: &str) -> Option<String> {
+    if !super::caret::balanced(v) {
+        return None;
+    }
+    let chars: Vec<char> = v.chars().collect();
+    let escaped = |i: usize| i > 0 && chars[i - 1] == '\\';
+    let dollars = (0..chars.len())
+        .filter(|&i| chars[i] == '$' && !escaped(i))
+        .count();
+    let mut out = String::new();
+    let mut math = false;
+    for (i, &c) in chars.iter().enumerate() {
+        let plain = !escaped(i);
+        match c {
+            '%' | '#' | '&' if plain => out.push('\\'),
+            '$' if plain && dollars % 2 == 1 => out.push('\\'),
+            '$' if plain => math = !math,
+            '_' | '^' if plain && !math => out.push('\\'),
+            _ => {}
+        }
+        out.push(c);
+        if (c == '_' || c == '^') && plain && !math {
+            // \^ takes an argument: give it an empty one
+            if c == '^' {
+                out.push_str("{}");
+            }
+        }
+    }
+    Some(out)
+}
+
+/// What field `key` may be set to from what was typed (`v`, trimmed); None: it cannot.
+fn checked(key: &str, v: &str) -> Option<String> {
+    if v.is_empty() {
+        return Some(String::new());
+    }
+    let number = |v: &str| v.parse::<f64>().is_ok_and(f64::is_finite);
+    let ok = match key {
+        "width" => number(v.trim_end_matches('%').trim()) || is_length(v),
+        "scale" | "angle" => number(v),
+        "page" | "start" => v.parse::<u32>().is_ok(),
+        "height" | "margin" => is_length(v),
+        "trim" => {
+            let parts: Vec<&str> = v.split_whitespace().collect();
+            parts.len() == 4 && parts.iter().all(|p| number(p) || is_length(p))
+        }
+        "placement" => v.chars().all(|c| "htbpH!".contains(c)),
+        "label" => !v.contains(['\\', '{', '}', '#', '%', '~', '$', '&', '^', ',']),
+        "file" => !v.contains(['{', '}', '%', '#', '\\']),
+        "caption" | "short" | "label-format" => return tex_text(v),
+        _ => true,
+    };
+    ok.then(|| v.to_string())
+}
+
+/// The edit that gives field `key` of `el` the value `value` (empty: none / off), or None when
+/// there is nothing to change or the value cannot go into the TeX.
 pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
-    let v = value.trim();
+    let checked_key = if el.kind == Kind::List && key == "label" {
+        "label-format"
+    } else {
+        key
+    };
+    let v = &checked(checked_key, value.trim())?;
+    let v = v.as_str();
     match (el.kind, key) {
         (Kind::Figure | Kind::Image, "file") => {
             let g = graphics(src, el)?;
@@ -642,8 +805,11 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
         (Kind::Figure | Kind::Image, "width") => {
             let val = if v.is_empty() {
                 None
-            } else if let Ok(p) = v.trim_end_matches('%').parse::<f64>() {
-                Some(format!("{}\\linewidth", p / 100.0))
+            } else if let Ok(p) = v.trim_end_matches('%').trim().parse::<f64>() {
+                // 33.3 is 0.333, not 0.33299999999999996
+                let f = format!("{:.4}", p / 100.0);
+                let f = f.trim_end_matches('0').trim_end_matches('.');
+                Some(format!("{f}\\linewidth"))
             } else {
                 Some(v.to_string())
             };
@@ -701,13 +867,20 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
             let starred = src[at..].starts_with('*');
             match (v == "true", starred) {
                 (true, true) => change(at..at + 1, ""),
-                (false, false) => change(at..at, "*"),
+                // a starred heading takes no [short title]
+                (false, false) => match find_cmd(src, el.range.clone(), h)?.opts {
+                    Some(o) => change(at..o.end + 1, "*"),
+                    None => change(at..at, "*"),
+                },
                 _ => None,
             }
         }
         (Kind::Heading, "short") => {
             let t = &src[el.range.clone()];
             let (h, _) = HEADINGS.iter().find(|(h, _)| t[1..].starts_with(h))?;
+            if t[1 + h.len()..].starts_with('*') {
+                return None;
+            }
             let cmd = find_cmd(src, el.range.clone(), h)?;
             match (cmd.opts, v.is_empty()) {
                 (Some(o), true) => change(o.start - 1..o.end + 1, ""),
@@ -722,7 +895,10 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
                 change(start..r.end, "")
             }
             (Some((r, _)), false) => change(r, format!("\\label{{{v}}}")),
-            (None, false) => change(el.range.end..el.range.end, format!("\n\\label{{{v}}}")),
+            (None, false) => {
+                let at = heading_end(src, el)?;
+                change(at..at, format!("\\label{{{v}}}"))
+            }
             (None, true) => None,
         },
         (Kind::Equation, "numbered") => {
@@ -737,9 +913,11 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
             let (env, _, _) = env_head(src, el)?;
             let t = &src[el.range.clone()];
             let body_start = "\\begin{".len() + env.len() + 1;
-            let body_end = t.len() - format!("\\end{{{env}}}").len();
+            let close = format!("\\end{{{env}}}");
+            let body_end = t.rfind(&close)?;
             let text = format!("\\begin{{{v}}}{}\\end{{{v}}}", &t[body_start..body_end]);
-            change(el.range.clone(), text)
+            let end = el.range.start + body_end + close.len();
+            change(el.range.start..end, text)
         }
         (Kind::List, "label" | "start" | "nosep") => {
             let (_, opts, end) = env_head(src, el)?;
@@ -824,19 +1002,37 @@ fn set_cmd_arg(src: &str, el: &Element, name: &str, v: &str) -> Option<Change> {
         }
         (Some(c), false) => change(c.arg?, v),
         (None, false) => {
-            // after the caption for a label; else after the graphics or the first line
-            let after = find_cmd(
-                src,
-                el.range.clone(),
-                if name == "label" {
-                    "caption"
-                } else {
-                    "includegraphics"
-                },
-            )
-            .map(|c| c.end)
-            .or_else(|| env_head(src, el).map(|(_, _, e)| e))
-            .or_else(|| src[el.range.clone()].find('\n').map(|i| el.range.start + i))?;
+            let r = el.range.clone();
+            // what it shows: the picture or the tabular
+            let content = find_cmd(src, r.clone(), "includegraphics")
+                .map(|c| c.end)
+                .or_else(|| {
+                    [
+                        "\\end{tabular}",
+                        "\\end{tabularx}",
+                        "\\end{tabular*}",
+                        "\\end{longtable}",
+                    ]
+                    .iter()
+                    .filter_map(|e| src[r.clone()].find(e).map(|i| r.start + i + e.len()))
+                    .min()
+                });
+            let head = || env_head(src, el).map(|(_, _, e)| e);
+            // a label follows the caption (\ref numbers what came before it); a caption goes in
+            // before a label already there
+            let label = find_cmd(src, r.clone(), "label");
+            let after = match (name, label) {
+                ("label", _) => find_cmd(src, r.clone(), "caption")
+                    .map(|c| c.end)
+                    .or(content)
+                    .or_else(head),
+                (_, Some(l)) => {
+                    let line = src[..l.start].rfind('\n').unwrap_or(l.start);
+                    return change(line..line, format!("\n  \\{name}{{{v}}}"));
+                }
+                _ => content.or_else(head),
+            }
+            .or_else(|| src[r.clone()].find('\n').map(|i| r.start + i))?;
             change(after..after, format!("\n  \\{name}{{{v}}}"))
         }
         (None, true) => None,
@@ -886,19 +1082,35 @@ fn set_equation_env(src: &str, el: &Element, env: &str, starred: bool) -> Option
     } else {
         let name = t.strip_prefix("\\begin{")?.split('}').next()?;
         let inner = &t["\\begin{".len() + name.len() + 1..];
-        inner.strip_suffix(&format!("\\end{{{name}}}"))?
+        let inner = inner.strip_suffix(&format!("\\end{{{name}}}"))?;
+        // alignat's {columns} belongs to it alone
+        match inner
+            .strip_prefix('{')
+            .filter(|_| name.starts_with("alignat"))
+        {
+            Some(r) => r.split_once('}').map_or(inner, |(_, b)| b),
+            None => inner,
+        }
     };
+    if !equation_choices(src, el, "").iter().any(|(e, _)| *e == env)
+        && !t.contains(&format!("{{{env}"))
+    {
+        return None;
+    }
     let name = if starred {
         format!("{env}*")
     } else {
         env.to_string()
     };
-    let packages = if env == "equation" {
+    // equation* is amsmath's too
+    let packages = if env == "equation" && !starred {
         vec![]
     } else {
         vec!["amsmath"]
     };
-    let text = if env == "equation" && starred && (t.starts_with("\\[") || t.starts_with("$$")) {
+    let display =
+        t.starts_with("\\[") || t.starts_with("$$") || t.starts_with("\\begin{displaymath}");
+    let text = if env == "equation" && starred && display {
         // unnumbered and already a display: keep it
         return None;
     } else {
@@ -1028,8 +1240,27 @@ mod tests {
         );
         assert_eq!(
             apply(h, set(h, &el, "label", "sec:intro").unwrap()),
-            "\\section{Intro}\n\\label{sec:intro}"
+            "\\section{Intro}\\label{sec:intro}"
         );
+        // its label is found after the title, inside the block too; non-ASCII after it is fine
+        let h2 = "\\section{Intro}\\label{a}\n中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中";
+        let el2 = element_at(h2, Some(0..h2.len()), 0);
+        let label = fields(h2, &el2)
+            .into_iter()
+            .find(|f| f.key == "label")
+            .unwrap();
+        assert_eq!(label.value, "a");
+        // unnumbered: its [short title] goes, and none is offered
+        let hs = "\\section[In]{Intro}";
+        let els = element_at(hs, Some(0..hs.len()), 0);
+        assert_eq!(
+            apply(hs, set(hs, &els, "numbered", "false").unwrap()),
+            "\\section*{Intro}"
+        );
+        let star = "\\section*{Intro}";
+        let elx = element_at(star, Some(0..star.len()), 0);
+        assert!(fields(star, &elx).iter().all(|f| f.key != "short"));
+        assert_eq!(set(star, &elx, "short", "In"), None);
         let eq = "\\[ E = mc^2 \\]";
         let el = element_at(eq, Some(0..eq.len()), 0);
         assert_eq!(el.kind, Kind::Equation);
@@ -1082,5 +1313,96 @@ mod tests {
         );
         assert!(s2.contains("\\usepackage[margin=1in]{geometry}"));
         assert_eq!(value(&s2, &element_at(&s2, None, 0), "margin"), "1in");
+    }
+
+    #[test]
+    fn what_cannot_go_in_stays_out() {
+        let fig = "\\begin{figure}[h]\n  \\includegraphics[width=0.5\\linewidth]{a.png}\n  \\caption{A}\n\\end{figure}";
+        let el = element_at(fig, Some(0..fig.len()), 0);
+        // numbers and lengths
+        assert_eq!(set(fig, &el, "width", "abc"), None);
+        assert_eq!(set(fig, &el, "height", "Sweep text"), None);
+        assert_eq!(set(fig, &el, "scale", "x"), None);
+        assert_eq!(set(fig, &el, "trim", "1 2 3"), None);
+        assert!(set(fig, &el, "trim", "1 2 3cm 4").is_some());
+        assert!(apply(fig, set(fig, &el, "height", "2cm").unwrap()).contains("height=2cm"));
+        assert!(
+            apply(fig, set(fig, &el, "width", "33.3").unwrap()).contains("width=0.333\\linewidth")
+        );
+        assert_eq!(set(fig, &el, "placement", "here"), None);
+        assert_eq!(set(fig, &el, "label", "a#b"), None);
+        // TeX text: braces must balance; specials are escaped
+        assert_eq!(set(fig, &el, "caption", "\\textbf{x"), None);
+        assert!(
+            apply(
+                fig,
+                set(fig, &el, "caption", "50% & #1 {x} $y_2$ a_b").unwrap()
+            )
+            .contains("\\caption{50\\% \\& \\#1 {x} $y_2$ a\\_b}")
+        );
+    }
+
+    #[test]
+    fn the_odd_elements() {
+        // wrapfigure: its arguments are not a placement
+        let w = "\\begin{wrapfigure}{r}{0.4\\textwidth}\n  \\includegraphics{a}\n\\end{wrapfigure}";
+        let el = element_at(w, Some(0..w.len()), 0);
+        assert!(fields(w, &el).iter().all(|f| f.key != "placement"));
+        let c = apply(w, set(w, &el, "align", "center").unwrap());
+        assert!(
+            c.starts_with("\\begin{wrapfigure}{r}{0.4\\textwidth}\n  \\centering"),
+            "{c}"
+        );
+        // align's & keeps it from equation and gather
+        let a = "\\begin{align}\n  x &= 1 \\\\\n  y &= 2\n\\end{align}";
+        let el = element_at(a, Some(0..a.len()), 0);
+        let env = fields(a, &el).into_iter().find(|f| f.key == "env").unwrap();
+        let Input::Choice(opts) = env.input else {
+            panic!()
+        };
+        assert_eq!(
+            opts.iter().map(|(e, _)| *e).collect::<Vec<_>>(),
+            vec!["align"]
+        );
+        assert_eq!(set(a, &el, "env", "equation"), None);
+        // displaymath is unnumbered already
+        let d = "\\begin{displaymath}\n  x\n\\end{displaymath}";
+        let el = element_at(d, Some(0..d.len()), 0);
+        assert_eq!(set(d, &el, "numbered", "false"), None);
+        // equation* needs amsmath
+        let e = "\\begin{equation}\n  x\n\\end{equation}";
+        let el = element_at(e, Some(0..e.len()), 0);
+        assert_eq!(
+            set(e, &el, "numbered", "false").unwrap().packages,
+            vec!["amsmath"]
+        );
+        // a label added before a caption still ends up after it
+        let f = "\\begin{figure}\n  \\includegraphics{a}\n\\end{figure}";
+        let el = element_at(f, Some(0..f.len()), 0);
+        let f1 = apply(f, set(f, &el, "label", "fig:a").unwrap());
+        let el = element_at(&f1, Some(0..f1.len()), 0);
+        let f2 = apply(&f1, set(&f1, &el, "caption", "Cap").unwrap());
+        assert!(
+            f2.find("\\caption").unwrap() < f2.find("\\label").unwrap(),
+            "{f2}"
+        );
+        assert!(
+            f2.find("\\includegraphics").unwrap() < f2.find("\\caption").unwrap(),
+            "{f2}"
+        );
+        // a list block with text after its \end
+        let l = "\\begin{itemize}\n  \\item a\n\\end{itemize}\nAfter";
+        let el = Element {
+            kind: Kind::List,
+            range: 0..l.len(),
+        };
+        assert_eq!(
+            apply(l, set(l, &el, "env", "enumerate").unwrap()),
+            "\\begin{enumerate}\n  \\item a\n\\end{enumerate}\nAfter"
+        );
+        // an equation in a list's item is the equation
+        let li = "\\begin{itemize}\n  \\item see\n  \\begin{equation}\n    x\n  \\end{equation}\n\\end{itemize}";
+        let at = li.find("x\n").unwrap();
+        assert_eq!(element_at(li, Some(0..li.len()), at).kind, Kind::Equation);
     }
 }

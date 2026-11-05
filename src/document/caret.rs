@@ -1150,12 +1150,48 @@ pub fn enter_in_paragraph(src: &str, block: Range<usize>, off: usize) -> Option<
     })
 }
 
+/// Environments a block that is not a float may go inside: plain alignment, quotes, lists.
+const BLOCKS_INSIDE: &[&str] = &[
+    "document",
+    "center",
+    "flushleft",
+    "flushright",
+    "quote",
+    "quotation",
+    "itemize",
+    "enumerate",
+    "description",
+];
+
+/// Whether a block (`float`: a figure or table) can go in at `off`: not inside a minipage, a
+/// table, a float, a box or an environment of the document's own; a float only at the top
+/// (LaTeX takes one in a list or a center, but rtex's fast path for that paragraph does not).
+fn block_fits(src: &str, off: usize, float: bool) -> bool {
+    envs_at(src, off)
+        .iter()
+        .all(|e| e == "document" || !float && BLOCKS_INSIDE.contains(&e.as_str()))
+}
+
+/// Where a footnote or a display formula typed at `off` in `block` can go: there in running
+/// text (formatting around it is fine), else after the block — out of a caption, a heading, a
+/// table's cell, a float.
+pub fn box_spot(src: &str, block: Range<usize>, off: usize) -> usize {
+    let prose = heading_title(&src[block.clone()], block.start).is_none()
+        && block_fits(src, off, false)
+        && open_groups(&src[block.clone()], block.start, off)
+            .iter()
+            .all(|(n, ..)| FORMAT.contains(&n.as_str()));
+    if prose { off } else { block.end }
+}
+
 /// `tex` (its caret at MARK, else after it) as a block of its own at `off` in `block`: before
-/// the block with the caret at its start, after it at its end or in a heading, a table or an
-/// argument that cannot be split, else splitting the paragraph (or item) there.
+/// the block with the caret at its start, after it at its end, in a heading, in an environment
+/// it cannot go into or an argument that cannot be split; else splitting the paragraph (or
+/// item) there.
 pub fn insert_block(src: &str, block: Range<usize>, off: usize, tex: &str) -> Edit {
     let after = || Edit::marked(block.end..block.end, &format!("\n\n{}", mark_end(tex)));
-    if in_table(src, off) {
+    let float = tex.starts_with("\\begin{figure") || tex.starts_with("\\begin{table");
+    if !block_fits(src, off, float) {
         return after();
     }
     let text = item_at(src, off)
@@ -1400,6 +1436,29 @@ mod tests {
             t,
             "\\begin{itemize}\n\\item one \n\nX\n\ntwo\n\\end{itemize}"
         );
+        // in a minipage, a table or an environment of the document's own: after the block
+        for s in [
+            "\\begin{minipage}{3cm}\none |two\n\\end{minipage}",
+            "\\begin{tabular}{ll}\na |b & c \\\\\n\\end{tabular}",
+            "\\begin{definition}{x}\none |two\n\\end{definition}",
+        ] {
+            let got = ins(s);
+            assert!(got.ends_with("\n\n\\newpage|"), "{got}");
+        }
+        // a float leaves a list; a footnote leaves a caption, not formatting
+        let l = "\\begin{itemize}\n\\item one two\n\\end{itemize}";
+        let e = insert_block(
+            l,
+            0..l.len(),
+            l.find("two").unwrap(),
+            "\\begin{figure}x\\end{figure}",
+        );
+        assert_eq!(e.range, l.len()..l.len());
+        let f = "\\begin{figure}\n\\caption{A pic}\n\\end{figure}";
+        assert_eq!(box_spot(f, 0..f.len(), f.find("pic").unwrap()), f.len());
+        let p = "Some \\textbf{bold} text";
+        let at = p.find("old").unwrap();
+        assert_eq!(box_spot(p, 0..p.len(), at), at);
     }
 
     #[test]

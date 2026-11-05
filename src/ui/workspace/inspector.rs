@@ -15,7 +15,9 @@ pub struct Inspector {
     /// The element the fields were last filled from: its kind and where it starts.
     shown: Option<(Kind, usize)>,
     advanced: bool,
-    pending: Option<Task<()>>,
+    /// A field's change waiting for typing to stop, by field: one per field, so typing in a
+    /// second field does not drop the first one's.
+    pending: HashMap<&'static str, Task<()>>,
     _subs: Vec<Subscription>,
 }
 
@@ -155,19 +157,28 @@ impl Workspace {
                     return;
                 }
                 let value = input.read(cx).value().to_string();
+                // the element it was typed for (the caret may move on before it applies)
+                let Some((kind, start)) = this.doc().map(|d| {
+                    let el = d.read(cx).element();
+                    (el.kind, el.range.start)
+                }) else {
+                    return;
+                };
                 let delay = if matches!(ev, InputEvent::PressEnter { .. }) {
                     0
                 } else {
                     400
                 };
-                this.inspector.pending = Some(cx.spawn(async move |this, cx| {
+                let task = cx.spawn(async move |this, cx| {
                     cx.background_executor()
                         .timer(Duration::from_millis(delay))
                         .await;
                     let _ = this.update(cx, |this, cx| {
-                        this.with_doc(cx, |d, cx| d.set_element_field(key, &value, cx));
+                        this.inspector.pending.remove(key);
+                        this.with_doc(cx, |d, cx| d.set_field_at(kind, start, key, &value, cx));
                     });
-                }));
+                });
+                this.inspector.pending.insert(key, task);
             },
         );
         self.inspector._subs.push(sub);

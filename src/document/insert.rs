@@ -59,7 +59,19 @@ pub fn new_label(src: &str, prefix: &str, stem: &str) -> String {
 
 /// `\href` to `url` showing `text` (TeX already), or `\url` when there is no text.
 pub fn link(url: &str, text: &str) -> String {
-    let url = url.trim().replace('%', "\\%").replace('#', "\\#");
+    // spaces as %20; a brace the URL cannot balance would end the argument
+    let url: String = url
+        .trim()
+        .chars()
+        .map(|c| match c {
+            ' ' => "%20".to_string(),
+            '{' => "%7B".into(),
+            '}' => "%7D".into(),
+            '\\' => "%5C".into(),
+            c => c.to_string(),
+        })
+        .collect();
+    let url = url.replace('%', "\\%").replace('#', "\\#");
     if text.trim().is_empty() {
         format!("\\url{{{url}}}")
     } else {
@@ -130,6 +142,10 @@ fn what_is_labelled(src: &str, at: usize) -> (&'static str, String) {
             (None, None) => break,
         };
         let name_at = k + if open { 7 } else { 5 };
+        if in_comment(src, k) {
+            pos = name_at;
+            continue;
+        }
         let name = before[name_at..]
             .split('}')
             .next()
@@ -162,12 +178,13 @@ fn what_is_labelled(src: &str, at: usize) -> (&'static str, String) {
             .and_then(|n| before.rfind(&format!("\\begin{{{n}")))
             .unwrap_or(at);
         let end = src[at..].find("\\end{").map_or(src.len(), |j| at + j);
-        src[start..end]
-            .find("\\caption{")
-            .and_then(|c| {
-                let c = start + c;
-                group_close(src, c + 8).map(|e| plain(&src[c + 9..e]))
-            })
+        // the caption just before the label (a subfigure's come earlier), else after it
+        let found = src[start..at]
+            .rfind("\\caption{")
+            .map(|c| start + c)
+            .or_else(|| src[at..end].find("\\caption{").map(|c| at + c));
+        found
+            .and_then(|c| group_close(src, c + 8).map(|e| plain(&src[c + 9..e])))
             .unwrap_or_default()
     };
     match env.copied() {
@@ -240,17 +257,25 @@ fn plain(tex: &str) -> String {
 /// name, else every .bib in `dir`.
 pub fn bib_files(src: &str, dir: &Path) -> Vec<std::path::PathBuf> {
     let mut out = vec![];
-    for cmd in ["\\bibliography{", "\\addbibresource{"] {
+    for cmd in ["\\bibliography", "\\addbibresource"] {
         let mut from = 0;
         while let Some(i) = src[from..].find(cmd).map(|i| i + from) {
             from = i + cmd.len();
-            let Some(close) = group_close(src, i + cmd.len() - 1) else {
-                continue;
-            };
-            if in_comment(src, i) {
+            // \addbibresource[options]{file}
+            let mut open = from;
+            if src[open..].starts_with('[') {
+                match src[open..].find(']') {
+                    Some(e) => open += e + 1,
+                    None => continue,
+                }
+            }
+            if !src[open..].starts_with('{') || in_comment(src, i) {
                 continue;
             }
-            for name in src[i + cmd.len()..close].split(',') {
+            let Some(close) = group_close(src, open) else {
+                continue;
+            };
+            for name in src[open + 1..close].split(',') {
                 let name = name.trim();
                 let name = if name.ends_with(".bib") {
                     name.to_string()
@@ -300,7 +325,12 @@ pub fn bib_entries(bib: &str) -> Vec<BibEntry> {
         {
             continue;
         }
-        let body_end = group_close(bib, open).unwrap_or(bib.len());
+        // @article{…} or @article(…)
+        let body_end = if bib[open..].starts_with('(') {
+            bib[open..].find(")\n").map_or(bib.len(), |i| open + i)
+        } else {
+            group_close(bib, open).unwrap_or(bib.len())
+        };
         let body = &bib[open + 1..body_end];
         let Some((key, fields)) = body.split_once(',') else {
             continue;
@@ -393,6 +423,13 @@ pub fn save_into_figures(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Resul
         })
         .collect();
     let (stem, ext) = name.rsplit_once('.').unwrap_or((&name, "png"));
+    // one dot only: graphicx takes the first one for the extension's
+    let stem = stem.replace('.', "-");
+    let stem = if stem.is_empty() {
+        "image".into()
+    } else {
+        stem
+    };
     let mut file = format!("{stem}.{ext}");
     let mut n = 2;
     loop {
@@ -434,6 +471,21 @@ mod tests {
         );
         assert_eq!(l[1].reference(), "Figure~\\ref{fig:a}");
         assert_eq!(l[2].reference(), "(\\ref{eq:x})");
+        // a commented-out figure is not one; a figure's own caption, not its subfigure's
+        let s2 = "% \\begin{figure}\n\\section{A}\\label{a}\n\\begin{figure}\n\\begin{subfigure}{1in}\\caption{Sub}\\label{s}\\end{subfigure}\n\\caption{Whole}\\label{w}\n\\end{figure}";
+        let l2 = labels(s2);
+        let got: Vec<_> = l2
+            .iter()
+            .map(|l| (l.key.as_str(), l.kind, l.title.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("a", "Section", "A"),
+                ("s", "Figure", "Sub"),
+                ("w", "Figure", "Whole")
+            ]
+        );
         assert_eq!(new_label(src, "fig", "a"), "fig:a-2");
         assert_eq!(new_label(src, "fig", "My Plot.png"), "fig:my-plot-png");
     }
@@ -443,6 +495,11 @@ mod tests {
         let bib = "@comment{x}\n@Article{knuth84,\n  author = {Knuth, Donald E. and Other, A.},\n  title = \"Literate {P}rogramming\",\n  year = 1984,\n}\n@book{lamport, title={\\LaTeX: A Document Preparation System}, author={Leslie Lamport}, year={1994}}";
         let e = bib_entries(bib);
         assert_eq!(e.len(), 2);
+        let p = bib_entries("@book(lamport,\n  title = {A Book},\n  year = 1994\n)\n");
+        assert_eq!(
+            (p[0].key.as_str(), p[0].title.as_str()),
+            ("lamport", "A Book")
+        );
         assert_eq!(e[0].key, "knuth84");
         assert_eq!(e[0].title, "Literate Programming");
         assert_eq!(e[0].year, "1984");
@@ -470,6 +527,10 @@ mod tests {
             save_into_figures(&dir, "my plot.png", b"b").unwrap(),
             "figures/my-plot-2.png"
         );
+        assert_eq!(
+            save_into_figures(&dir, "a.b.c.jpg", b"c").unwrap(),
+            "figures/a-b-c.jpg"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -480,6 +541,10 @@ mod tests {
             "\\href{https://x.org/\\#a}{site}"
         );
         assert_eq!(link("https://x.org", ""), "\\url{https://x.org}");
+        assert_eq!(
+            link(" https://x.org/a b{c} ", "t"),
+            "\\href{https://x.org/a\\%20b\\%7Bc\\%7D}{t}"
+        );
         let t = table(2, 2, "tab:1");
         assert!(t.contains("{|l|l|}"));
         assert!(t.contains(&format!("Column 1{MARK} & Column 2 \\\\")));

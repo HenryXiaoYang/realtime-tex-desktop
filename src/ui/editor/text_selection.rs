@@ -305,10 +305,11 @@ impl Doc {
                 self.insert_pictures(&files, cx);
                 return;
             }
+            // a browser's Copy Image may put an empty string beside the picture
             let text = item
                 .entries()
                 .iter()
-                .any(|e| matches!(e, ClipboardEntry::String(_)));
+                .any(|e| matches!(e, ClipboardEntry::String(s) if !s.text.trim().is_empty()));
             if !text
                 && let Some(img) = item.entries().iter().find_map(|e| match e {
                     ClipboardEntry::Image(i) => Some(i),

@@ -28,7 +28,15 @@ impl Doc {
                 let end = self.blocks[last].range.end;
                 caret::insert_block(&self.source, self.blocks[last].range.clone(), end, tex)
             }
-            (None, None) => return,
+            // nowhere chosen (a picture dropped beside the text): at the document's end
+            (None, None) => {
+                let end = self
+                    .source
+                    .rfind("\\end{document}")
+                    .unwrap_or(self.source.len());
+                let pre = self.source[..end].trim_end().len();
+                Edit::marked(pre..end, &format!("\n\n{}\n\n", tex.replace(MARK, "")))
+            }
         };
         self.selected = None;
         if self.caret.is_none() {
@@ -48,29 +56,64 @@ impl Doc {
 
     /// `tex` at the caret, over the selection, the caret after it.
     pub fn insert_inline(&mut self, tex: &str, packages: &[&str], cx: &mut Context<Self>) {
-        self.delete_selection(cx);
+        if self.caret.is_none() {
+            return;
+        }
+        // one undo step with the selection it replaces
+        if !self.delete_selection(cx) {
+            self.checkpoint();
+        }
+        self.typing = None;
+        self.overlay = None;
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
-        self.apply(
-            Edit {
-                range: off..off,
-                text: tex.into(),
-                caret: off + tex.len(),
-            },
-            cx,
-        );
+        if self.replace(off..off, tex, cx)
+            && let Some(c) = self.caret.as_mut()
+        {
+            c.off = off + tex.len();
+            c.goal_x = None;
+        }
         self.add_packages(packages, cx);
+        cx.notify();
+    }
+
+    /// The caret moved to where a footnote or a display formula can go (out of a caption, a
+    /// heading, a table's cell: after the block). `heading_ok`: a footnote may stay in a
+    /// heading, protected from the contents' moving argument; whether it did.
+    fn caret_for_box(&mut self, heading_ok: bool) -> bool {
+        let Some(off) = self.caret.as_ref().map(|c| c.off) else {
+            return false;
+        };
+        let Some(b) = self.block_of(off).map(|bi| self.blocks[bi].range.clone()) else {
+            return false;
+        };
+        let heading = caret::heading_title(&self.source[b.clone()], b.start)
+            .is_some_and(|t| t.start <= off && off <= t.end);
+        if heading_ok && heading {
+            return true;
+        }
+        if let Some(c) = self.caret.as_mut() {
+            c.off = caret::box_spot(&self.source, b, off);
+            c.anchor = None;
+        }
+        false
     }
 
     /// A footnote at the caret, written in the source box.
     pub fn insert_footnote(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.edit_tex_at_caret(&format!("\\footnote{{{}}}", complete::MARK), window, cx);
+        let p = if self.caret_for_box(true) {
+            "\\protect"
+        } else {
+            ""
+        };
+        self.edit_tex_at_caret(&format!("{p}\\footnote{{{}}}", complete::MARK), window, cx);
     }
 
     /// A numbered display formula at the caret, written in the source box.
     pub fn insert_display_math(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let m = complete::MARK;
+        self.caret_for_box(false);
         self.edit_tex_at_caret(
             &format!("\n\\begin{{equation}}\n  {m}\n\\end{{equation}}\n"),
             window,
@@ -90,8 +133,23 @@ impl Doc {
         if url.trim().is_empty() {
             return;
         }
-        match self.selection_range() {
-            Some(r) if caret::balanced(&self.source[r.clone()]) => {
+        let sel = self.selection_range();
+        // the selection becomes the link's text when it is still what the text field holds
+        let wrap = sel.clone().filter(|r| {
+            let t = &self.source[r.clone()];
+            caret::balanced(t)
+                && !t.contains("\n\n")
+                && !t.contains("\\href")
+                && !t.contains("\\url")
+                && (text.trim().is_empty() || text.trim() == self.selected_text().trim())
+        });
+        if sel.is_some() && wrap.is_none() && text.trim().is_empty() {
+            self.status = "A link's text is one stretch of a paragraph: select less".into();
+            cx.notify();
+            return;
+        }
+        match wrap {
+            Some(r) => {
                 let tex = insert::link(url, &self.source[r.clone()]);
                 let end = r.start + tex.len();
                 self.apply(
@@ -198,8 +256,12 @@ impl Doc {
         if readable
             && let (Ok(f), Ok(d)) = (file.canonicalize(), dir.canonicalize())
             && let Ok(rel) = f.strip_prefix(&d)
+            && let rel = rel.to_string_lossy().replace('\\', "/")
+            // a name \includegraphics cannot take as it is gets a copy that it can
+            && !rel.contains(['%', '#', '{', '}', '~', '$', '&', '^', '\\'])
+            && Path::new(&rel).file_stem().is_some_and(|s| !s.to_string_lossy().contains('.'))
         {
-            return Ok(rel.to_string_lossy().replace('\\', "/"));
+            return Ok(rel);
         }
         let (bytes, name) = if readable {
             (
@@ -220,7 +282,7 @@ impl Doc {
             .map_or(String::new(), |s| s.to_string_lossy().to_string());
         let label = insert::new_label(&self.source, "fig", &stem);
         let caption = caret::escape(&stem.replace(['-', '_'], " "));
-        // the path's own TeX specials stay as they are: \includegraphics reads it verbatim
+        // `rel` has no TeX specials (picture_path saw to it)
         let tex = insert::figure(rel, &label, &caption);
         debug_assert!(tex.contains(MARK));
         self.insert_block(&tex, &["graphicx"], cx);
@@ -255,16 +317,17 @@ fn to_png(file: &Path) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::typing::tests::calm;
     use super::Doc;
     use crate::document::element::Kind;
+    use crate::document::insert;
     use crate::engine;
     use crate::ui::settings::AppSettings;
     use gpui_kit::{Entity, EntityInputHandler, TestAppContext, VisualTestContext, Window};
 
     /// A 1×1 PNG.
-    const PNG: &[u8] = &[
+    pub(in crate::ui::editor) const PNG: &[u8] = &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2,
         0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 0,
         3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
@@ -372,7 +435,8 @@ mod tests {
             at(d, cx);
             d.extending(cx, |d, cx| d.move_word(1, cx));
             assert_eq!(d.selected_text(), "together");
-            d.insert_link("https://example.com/#x", "ignored", cx);
+            // the dialog's text field starts as the selection's text
+            d.insert_link("https://example.com/#x", "together", cx);
         });
         let s = src(cx, &doc);
         assert!(
@@ -381,6 +445,14 @@ mod tests {
         );
         assert!(s.contains("hyperref"));
         typesets_and_undoes(cx, &doc, &base, "link");
+        // text typed over the selection's: the link shows it instead
+        doc.update(cx, |d, cx| {
+            at(d, cx);
+            d.extending(cx, |d, cx| d.move_word(1, cx));
+            d.insert_link("https://example.com", "a site", cx);
+        });
+        assert!(src(cx, &doc).contains("Used \\href{https://example.com}{a site}"));
+        typesets_and_undoes(cx, &doc, &base, "link with its own text");
 
         // a footnote and a display formula open the source box at the caret
         doc.update_in(cx, |d, window, cx| {
@@ -433,5 +505,154 @@ mod tests {
         );
         let status = cx.read(|cx| doc.read(cx).status.clone());
         assert!(!status.contains("LaTeX"), "equation: {status}");
+    }
+
+    /// Every Insert-tab action at the start, middle and end of every text block of a document
+    /// with lists, tables, a minipage, formulas (or RTD_TYPE's): each typesets without a LaTeX
+    /// error and one undo restores the source. `cargo test --release insert_everywhere --
+    /// --ignored --nocapture` (RTD_SWEEP_ONLY=3:figure runs that one).
+    #[gpui_kit::test]
+    #[ignore]
+    fn insert_everywhere(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("rtd-insert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // RTD_TYPE=/abs/main.tex sweeps that document instead (copied: it writes beside it)
+        let fixture = std::env::var("RTD_TYPE")
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .unwrap_or_else(|_| super::super::element_edit::tests::DOC.into());
+        std::fs::write(dir.join("main.tex"), fixture).unwrap();
+        std::fs::write(dir.join("pic.png"), PNG).unwrap();
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        engine::configure("", "/Library/TeX/texbin");
+        let (doc, cx) = cx.add_window_view(|window: &mut Window, cx| {
+            Doc::new(
+                dir.clone(),
+                "main.tex".into(),
+                Default::default(),
+                window,
+                cx,
+            )
+        });
+        super::super::typing::tests::wait(cx, &doc, "the first layout", |d| {
+            d.spans_pending == 0 && d.blocks.iter().filter(|b| !b.rows.is_empty()).count() > 3
+        });
+        calm(cx, &doc);
+        let base = src(cx, &doc);
+        let spots: Vec<(usize, String, [usize; 3])> = cx.read(|cx| {
+            let d = doc.read(cx);
+            (0..d.blocks.len())
+                .filter(|&b| d.is_text_block(b))
+                .filter_map(|b| {
+                    let page = d.blocks[b].rows.first()?.page;
+                    let st: Vec<usize> = d.map_of(b, page)?.stops.iter().map(|s| s.off).collect();
+                    let name: String = d.source[d.blocks[b].range.clone()]
+                        .chars()
+                        .take(30)
+                        .collect();
+                    Some((b, name, [st[0], st[st.len() / 2], *st.last()?]))
+                })
+                .collect()
+        });
+        type Op = (
+            &'static str,
+            usize,
+            fn(&mut Doc, &mut Window, &mut gpui_kit::Context<Doc>),
+        );
+        let ops: [Op; 9] = [
+            ("pagebreak", 0, |d, _, cx| {
+                d.insert_block("\\newpage", &[], cx)
+            }),
+            ("figure", 1, |d, _, cx| {
+                d.insert_block(
+                    &insert::figure("pic.png", "fig:sweep", "Sweep"),
+                    &["graphicx"],
+                    cx,
+                )
+            }),
+            ("table", 2, |d, _, cx| d.insert_table(2, 2, cx)),
+            ("contents", 1, |d, _, cx| {
+                d.insert_block("\\tableofcontents", &[], cx)
+            }),
+            ("ref", 1, |d, _, cx| {
+                d.insert_inline("Figure~\\ref{fig:a}", &[], cx)
+            }),
+            ("cite-merge", 1, |d, _, cx| d.insert_citation("k", cx)),
+            ("link", 1, |d, _, cx| {
+                d.insert_link("https://example.com/a b", "site", cx)
+            }),
+            ("footnote", 1, |d, w, cx| d.insert_footnote(w, cx)),
+            ("equation", 1, |d, w, cx| d.insert_display_math(w, cx)),
+        ];
+        let only = std::env::var("RTD_SWEEP_ONLY").ok();
+        let (mut failures, mut n, t0) = (vec![], 0, std::time::Instant::now());
+        for (bi, name, at) in &spots {
+            for (op, pos, f) in &ops {
+                if only
+                    .as_ref()
+                    .is_some_and(|o| !format!("{bi}:{op}").starts_with(o.as_str()))
+                {
+                    continue;
+                }
+                n += 1;
+                let what = format!("block {bi} {name:?}: {op}");
+                doc.update_in(cx, |d, window, cx| {
+                    d.status.clear();
+                    d.set_caret(at[*pos], cx);
+                    f(d, window, cx);
+                });
+                cx.run_until_parked();
+                // a box opened (footnote, equation): write in it and leave
+                doc.update_in(cx, |d, window, cx| {
+                    if d.active.is_some() {
+                        d.input
+                            .update(cx, |s, cx| s.replace_text_in_range(None, "x", window, cx));
+                    }
+                });
+                cx.run_until_parked();
+                doc.update_in(cx, |d, window, cx| {
+                    if d.active.is_some() {
+                        d.leave(window, cx);
+                    }
+                });
+                calm(cx, &doc);
+                let (s, status) = cx.read(|cx| {
+                    let d = doc.read(cx);
+                    (d.source.clone(), d.status.clone())
+                });
+                // a citation of a key no .bib has warns, it does not fail
+                if status.contains("LaTeX") {
+                    let r = cx.read(|cx| doc.read(cx).last_edit.clone());
+                    let around =
+                        &s[r.start.saturating_sub(40).min(s.len())..(r.end + 40).min(s.len())];
+                    failures.push(format!("{what} → {status} (around {around:?})"));
+                }
+                if s == base {
+                    failures.push(format!("{what} → nothing went in"));
+                    continue;
+                }
+                doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+                calm(cx, &doc);
+                if src(cx, &doc) != base {
+                    failures.push(format!("{what} → undo did not restore the source"));
+                    let b = base.clone();
+                    doc.update(cx, |d, cx| {
+                        d.replace(0..d.source.len(), &b, cx);
+                    });
+                    calm(cx, &doc);
+                }
+            }
+        }
+        println!(
+            "{n} insertions at {} spots in {:?}",
+            spots.len(),
+            t0.elapsed()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 }

@@ -359,19 +359,26 @@ impl Workspace {
                     text.read(cx).value().to_string(),
                     url.read(cx).value().to_string(),
                 );
+                // no address yet: the dialog stays for one
+                if u.trim().is_empty() {
+                    return;
+                }
                 doc.update(cx, |d, cx| d.insert_link(&u, &t, cx));
                 window.close_dialog(cx);
             })
         };
-        let sub = {
-            let ok = ok.clone();
-            cx.subscribe_in(&url, window, move |_, _, ev: &InputEvent, window, cx| {
-                if matches!(ev, InputEvent::PressEnter { .. }) {
-                    ok(window, cx);
-                }
+        // Enter in either field inserts
+        self._dialog_subs = [&url, &text]
+            .into_iter()
+            .map(|input| {
+                let ok = ok.clone();
+                cx.subscribe_in(input, window, move |_, _, ev: &InputEvent, window, cx| {
+                    if matches!(ev, InputEvent::PressEnter { .. }) {
+                        ok(window, cx);
+                    }
+                })
             })
-        };
-        self._dialog_sub = Some(sub);
+            .collect();
         let first = std::cell::Cell::new(true);
         window.open_dialog(cx, move |dialog, window, cx| {
             if first.replace(false) {

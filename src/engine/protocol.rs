@@ -146,10 +146,16 @@ pub(super) fn parse(line: &str) -> Option<Msg> {
                 })
             }
             // an incomplete edit (`\fr` on the way to `\frac`): keep showing the last good result
+            // (the first diagnostic that says something: some come with an empty message)
             "ParagraphUpdate" if v["status"] == "error" => Some(Msg::Status(format!(
                 "LaTeX error: {}",
-                v["diagnostics"][0]["message"]
-                    .as_str()
+                v["diagnostics"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|d| d["message"].as_str())
+                    .map(str::trim)
+                    .find(|m| !m.is_empty())
                     .unwrap_or("this paragraph does not compile")
             ))),
             "ParagraphUpdate" => Some(Msg::Paragraph {

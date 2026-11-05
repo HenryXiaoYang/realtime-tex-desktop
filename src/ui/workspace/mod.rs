@@ -70,7 +70,7 @@ pub struct Workspace {
     rename: Option<(String, Entity<InputState>)>,
     _subs: Vec<Subscription>,
     _rename_sub: Option<Subscription>,
-    _dialog_sub: Option<Subscription>,
+    _dialog_subs: Vec<Subscription>,
 }
 
 impl Workspace {
@@ -96,7 +96,7 @@ impl Workspace {
             expanded: Default::default(),
             _subs: vec![],
             _rename_sub: None,
-            _dialog_sub: None,
+            _dialog_subs: vec![],
         };
         let sub = cx.subscribe(&this.tree, |this, _, ev: &TreeEvent, cx| {
             match ev {
