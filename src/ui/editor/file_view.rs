@@ -72,11 +72,7 @@ impl Doc {
         let view = div()
             .id("viewer")
             .size_full()
-            .bg(if theme.mode.is_dark() {
-                rgb(palette::DARK_DESK).into()
-            } else {
-                theme.muted
-            })
+            .bg(palette::desk(&theme))
             .overflow_scroll()
             .track_scroll(&self.scroll)
             .on_pinch(cx.listener(|this, ev: &PinchEvent, window, cx| {

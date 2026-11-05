@@ -206,12 +206,8 @@ impl Workspace {
         // files above, outline below, with a divider to drag between them
         div()
             .size_full()
-            // gray in the dark theme, set off from the black pages
-            .bg(if theme.mode.is_dark() {
-                rgb(crate::ui::palette::DARK_PANEL).into()
-            } else {
-                theme.sidebar
-            })
+            // the theme's sidebar, set off from the pages
+            .bg(crate::ui::palette::panel(&theme))
             .text_color(theme.sidebar_foreground)
             .child(
                 v_resizable("sidebar-split")

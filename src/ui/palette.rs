@@ -1,14 +1,36 @@
 // The editor's colours. The marks it draws on the typeset pages (the selected block, the insert
 // line, the text selection, find matches, the source box) take their hue from the theme's roles,
 // made to stand out from the paper they sit on, white or dark; and the surfaces the pages lie in.
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::{ActiveTheme, Colorize, Theme};
 use gpui_kit::{App, Hsla, Rgba, rgb};
 
-/// The desk the pages lie on in the dark theme: near-black, between the gray panel and a black
-/// page.
-pub const DARK_DESK: u32 = 0x141414;
-/// The project panel in the dark theme: gray, set off from the black pages.
-pub const DARK_PANEL: u32 = 0x2c2c2c;
+/// The desk the pages lie on, from the theme: its muted surface; in a dark theme, a third of
+/// the way from its background to that (near-black, between the panel and a black page).
+pub fn desk(theme: &Theme) -> Hsla {
+    desk_of(theme.mode.is_dark(), theme.background, theme.muted)
+}
+
+/// The project panel, from the theme: its sidebar, unless a dark theme's sidebar is as dark as
+/// the desk (the default's is its background); then its muted surface, set off from the pages.
+pub fn panel(theme: &Theme) -> Hsla {
+    panel_of(theme.sidebar, theme.muted, desk(theme))
+}
+
+fn desk_of(dark: bool, background: Hsla, muted: Hsla) -> Hsla {
+    if dark {
+        background.mix(muted, 0.65)
+    } else {
+        muted
+    }
+}
+
+fn panel_of(sidebar: Hsla, muted: Hsla, desk: Hsla) -> Hsla {
+    if luminance(sidebar) < 0.5 && contrast(sidebar, desk) < 1.2 {
+        muted
+    } else {
+        sidebar
+    }
+}
 
 /// Paper, as the renderer draws it (render::DARK_PAPER when dark).
 pub fn paper(dark: bool) -> Rgba {
@@ -98,6 +120,38 @@ fn readable_on(c: Hsla, bg: Hsla, ratio: f32) -> Hsla {
         c.l = (c.l + if darken { -0.02 } else { 0.02 }).clamp(0.0, 1.0);
     }
     c
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+
+    fn hex(c: u32) -> Hsla {
+        rgb(c).into()
+    }
+
+    #[test]
+    fn the_desk_and_panel_follow_the_theme() {
+        // the kit's default dark theme: background, muted, sidebar (as dark as the background)
+        let (bg, muted, sidebar, fg) = (hex(0x0a0a0a), hex(0x262626), hex(0x0a0a0a), hex(0xfafafa));
+        let desk = desk_of(true, bg, muted);
+        let panel = panel_of(sidebar, muted, desk);
+        let page = hex(0x000000);
+        // a black page, a near-black desk, a gray panel, each set off from the next
+        assert!(luminance(page) < luminance(desk) && luminance(desk) < luminance(panel));
+        assert!(
+            contrast(panel, desk) >= 1.2,
+            "the panel stands off the desk"
+        );
+        assert!(contrast(fg, panel) >= 4.5, "the panel's text reads");
+        // a theme's own sidebar, set apart already, is kept; so is a light theme's
+        assert_eq!(panel_of(hex(0x1e2a3a), muted, desk), hex(0x1e2a3a));
+        assert_eq!(
+            panel_of(hex(0xfafafa), hex(0xf5f5f5), hex(0xf5f5f5)),
+            hex(0xfafafa)
+        );
+        assert_eq!(desk_of(false, hex(0xffffff), hex(0xf5f5f5)), hex(0xf5f5f5));
+    }
 }
 
 #[cfg(test)]

@@ -828,12 +828,8 @@ impl Render for Doc {
                     .size_full(),
                 )
             })
-            // dark theme: a near-black desk, between the gray sidebar and the black page
-            .bg(if theme.mode.is_dark() {
-                rgb(palette::DARK_DESK).into()
-            } else {
-                theme.muted
-            })
+            // the desk, from the theme: in the dark, between the panel and a black page
+            .bg(palette::desk(&theme))
             .overflow_scroll()
             .track_scroll(&self.scroll)
             .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
