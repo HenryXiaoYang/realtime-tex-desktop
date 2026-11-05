@@ -14,6 +14,8 @@ pub struct Welcome {
     search: Entity<InputState>,
     /// The project ↑ ↓ moved to, among those the search shows.
     selected: usize,
+    /// The list's scroll, which follows the selection.
+    scroll: ScrollHandle,
     _sub: Subscription,
 }
 
@@ -59,6 +61,7 @@ impl Welcome {
         Self {
             search,
             selected: 0,
+            scroll: ScrollHandle::new(),
             _sub,
         }
     }
@@ -102,6 +105,8 @@ impl Welcome {
             }
             _ => return,
         }
+        // a small window shows a few: the selection stays in view
+        self.scroll.scroll_to_item(self.selected);
         cx.stop_propagation();
         cx.notify();
     }
@@ -169,15 +174,16 @@ impl Welcome {
             .px_5()
             .pt_4()
             .pb_3()
+            // the search gives up room; the buttons keep their names
             .child(
-                div().flex_1().child(
+                div().flex_1().min_w_0().child(
                     Input::new(&self.search)
                         .prefix(Icon::new(IconName::Search).small())
                         .cleanable(true),
                 ),
             )
-            .child(new_button("welcome-new").primary())
-            .child(open_button("welcome-open").outline())
+            .child(new_button("welcome-new").primary().flex_shrink_0())
+            .child(open_button("welcome-open").outline().flex_shrink_0())
     }
 
     fn row(&self, ix: usize, r: &Recent, cx: &mut Context<Self>) -> AnyElement {
@@ -245,6 +251,7 @@ impl Welcome {
             )
             .child(
                 div()
+                    .flex_shrink_0()
                     .when(!selected, |d| {
                         d.invisible().group_hover("project-row", |s| s.visible())
                     })
@@ -270,6 +277,7 @@ impl Welcome {
         let theme = cx.theme();
         div()
             .flex_1()
+            .min_w_0()
             .flex()
             .flex_col()
             .items_center()
@@ -301,6 +309,8 @@ impl Welcome {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
+                    .justify_center()
                     .gap_3()
                     .child(new_button("first-new").primary().large())
                     .child(open_button("first-open").outline().large()),
@@ -387,9 +397,12 @@ impl Render for Welcome {
                 .map(|(i, r)| self.row(i, r, cx))
                 .collect();
             let q = self.search.read(cx).value().trim().to_string();
+            // as wide as the window leaves it, whatever the paths' length: they shorten
             div()
                 .flex_1()
+                .min_w_0()
                 .min_h_0()
+                .overflow_hidden()
                 .flex()
                 .flex_col()
                 .child(self.header())
@@ -399,6 +412,7 @@ impl Render for Welcome {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
                         .px_3()
                         .pb_3()
                         .role(Role::List)
