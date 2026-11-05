@@ -1,6 +1,7 @@
 // How the window's width shapes the workspace: below some widths the project panel, then the
 // sidebar, step aside for the pages (a toggle brings one back for as long as the window stays
-// narrow), and the ribbon folds what does not fit (it measures itself each frame).
+// narrow), and the Insert tab drops its buttons' names when they do not fit (it measures itself
+// each frame); the Home tab scrolls instead.
 use super::*;
 use std::cell::Cell;
 
@@ -21,12 +22,8 @@ pub(super) struct Fit {
     pub(super) right: bool,
     /// The ribbon's width last frame.
     pub(super) ribbon_w: Rc<Cell<f32>>,
-    /// The Home tab's groups that never fold (clipboard, font, paragraph), as wide as they
-    /// were last drawn; the Insert tab's groups with their names, likewise.
-    pub(super) home_fixed_w: Rc<Cell<f32>>,
+    /// The Insert tab's groups with their names, as wide as they were last drawn.
     pub(super) insert_full_w: Rc<Cell<f32>>,
-    /// The menu of the styles folded away, as wide as last drawn.
-    pub(super) styles_menu_w: Rc<Cell<f32>>,
 }
 
 impl Workspace {
@@ -87,21 +84,6 @@ impl Workspace {
         self.ribbon_room() < full + RIBBON_PAD
     }
 
-    /// How many of the styles' `n` tiles fit beside the Home tab's other groups (as wide as
-    /// they were last drawn); the rest go in a menu.
-    pub(super) fn style_tiles(&self, n: usize) -> usize {
-        let fixed = match self.fit.home_fixed_w.get() {
-            w if w > 0.0 => w,
-            _ => 560.0,
-        };
-        let menu = match self.fit.styles_menu_w.get() {
-            w if w > 0.0 => w,
-            _ => 110.0,
-        };
-        // less the gap before the styles
-        tiles_fitting(self.ribbon_room() - RIBBON_PAD - fixed - 12.0, n, menu)
-    }
-
     /// A canvas that keeps the ribbon's width for the next frame, redrawing when it changed.
     pub(super) fn measure_ribbon(&self) -> impl IntoElement {
         measure(self.fit.ribbon_w.clone())
@@ -140,38 +122,15 @@ pub(super) fn measured_row(groups: Vec<AnyElement>, w: Option<Rc<Cell<f32>>>) ->
         .into_any_element()
 }
 
-/// How many of `n` style tiles fit in `room` px, at 82 px a tile (its gap included), with room
-/// left for the menu of the rest (`menu` px) when not all do.
-fn tiles_fitting(room: f32, n: usize, menu: f32) -> usize {
-    if room >= 82.0 * n as f32 {
-        n
-    } else {
-        ((room - menu).max(0.0) / 82.0) as usize
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::tiles_fitting;
-
-    #[test]
-    fn styles_fold_into_a_menu_as_the_ribbon_narrows() {
-        assert_eq!(tiles_fitting(f32::MAX, 8, 110.0), 8);
-        assert_eq!(tiles_fitting(8.0 * 82.0, 8, 110.0), 8);
-        assert_eq!(tiles_fitting(400.0, 8, 110.0), 3);
-        assert_eq!(tiles_fitting(100.0, 8, 110.0), 0);
-    }
-}
-
 #[cfg(test)]
 mod e2e {
     use super::super::Workspace;
-    use super::{MIN_WINDOW, RIBBON_PAD};
+    use super::MIN_WINDOW;
     use crate::engine;
     use crate::ui::settings::AppSettings;
     use gpui_kit::{TestAppContext, Window, px, size};
 
-    /// The workspace at three widths: the panels step aside, the ribbon folds, a toggle brings a
+    /// The workspace at three widths: the panels step aside, a toggle brings a
     /// hidden panel back until the window widens. `cargo test --release layout_follows_the_width
     /// -- --ignored --nocapture` (opens a document with rtex).
     #[gpui_kit::test]
@@ -196,20 +155,13 @@ mod e2e {
         });
         let at = |w: f32, cx: &mut gpui_kit::VisualTestContext| {
             cx.simulate_resize(size(px(w), px(900.0)));
-            // twice: the ribbon measures itself on one frame and folds on the next
+            // a few frames: the ribbon measures itself on one and fits on the next
             for _ in 0..3 {
                 cx.run_until_parked();
             }
             cx.read(|cx| {
                 let ws = ws.read(cx);
-                (
-                    ws.fit.left,
-                    ws.fit.right,
-                    ws.fit.ribbon_w.get(),
-                    ws.style_tiles(8),
-                    ws.fit.home_fixed_w.get(),
-                    ws.fit.styles_menu_w.get(),
-                )
+                (ws.fit.left, ws.fit.right, ws.fit.ribbon_w.get())
             })
         };
         let wide = at(1460.0, cx);
@@ -217,13 +169,6 @@ mod e2e {
         let narrow = at(800.0, cx);
         let least = at(MIN_WINDOW.0, cx);
         println!("1460: {wide:?}\n1000: {middle:?}\n 800: {narrow:?}\n 720: {least:?}");
-        // the groups that never fold were measured, and the styles kept fit beside them
-        assert!(least.4 > 300.0, "the Home tab's fixed groups measured");
-        let kept = 82.0 * least.3 as f32 + if least.3 < 8 { least.5 } else { 0.0 };
-        assert!(
-            RIBBON_PAD + least.4 + 12.0 + kept <= least.2,
-            "the Home tab fits the ribbon at 720"
-        );
         assert!(wide.0 && wide.1, "both panels at 1460");
         assert!(
             !middle.0 && middle.1,
@@ -231,7 +176,6 @@ mod e2e {
         );
         assert!(!narrow.0 && !narrow.1, "both at 800");
         assert!(narrow.2 > middle.2 - 400.0, "the pages get the room");
-        assert!(wide.3 >= narrow.3, "fewer style tiles when narrow");
         // a toggle while narrow brings the panel back; widening forgets that
         ws.update(cx, |ws, cx| ws.toggle_left(cx));
         assert!(at(800.0, cx).0, "shown on request");

@@ -183,7 +183,7 @@ pub fn commands() -> Vec<Command> {
         cmd!(
             "heading-1",
             "Format",
-            "Heading 1",
+            "Section",
             PAGES,
             "cmd-alt-1",
             Heading1
@@ -191,7 +191,7 @@ pub fn commands() -> Vec<Command> {
         cmd!(
             "heading-2",
             "Format",
-            "Heading 2",
+            "Subsection",
             PAGES,
             "cmd-alt-2",
             Heading2
@@ -199,7 +199,7 @@ pub fn commands() -> Vec<Command> {
         cmd!(
             "heading-3",
             "Format",
-            "Heading 3",
+            "Subsubsection",
             PAGES,
             "cmd-alt-3",
             Heading3

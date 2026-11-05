@@ -152,18 +152,16 @@ impl Workspace {
             return Some(ribbon.into_any_element());
         }
         let groups = match tab {
-            // the groups that never fold, measured for the room the styles have
-            RibbonTab::Home => vec![
-                layout::measured_row(
-                    vec![
-                        self.clipboard_group(cx),
-                        self.font_group(&state, cx),
-                        self.paragraph_group(&state, cx),
-                    ],
-                    Some(self.fit.home_fixed_w.clone()),
-                ),
-                self.styles_group(&state, cx),
-            ],
+            // at full size: a narrow window scrolls the ribbon
+            RibbonTab::Home => vec![layout::measured_row(
+                vec![
+                    self.clipboard_group(cx),
+                    self.font_group(&state, cx),
+                    self.paragraph_group(&state, cx),
+                    self.styles_group(&state, cx),
+                ],
+                None,
+            )],
             // measured while it shows its names, for when they stop fitting
             RibbonTab::Insert => vec![layout::measured_row(
                 self.insert_body(state.enabled, cx),
@@ -573,117 +571,57 @@ impl Workspace {
     }
 
     fn styles_group(&self, st: &RibbonState, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
         let mut styles: Vec<(&'static str, Style)> =
             vec![("Normal", Style::Normal), ("Title", Style::Title)];
         for h in &st.headings {
             let label = match *h {
                 "part" => "Part",
                 "chapter" => "Chapter",
-                "section" => "Heading 1",
-                "subsection" => "Heading 2",
-                "subsubsection" => "Heading 3",
-                _ => "Heading 4",
+                // LaTeX's own names, as the source has them
+                "section" => "Section",
+                "subsection" => "Subsection",
+                "subsubsection" => "Subsubsection",
+                _ => "Paragraph",
             };
             styles.push((label, Style::Heading(h)));
         }
         styles.push(("Quote", Style::Quote));
-        // as many tiles as the ribbon has room for; all of them in a menu after those
-        let shown = self.style_tiles(styles.len());
-        let menu = (shown < styles.len()).then(|| {
-            let weak = cx.entity().downgrade();
-            let all = styles.clone();
-            let now = st.style;
-            Button::new("rb-styles-more")
-                .label(if shown == 0 {
-                    all.iter()
-                        .find(|(_, s)| Some(*s) == now)
-                        .map_or("Styles", |(l, _)| *l)
-                } else {
-                    "More"
-                })
-                .outline()
-                .small()
-                .h(px(44.0))
-                .disabled(!st.enabled)
-                .dropdown_caret(true)
-                .tooltip("Styles")
-                .accessibility_label("More styles")
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (label, style) in all.iter().copied() {
-                        let weak = weak.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(now == Some(style))
-                                .on_click(move |_, window, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        this.format(FormatOp::Style(style), window, cx)
-                                    });
-                                }),
-                        );
-                    }
-                    menu
-                })
-        });
-        // the tiles kept are the most used (Normal, the first headings), in their usual order
-        let rank = |s: &Style| match s {
-            Style::Normal => 0,
-            Style::Heading("section") => 1,
-            Style::Heading("subsection") => 2,
-            Style::Heading("subsubsection") => 3,
-            Style::Title => 4,
-            Style::Quote => 5,
-            Style::Heading("chapter") => 6,
-            _ => 7,
-        };
-        let mut by_use: Vec<Style> = styles.iter().map(|(_, s)| *s).collect();
-        by_use.sort_by_key(rank);
-        by_use.truncate(shown);
+        // every style, in two rows as the font's and the paragraph's tools are: filled column
+        // by column (Normal over Title, Part over Section…), each column as wide as its names
         let mut row = div().flex().gap_1();
-        for (i, (label, style)) in styles
-            .into_iter()
-            .filter(|(_, s)| by_use.contains(s))
-            .enumerate()
-        {
-            let on = st.style == Some(style);
-            let (size, weight) = match style {
-                Style::Title => (px(15.0), FontWeight::NORMAL),
-                Style::Heading("part" | "chapter") => (px(14.0), FontWeight::BOLD),
-                Style::Heading("section") => (px(13.0), FontWeight::BOLD),
-                Style::Heading(_) => (px(12.0), FontWeight::BOLD),
-                _ => (px(12.0), FontWeight::NORMAL),
-            };
-            // each style named in its own look
-            row = row.child(
-                Button::new(("rb-style", i))
-                    .outline()
-                    .selected(on)
-                    .disabled(!st.enabled)
-                    .w(px(78.0))
-                    .h(px(44.0))
-                    .p_0()
-                    .border_color(if on { theme.primary } else { theme.border })
-                    .accessibility_label(format!("Style: {label}"))
-                    .child(
-                        div()
-                            .text_size(size)
-                            .font_weight(weight)
-                            .when(style == Style::Quote, |d| d.italic())
-                            .child(label),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.format(FormatOp::Style(style), window, cx)
-                    })),
-            );
+        for (c, pair) in styles.chunks(2).enumerate() {
+            let mut column = div().flex().flex_col().gap_1();
+            for (k, &(label, style)) in pair.iter().enumerate() {
+                let on = st.style == Some(style);
+                let weight = match style {
+                    Style::Heading(_) => FontWeight::BOLD,
+                    _ => FontWeight::NORMAL,
+                };
+                // each style named in its own look
+                column = column.child(
+                    Button::new(("rb-style", c * 2 + k))
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .justify_start()
+                        .selected(on)
+                        .disabled(!st.enabled)
+                        .accessibility_label(format!("Style: {label}"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(weight)
+                                .whitespace_nowrap()
+                                .when(style == Style::Quote, |d| d.italic())
+                                .child(label),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.format(FormatOp::Style(style), window, cx)
+                        })),
+                );
+            }
+            row = row.child(column);
         }
-        // the menu measured, for how many tiles fit beside it
-        let menu = menu.map(|m| {
-            layout::measured_row(
-                vec![m.into_any_element()],
-                Some(self.fit.styles_menu_w.clone()),
-            )
-        });
-        let row = row.children(menu);
         Self::last_group("Styles", vec![row.into_any_element()], cx)
     }
 }

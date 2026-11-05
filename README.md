@@ -44,7 +44,7 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   a step), bold ⌘B, italic ⌘I, underline ⌘U, strikethrough, sub- and superscript, small caps,
   colour (a palette of xcolor's named colours, shades, or any hex code; the button shows the
   colour at the caret); bullets, numbering, indent; alignment (⌘L, ⌘E, ⌘R, ⌘J); and styles (Normal, Title,
-  Part/Chapter when the class has them, Heading 1–4 = section…paragraph, ⌘⌥1–3, Quote). The
+  Part/Chapter when the class has them, Section, Subsection, Subsubsection, Paragraph, ⌘⌥1–3, Quote). The
   buttons light up for the text at the caret and turn off what is on. They act on the
   selection (or the caret's word, or its paragraphs); a package an edit needs (xcolor, ulem,
   fontspec) goes into the preamble with a note in the status bar.
@@ -79,8 +79,8 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   kept out, with a note under the field saying what it takes.
 - The window adapts to its width (down to 720 × 480): below 1100 px the project panel steps
   aside for the pages, below 940 px the sidebar too (⌘\\ or ⌘⌥\\ brings one back while the window
-  stays narrow); the styles gallery keeps the tiles that fit (Normal and the headings first) and
-  puts the rest under More; the Insert tab shows icons alone when tight. View → Fit Width (or the
+  stays narrow); the ribbon scrolls sideways when it does not fit (the styles sit in two rows, none hidden);
+  the Insert tab shows icons alone when tight. View → Fit Width (or the
   zoom menu) sizes the pages to the column.
 - The menu bar holds every command (Edit → Find, Insert, Format, View, Window), each with its
   shortcut. Every control has a name VoiceOver reads (icon buttons, swatches, styles), the
@@ -136,7 +136,7 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 | ⌘\ | Toggle the project panel |
 | ⌘B ⌘I ⌘U | Bold, italic, underline (on the pages) |
 | ⌘⇧. / ⌘⇧, | Bigger / smaller text |
-| ⌘⌥1 ⌘⌥2 ⌘⌥3 | Heading 1–3 |
+| ⌘⌥1 ⌘⌥2 ⌘⌥3 | Section, subsection, subsubsection |
 | ⌘L ⌘E ⌘R ⌘J | Align left, center, right, justify |
 | ⌘⇧E | Switch between Visual and Source |
 | ⌃⇧↑ / ⌃⇧↓ | Move the paragraph at the caret (or the selected blocks) up / down |
