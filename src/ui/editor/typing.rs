@@ -63,6 +63,7 @@ impl Doc {
         let gt = glyphmap::glyph_text_of(&rows);
         let mut m = caret::char_map(&gt, src, b.range.start);
         self.add_empty_items(bi, page, &mut m);
+        self.add_empty_heading(bi, page, &mut m);
         let m = Rc::new(m);
         self.maps.borrow_mut().insert(key, m.clone());
         Some(m)
@@ -294,6 +295,35 @@ impl Doc {
         };
         self.set_caret(m.stops[i].off, cx);
         true
+    }
+
+    /// An empty heading (`\\subsection{}`, just its number on the page): a stop after the
+    /// number, where its title goes, so the caret can go there and Backspace can remove it.
+    fn add_empty_heading(&self, bi: usize, page: u32, m: &mut CharMap) {
+        let b = &self.blocks[bi];
+        let Some(title) = self
+            .source
+            .get(b.range.clone())
+            .and_then(|src| caret::heading_title(src, b.range.start))
+        else {
+            return;
+        };
+        if !m.stops.is_empty() || glyphmap::has_visible(&self.source[title.clone()]) {
+            return;
+        }
+        let Some(r) = b.rows.iter().find(|r| r.page == page) else {
+            return;
+        };
+        let last = m.chars.iter().rev().find(|c| c.glyph);
+        let size = last.map_or(10.0 * 65536.0, |c| c.bbox[3]);
+        let x = last.map_or(r.bbox[0], |c| c.bbox[0] + c.bbox[2] + 0.5 * size);
+        m.stops.push(caret::Stop {
+            k: m.chars.len(),
+            off: title.start,
+            x,
+            y: r.bbox[3] - r.row.dl.lines[r.row.line].d,
+            size,
+        });
     }
 
     /// Stops on the lines of block `bi` that have no text of their own (empty list items,
@@ -688,6 +718,20 @@ impl Doc {
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
+        // an empty heading goes whole, with the blank line after it
+        if let Some(bi) = self.block_of(off)
+            && let b = self.blocks[bi].range.clone()
+            && let Some(title) = caret::heading_title(&self.source[b.clone()], b.start)
+            && !glyphmap::has_visible(&self.source[title])
+        {
+            let ws = self.source[b.end..].len() - self.source[b.end..].trim_start().len();
+            let e = Edit {
+                range: b.start..b.end + ws,
+                text: String::new(),
+                caret: b.start,
+            };
+            return self.apply(e, cx);
+        }
         // text typed but not typeset yet: its last char
         if back
             && let Some(o) = self.overlay.as_mut().filter(|o| o.end == off)
@@ -894,6 +938,7 @@ impl Doc {
             return;
         };
         self.checkpoint();
+        self.sync_box(true, cx);
         self.active = Some(Active::new(
             u64::MAX,
             off..off,
@@ -935,7 +980,9 @@ impl Doc {
             .images
             .get(&o.page)
             .is_some_and(|im| im.key.0 == self.versions.get(&o.page).copied().unwrap_or(0));
-        if o.seen && self.spans_pending == 0 && !self.compiling && fresh {
+        // the page shows the typed text once its paragraph is typeset, even while a full run
+        // (a heading's, for the contents) is still going
+        if o.seen && self.spans_pending == 0 && fresh {
             self.overlay = None;
         }
     }
@@ -999,7 +1046,20 @@ impl Doc {
         };
         let w_typed = Self::text_width(&face, fs, &typed, cx);
         let w_caret = w_typed + Self::text_width(&face, fs, &in_marked, cx);
-        let (left, top) = (page_px(x, self.zoom), page_px(y, self.zoom) - 0.8 * fs);
+        // on TeX's baseline: GPUI sets a line's baseline its ascent below the line's top, after
+        // half the line height the font's ascent and descent leave
+        let lh = fs * 1.25;
+        let (ascent, descent) = {
+            let ts = cx.text_system();
+            let id = ts.resolve_font(&face);
+            (
+                f32::from(ts.ascent(id, px(fs))),
+                f32::from(ts.descent(id, px(fs))).abs(),
+            )
+        };
+        let baseline = (lh - ascent - descent) / 2.0 + ascent;
+        let left = page_px(x, self.zoom);
+        let top = page_px(y, self.zoom) - baseline;
         // render's ink on its paper
         let fg = rgb(if self.dark_pages(cx) {
             0xe0e0e0
@@ -1017,9 +1077,8 @@ impl Doc {
                 .absolute()
                 .left(px(left))
                 .top(px(top))
-                .h(px(fs * 1.05))
-                .flex()
-                .items_center()
+                .h(px(lh))
+                .line_height(px(lh))
                 .whitespace_nowrap()
                 .font_family(face.family.clone())
                 .font_weight(face.weight)
@@ -1034,7 +1093,7 @@ impl Doc {
         let caret = div()
             .absolute()
             .left(px(left + w_caret))
-            .top(px(top))
+            .top(px(page_px(y, self.zoom) - 0.8 * fs))
             .w(px(1.5))
             .h(px(fs * 1.05))
             .when(self.caret_on, |c| c.bg(fg))
@@ -1468,7 +1527,8 @@ mod tests {
             assert!(!v.contains(super::complete::MARK), "the caret mark is gone");
             assert_eq!(&v[cur - 1..cur], "\\", "the caret after the backslash");
             assert!(!d.source.contains("textbackslash"));
-            assert!(d.source.contains(&format!("{}\\", &base[off - 5..off])));
+            // a lone backslash waits in the box: it is half a command
+            assert_eq!(d.source, base, "nothing in the source yet");
             d.leave(window, cx);
         });
         doc.update_in(cx, |d, window, cx| {
@@ -1743,5 +1803,161 @@ mod tests {
             t0.elapsed()
         );
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// Enter before a heading, then a command typed there: `\\title{AAA}` goes in as TeX, and
+    /// nothing reaches the source (or moves the pages) while it is half typed.
+    /// `RTD_TYPE=/abs/copy.tex cargo test --release command_in_a_new_paragraph -- --ignored`.
+    #[gpui_kit::test]
+    #[ignore]
+    fn command_in_a_new_paragraph(cx: &mut TestAppContext) {
+        let file = std::env::var("RTD_TYPE").expect("RTD_TYPE=/abs/path/main.tex");
+        let path = std::path::PathBuf::from(&file);
+        let (root, main) = (
+            path.parent().unwrap().to_path_buf(),
+            path.file_name().unwrap().to_string_lossy().to_string(),
+        );
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        engine::configure("", "/Library/TeX/texbin");
+        let (doc, cx) = cx.add_window_view(|window: &mut Window, cx| {
+            Doc::new(root, main, Default::default(), window, cx)
+        });
+        wait(cx, &doc, "the first layout", |d| {
+            d.spans_pending == 0 && d.blocks.iter().filter(|b| !b.rows.is_empty()).count() > 3
+        });
+        calm(cx, &doc);
+        let base = cx.read(|cx| doc.read(cx).source.clone());
+        // a click before "Which one?", Enter: a new paragraph above it
+        let (bi, page, x, y) = cx.read(|cx| {
+            let d = doc.read(cx);
+            let w = d.source.find("{Which one").unwrap() + 1;
+            let bi = d.block_of(w).unwrap();
+            let page = d.blocks[bi].rows[0].page;
+            let m = d.map_of(bi, page).unwrap();
+            let s = m.stops.iter().find(|s| s.off == w).copied().unwrap();
+            (bi, page, s.x + 65536.0, s.y - 3.0 * 65536.0)
+        });
+        doc.update(cx, |d, cx| {
+            assert!(d.caret_click(bi, page, x, y, cx));
+            d.enter(false, cx);
+        });
+        calm(cx, &doc);
+        let split = cx.read(|cx| doc.read(cx).source.clone());
+        // a backslash: the source box, and nothing in the source yet
+        doc.update_in(cx, |d, window, cx| {
+            d.replace_text_in_range(None, "\\", window, cx)
+        });
+        cx.run_until_parked();
+        for ch in "titl".chars() {
+            let input = cx.read(|cx| doc.read(cx).input.clone());
+            cx.update(|window, cx| {
+                input.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, &ch.to_string(), window, cx)
+                })
+            });
+            cx.run_until_parked();
+        }
+        cx.read(|cx| {
+            let d = doc.read(cx);
+            assert!(
+                d.active.as_ref().is_some_and(|a| a.gap.is_some()),
+                "a box in the new paragraph"
+            );
+            assert_eq!(d.input.read(cx).value().to_string(), "\\titl");
+            assert_eq!(
+                d.source, split,
+                "a half-typed command stays out of the source"
+            );
+            assert!(
+                d.box_place().is_some_and(|p| !p.lines),
+                "the box stays in the gap"
+            );
+        });
+        for ch in "e{AAA}".chars() {
+            let input = cx.read(|cx| doc.read(cx).input.clone());
+            cx.update(|window, cx| {
+                input.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, &ch.to_string(), window, cx)
+                })
+            });
+            cx.run_until_parked();
+        }
+        let s = cx.read(|cx| doc.read(cx).source.clone());
+        assert!(
+            s.contains("\\title{AAA}\n\n"),
+            "the whole command goes in as TeX"
+        );
+        assert!(!s.contains("textbackslash"));
+        calm(cx, &doc);
+        assert!(cx.read(|cx| !doc.read(cx).status.contains("LaTeX")));
+        // a command left half typed goes in when the box closes
+        let input = cx.read(|cx| doc.read(cx).input.clone());
+        cx.update(|window, cx| {
+            input.update(cx, |s, cx| {
+                s.replace_text_in_range(None, " \\date", window, cx)
+            })
+        });
+        cx.run_until_parked();
+        assert!(!cx.read(|cx| doc.read(cx).source.contains("AAA} \\date")));
+        doc.update_in(cx, |d, window, cx| d.leave(window, cx));
+        assert!(cx.read(|cx| doc.read(cx).source.contains("\\title{AAA} \\date")));
+        doc.update_in(cx, |d, window, cx| {
+            while d.source != base && !d.undo.is_empty() {
+                d.undo(window, cx);
+            }
+        });
+        assert_eq!(
+            cx.read(|cx| doc.read(cx).source.clone()),
+            base,
+            "undo restores it all"
+        );
+        calm(cx, &doc);
+        // an empty heading (just "5.1" on the page) takes the caret and goes with Backspace
+        doc.update(cx, |d, cx| {
+            assert!(d.caret_click(bi, page, x, y, cx));
+            d.enter(false, cx);
+        });
+        calm(cx, &doc);
+        doc.update_in(cx, |d, window, cx| {
+            d.replace_text_in_range(None, "\\", window, cx)
+        });
+        cx.run_until_parked();
+        let input = cx.read(|cx| doc.read(cx).input.clone());
+        cx.update(|window, cx| {
+            input.update(cx, |s, cx| {
+                s.replace_text_in_range(None, "subsection{}", window, cx)
+            })
+        });
+        cx.run_until_parked();
+        doc.update_in(cx, |d, window, cx| d.leave(window, cx));
+        calm(cx, &doc);
+        let (hb, hp, hx, hy) = cx.read(|cx| {
+            let d = doc.read(cx);
+            let hb = (0..d.blocks.len())
+                .find(|&b| &d.source[d.blocks[b].range.clone()] == "\\subsection{}")
+                .expect("the empty heading is a block");
+            let r = &d.blocks[hb].rows[0];
+            (
+                hb,
+                r.page,
+                r.bbox[0] + 40.0 * 65536.0,
+                r.bbox[3] - 3.0 * 65536.0,
+            )
+        });
+        doc.update(cx, |d, cx| {
+            assert!(
+                d.caret_click(hb, hp, hx, hy, cx),
+                "the caret goes into the empty heading"
+            );
+            d.delete(true, cx);
+        });
+        assert!(
+            !cx.read(|cx| doc.read(cx).source.contains("\\subsection{}")),
+            "Backspace removes it"
+        );
     }
 }

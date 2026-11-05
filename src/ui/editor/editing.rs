@@ -82,6 +82,8 @@ impl Doc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // the box open now keeps what was typed in it
+        self.sync_box(true, cx);
         // stale spans only shift where the box opens; destructive actions wait for fresh ones
         let Some(text) = self
             .blocks
@@ -107,6 +109,7 @@ impl Doc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.sync_box(true, cx);
         if !self.spans.iter().any(|s| s.kind == kind) {
             return;
         }
@@ -217,6 +220,7 @@ impl Doc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.sync_box(true, cx);
         // offsets from blocks an edit has not re-spanned yet could land inside a word
         if self.spans_pending > 0 {
             return;
@@ -312,6 +316,8 @@ impl Doc {
         if self.active.is_none() && self.live.is_none() {
             return;
         }
+        // what a command left half typed in it goes in now
+        self.sync_box(true, cx);
         self.active = None;
         // a hidden box keeps focus otherwise and takes ⌘Z; the pages take it (and its actions)
         if self.input.focus_handle(cx).is_focused(window) {
@@ -324,7 +330,18 @@ impl Doc {
     }
 
     pub(super) fn on_input(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        let mut new = self.input.read(cx).value().to_string();
+        self.sync_box(false, cx);
+    }
+
+    /// The box's text into the source, unless (`!force`) a command is still being typed in it:
+    /// that waits until it is whole (or the box closes), so LaTeX never sees `\\ti` or `\\`.
+    pub(super) fn sync_box(&mut self, force: bool, cx: &mut Context<Self>) {
+        let (mut new, at) = self
+            .input
+            .read_with(cx, |s, _| (s.value().to_string(), s.cursor()));
+        if !force && document::caret::unfinished(&new, at) {
+            return;
+        }
         let Some(a) = self.active.as_ref() else {
             return;
         };

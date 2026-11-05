@@ -230,6 +230,18 @@ impl CharMap {
     }
 }
 
+/// TeX still being typed, which would only make LaTeX choke (or, `\\` alone, print a space): a
+/// command name at `at` (the caret, in bytes), or a brace left open.
+pub fn unfinished(tex: &str, at: usize) -> bool {
+    let at = (0..=at.min(tex.len()))
+        .rev()
+        .find(|&i| tex.is_char_boundary(i))
+        .unwrap_or(0);
+    let name = tex[..at].trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '@');
+    let slashes = name.len() - name.trim_end_matches('\\').len();
+    slashes % 2 == 1 || depth(tex) > 0
+}
+
 /// The brace depth `s` ends at (escaped braces aside).
 fn depth(s: &str) -> i64 {
     brace_depths(s).last().copied().unwrap_or(0)
@@ -952,6 +964,27 @@ fn split_at(src: &str, text: Range<usize>, off: usize) -> Option<Split> {
     Some(Split::Mid(off, close, reopen))
 }
 
+/// A heading's title, inside its braces, when `block` is a heading (`\\section*[short]{…}`).
+pub fn heading_title(block: &str, base: usize) -> Option<Range<usize>> {
+    let rest = block.strip_prefix('\\')?;
+    let name = HEADINGS.iter().find(|h| {
+        rest.strip_prefix(**h)
+            .is_some_and(|r| !r.starts_with(|c: char| c.is_ascii_alphabetic()))
+    })?;
+    let mut i = 1 + name.len();
+    if block[i..].starts_with('*') {
+        i += 1;
+    }
+    if block[i..].starts_with('[') {
+        i += block[i..].find(']')? + 1;
+    }
+    if !block[i..].starts_with('{') {
+        return None;
+    }
+    let close = group_close(block, i)?;
+    Some(base + i + 1..base + close)
+}
+
 /// Whether `src[r]` prints text, a picture's labels aside (a TikZ flowchart beside the text
 /// is not text the caret is after).
 fn shows_text(src: &str, r: Range<usize>) -> bool {
@@ -1275,6 +1308,29 @@ mod tests {
             (0, 0),
             "a new paragraph before the block"
         );
+    }
+
+    #[test]
+    fn half_typed_tex_waits() {
+        let at_end = |s: &str| unfinished(s, s.len());
+        assert!(at_end("\\"));
+        assert!(at_end("text \\tit"));
+        assert!(at_end("\\title{AA"));
+        assert!(!at_end("\\title{AAA}"));
+        assert!(!at_end("\\maketitle "));
+        assert!(!at_end("a line\\\\"), "a line break is no command");
+        assert!(!at_end("50\\% off"));
+        // a command name being typed in the middle of the text
+        assert!(unfinished("see \\re and more", 7));
+    }
+
+    #[test]
+    fn finds_a_headings_title() {
+        let s = "\\subsection*[short]{Which one?} more";
+        assert_eq!(heading_title(s, 10), Some(10 + 20..10 + 30));
+        assert_eq!(heading_title("\\subsection{}", 0), Some(12..12));
+        assert_eq!(heading_title("\\sectionmark{x}", 0), None);
+        assert_eq!(heading_title("plain", 0), None);
     }
 
     #[test]

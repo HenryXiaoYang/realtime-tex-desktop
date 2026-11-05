@@ -28,7 +28,10 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   a whole `\ref`/`\cite` or formula, or join two paragraphs or items. Undo takes back a word at a
   time (in Chinese, Japanese, Thai…, one input-method commit). ⌘M opens a formula in the
   paragraph's source box, and typing `\` opens that box with the command begun (with its
-  completions), so `\title{…}` goes in as TeX. Enter at the start of a paragraph or heading
+  completions), so `\title{…}` goes in as TeX. A command still being typed (`\ti`, an open
+  `{`) waits in the box and reaches the source once it is whole or the box closes, so LaTeX never
+  typesets half of it. An empty heading (just its number) takes the caret after the number, and
+  Backspace removes it. Enter at the start of a paragraph or heading
   opens a new paragraph above it; in a heading's middle it splits it in two; in a table it does
   nothing yet.
 - Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select

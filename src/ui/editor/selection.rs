@@ -182,6 +182,7 @@ impl Doc {
         if lo == hi {
             return self.activate(lo, 0, window, cx);
         }
+        self.sync_box(true, cx);
         let Some((r, text)) = self.blocks_source(lo, hi) else {
             return;
         };
