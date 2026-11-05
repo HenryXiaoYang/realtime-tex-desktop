@@ -19,14 +19,14 @@ impl Workspace {
         let file_tree = tree(&self.tree, move |ix, entry, _selected, _, cx| {
             let item = entry.item();
             let id = item.id.to_string();
-            let guides = indent_guides(entry.depth(), entry.is_folder(), cx);
+            let guides = indent_guides(entry.depth(), cx);
             if id.ends_with(PLACEHOLDER) {
                 return ListItem::new(ix).children(guides).child(
                     div()
                         .text_sm()
                         .italic()
                         .text_color(cx.theme().muted_foreground)
-                        .pl(px(entry.depth() as f32 * 12.0 + 16.0))
+                        .pl(px(entry.depth() as f32 * TREE_INDENT + TREE_INDENT))
                         .child(item.label.clone()),
                 );
             }
@@ -34,11 +34,12 @@ impl Workspace {
                 .as_ref()
                 .filter(|(r, _)| *r == id)
                 .map(|(_, state)| state.clone());
+            // as VS Code: a folder's arrow in the column a file's icon is in, no folder icon
             let icon = if entry.is_folder() {
                 if entry.is_expanded() {
-                    "icons/folder-open.svg"
+                    "icons/chevron-down.svg"
                 } else {
-                    "icons/folder.svg"
+                    "icons/chevron-right.svg"
                 }
             } else if id.ends_with(".pdf") || id.ends_with(".png") || id.ends_with(".jpg") {
                 "icons/file-image.svg"
@@ -47,15 +48,6 @@ impl Workspace {
             } else {
                 "icons/file.svg"
             };
-            let chevron = entry.is_folder().then(|| {
-                Icon::default()
-                    .path(if entry.is_expanded() {
-                        "icons/chevron-down.svg"
-                    } else {
-                        "icons/chevron-right.svg"
-                    })
-                    .xsmall()
-            });
             let weak = weak.clone();
             ListItem::new(ix)
                 .children(guides)
@@ -65,10 +57,8 @@ impl Workspace {
                         .items_center()
                         .gap_1()
                         .text_sm()
-                        .pl(px(entry.depth() as f32 * 12.0
-                            + if entry.is_folder() { 0.0 } else { 16.0 }))
-                        .children(chevron)
-                        .child(Icon::default().path(icon).xsmall())
+                        .pl(px(entry.depth() as f32 * TREE_INDENT))
+                        .child(Icon::default().path(icon).xsmall().flex_shrink_0())
                         .map(|row| match &field {
                             // Escape cancels before the field's own bindings see it
                             Some(state) => row.child({
@@ -241,17 +231,19 @@ impl Workspace {
     }
 }
 
-/// A tree row's indent guides: a thin line for each folder it is in, running the row's height so
-/// the rows' lines join up (as VS Code draws them). A folder's arrow sits on the line of the
-/// folder it is in: there the line stops, clear of the arrow.
-fn indent_guides(depth: usize, folder: bool, cx: &App) -> Vec<AnyElement> {
+/// How much deeper each level of the file tree sits, in px: an icon's column (12) and the gap
+/// after it (4), so a folder's files start under its name.
+const TREE_INDENT: f32 = 16.0;
+
+/// A tree row's indent guides: a thin line under each folder it is in, from that folder's
+/// arrow down, running the row's height so the rows' lines join up (as VS Code draws them).
+fn indent_guides(depth: usize, cx: &App) -> Vec<AnyElement> {
     (0..depth)
-        .filter(|level| !(folder && level + 1 == depth))
         .map(|level| {
             // from the row's content (an absolute child sits in its parent, inside the row's
-            // padding): under the middle of the folder's icon (its arrow 12 px, a 4 px gap, the
-            // icon 12 px); through the row's padding above and below (4 px)
-            guide_line(level as f32 * 12.0 + 21.5, cx)
+            // padding): under the middle of the folder's arrow (12 px wide); through the row's
+            // padding above and below (4 px)
+            guide_line(level as f32 * TREE_INDENT + 5.5, cx)
                 .top(px(-4.0))
                 .bottom(px(-4.0))
                 .into_any_element()
