@@ -82,7 +82,28 @@ pub fn commands() -> Vec<Command> {
             FindPrev
         ),
         cmd!("math", "Edit", "Insert Formula", PAGES, "cmd-m", InsertMath),
-        cmd!("link", "Edit", "Insert Link", PAGES, "cmd-k", InsertLink),
+        cmd!("link", "Insert", "Link", PAGES, "cmd-k", InsertLink),
+        cmd!("picture", "Insert", "Picture", PAGES, "", InsertPicture),
+        cmd!("table", "Insert", "Table", PAGES, "", InsertTable),
+        cmd!("equation", "Insert", "Equation", PAGES, "", InsertEquation),
+        cmd!("footnote", "Insert", "Footnote", PAGES, "", InsertFootnote),
+        cmd!(
+            "cross-reference",
+            "Insert",
+            "Cross-reference",
+            PAGES,
+            "",
+            InsertCrossReference
+        ),
+        cmd!("citation", "Insert", "Citation", PAGES, "", InsertCitation),
+        cmd!(
+            "page-break",
+            "Insert",
+            "Page Break",
+            PAGES,
+            "",
+            InsertPageBreak
+        ),
         cmd!(
             "move-up",
             "Edit",

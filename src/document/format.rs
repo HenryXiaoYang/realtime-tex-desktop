@@ -462,9 +462,30 @@ pub fn set_font(src: &str, block: Range<usize>, sel: Range<usize>, font: &Font) 
     })
 }
 
+/// The colour taken off the selection (Automatic): the `\\textcolor` around it unwrapped.
+fn clear_color(src: &str, block: Range<usize>, sel: Range<usize>) -> Option<Fmt> {
+    let sel = if sel.is_empty() {
+        word_at(src, sel.start)?
+    } else {
+        sel
+    };
+    let (start, open, close) = enclosing(src, block, sel, |n| n == "textcolor")?;
+    let text = src[open + 1..close].to_string();
+    let select = start..start + text.len();
+    Some(Fmt {
+        range: start..close + 1,
+        text,
+        select,
+        packages: vec![],
+    })
+}
+
 /// Colour the selection (an xcolor name or `HTML` hex): rewriting the colour of a
 /// `\textcolor` holding exactly it.
 pub fn set_color(src: &str, block: Range<usize>, sel: Range<usize>, color: &str) -> Option<Fmt> {
+    if color.is_empty() {
+        return clear_color(src, block, sel);
+    }
     let spec = if color.len() == 6 && color.chars().all(|c| c.is_ascii_hexdigit()) {
         format!("[HTML]{{{}}}", color.to_ascii_uppercase())
     } else {
@@ -1051,5 +1072,16 @@ mod tests {
             (Some("Avenir Next".into()), Some("1A2B3C".into()))
         );
         assert_eq!(fc("d}}"), (Some("Avenir Next".into()), Some("red".into())));
+    }
+
+    #[test]
+    fn automatic_takes_the_colour_off() {
+        let s = "a \\textcolor{red}{word} b";
+        let at = s.find("word").unwrap();
+        let f = set_color(s, 0..s.len(), at..at + 4, "").unwrap();
+        let mut t = s.to_string();
+        t.replace_range(f.range.clone(), &f.text);
+        assert_eq!(t, "a word b");
+        assert_eq!(set_color("plain", 0..5, 0..5, ""), None);
     }
 }

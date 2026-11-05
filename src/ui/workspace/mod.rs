@@ -45,7 +45,18 @@ actions!(
         Recompile,
         OpenSettings,
         ToggleInspector,
-        InsertLink
+        InsertLink,
+        InsertPicture,
+        InsertTable,
+        InsertEquation,
+        InsertFootnote,
+        InsertCrossReference,
+        InsertCitation,
+        InsertPageBreak,
+        InsertContents,
+        MinimizeWindow,
+        ZoomWindow,
+        ToggleFullScreen
     ]
 );
 
@@ -65,6 +76,9 @@ pub struct Workspace {
     ribbon_tab: ribbon::RibbonTab,
     /// The colour palette's hex field.
     color_hex: Entity<InputState>,
+    /// The table grid's size fields, for sizing a table from the keyboard.
+    table_rows: Entity<InputState>,
+    table_cols: Entity<InputState>,
     status: String,
     /// Folders open in the project panel (paths): only they are read from disk, so a large
     /// folder (node_modules) costs nothing until it is opened.
@@ -95,6 +109,8 @@ impl Workspace {
             inspector: Default::default(),
             ribbon_tab: Default::default(),
             color_hex: cx.new(|cx| InputState::new(window, cx).placeholder("1A2B3C")),
+            table_rows: cx.new(|cx| InputState::new(window, cx).default_value("3")),
+            table_cols: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             status: String::new(),
             rename: None,
             expanded: Default::default(),
@@ -241,6 +257,32 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &InsertLink, window, cx| this.open_link_dialog(window, cx)),
             )
+            // the Insert menu: what the Insert tab does, for the keyboard and the menu bar
+            .on_action(cx.listener(|this, _: &InsertPicture, _, cx| this.choose_picture(cx)))
+            .on_action(cx.listener(|this, _: &InsertTable, _, cx| {
+                this.with_doc(cx, |d, cx| d.insert_table(3, 3, cx))
+            }))
+            .on_action(cx.listener(|this, _: &InsertEquation, window, cx| {
+                this.with_doc(cx, |d, cx| d.insert_display_math(window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &InsertFootnote, window, cx| {
+                this.with_doc(cx, |d, cx| d.insert_footnote(window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &InsertCrossReference, window, cx| {
+                this.open_reference_picker(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &InsertCitation, window, cx| {
+                this.open_citation_picker(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &InsertPageBreak, _, cx| this.insert_block("\\newpage", cx)),
+            )
+            .on_action(cx.listener(|this, _: &InsertContents, _, cx| {
+                this.insert_block("\\tableofcontents", cx)
+            }))
+            .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
+            .on_action(|_: &ZoomWindow, window, _| window.zoom_window())
+            .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
             .on_action(cx.listener(|_, _: &ToggleInspector, _, cx| {
                 settings::AppSettings::set(cx, |s| s.inspector_closed = !s.inspector_closed);
             }))

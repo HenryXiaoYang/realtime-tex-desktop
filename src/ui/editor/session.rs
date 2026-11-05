@@ -66,6 +66,7 @@ impl Doc {
         }
         self.blocks = document::blocks(&self.spans, &self.source, &self.preview);
         self.maps.borrow_mut().clear();
+        self.page_text.borrow_mut().clear();
         self.render_live(window, cx);
         cx.notify();
     }

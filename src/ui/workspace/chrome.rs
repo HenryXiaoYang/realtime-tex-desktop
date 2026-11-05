@@ -1,5 +1,6 @@
 // The window around the documents: title bar, tab bar with the view switches, status bar.
 use super::*;
+use crate::ui::Tip;
 
 impl Workspace {
     pub(super) fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -74,7 +75,7 @@ impl Workspace {
                     .icon(Icon::default().path("icons/x.svg"))
                     .ghost()
                     .xsmall()
-                    .tooltip("Close Tab (⌘W)")
+                    .tip("Close Tab (⌘W)")
                     .on_click(cx.listener(move |this, _, window, cx| this.close(ix, window, cx)));
                 let lead = if d.dirty {
                     div()
@@ -117,7 +118,7 @@ impl Workspace {
                             .icon(Icon::default().path("icons/refresh-cw.svg"))
                             .xsmall()
                             .ghost()
-                            .tooltip("Run the full LaTeX compile now (⌘⇧R)")
+                            .tip("Recompile: run the full LaTeX compile now (⌘⇧R)")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.with_doc(cx, |d, cx| d.recompile(cx))
                             })),
@@ -148,7 +149,7 @@ impl Workspace {
                 .xsmall()
                 .ghost()
                 .selected(on)
-                .tooltip(if to {
+                .tip(if to {
                     "Source: edit the LaTeX file (⌘⇧E)"
                 } else {
                     "Visual: edit on the typeset pages (⌘⇧E)"
@@ -181,7 +182,7 @@ impl Workspace {
                     .icon(Icon::default().path("icons/zoom-out.svg"))
                     .ghost()
                     .xsmall()
-                    .tooltip("Zoom Out (⌘-)")
+                    .tip("Zoom Out (⌘-)")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.with_doc(cx, |d, cx| d.zoom_step(-1, window, cx))
                     })),
@@ -215,7 +216,7 @@ impl Workspace {
                     .icon(Icon::default().path("icons/zoom-in.svg"))
                     .ghost()
                     .xsmall()
-                    .tooltip("Zoom In (⌘=)")
+                    .tip("Zoom In (⌘=)")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.with_doc(cx, |d, cx| d.zoom_step(1, window, cx))
                     })),
@@ -268,7 +269,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .selected(self.sidebar)
-                            .tooltip("Toggle Project Panel (⌘\\)")
+                            .tip("Toggle Project Panel (⌘\\)")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.sidebar = !this.sidebar;
                                 cx.notify();
@@ -279,14 +280,26 @@ impl Workspace {
                             .icon(Icon::default().path("icons/settings.svg"))
                             .ghost()
                             .xsmall()
-                            .tooltip("Settings (⌘,)")
+                            .tip("Settings (⌘,)")
                             .on_click(|_, _, cx| open_settings(cx)),
                     )
-                    .child(div().truncate().child(if status.is_empty() {
-                        "Ready".to_string()
-                    } else {
-                        status
-                    })),
+                    // a long message (a LaTeX error) cut short, whole in its tooltip
+                    .child({
+                        let text = if status.is_empty() {
+                            "Ready".to_string()
+                        } else {
+                            status
+                        };
+                        let tip = text.clone();
+                        div()
+                            .id("status")
+                            .truncate()
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                    .build(window, cx)
+                            })
+                            .child(text)
+                    }),
             )
             .child(
                 div()

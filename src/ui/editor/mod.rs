@@ -325,6 +325,9 @@ pub struct Doc {
     typing: Option<Typing>,
     /// Caret maps by (block start, page), until the blocks or the source change.
     maps: RefCell<HashMap<(usize, u32), Rc<document::caret::CharMap>>>,
+    /// Each page's text, for VoiceOver (the page itself is an image), until the blocks or the
+    /// source change.
+    page_text: RefCell<HashMap<u32, SharedString>>,
     /// The caret's blink: shown now, and the timer that flips it.
     caret_on: bool,
     blink: Option<Task<()>>,
@@ -443,6 +446,7 @@ impl Doc {
             overlay: None,
             typing: None,
             maps: Default::default(),
+            page_text: Default::default(),
             caret_on: true,
             blink: None,
             caret_bounds: Default::default(),

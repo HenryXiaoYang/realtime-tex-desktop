@@ -4,6 +4,7 @@
 // typing stops). It shows unless closed (⌘⌥\ or its ×), which is remembered.
 use super::*;
 use crate::document::element::{self, Field, Input as FieldInput, Kind};
+use crate::ui::Tip;
 use gpui_kit::component::switch::Switch;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -77,24 +78,21 @@ impl Workspace {
         }
         if !more.is_empty() {
             body = body.child(
-                div()
-                    .id("inspector-advanced")
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .cursor_pointer()
-                    .child(
-                        Icon::default()
-                            .path(if advanced {
-                                "icons/chevron-down.svg"
-                            } else {
-                                "icons/chevron-right.svg"
-                            })
-                            .size(px(12.0)),
-                    )
-                    .child("Advanced")
+                Button::new("inspector-advanced")
+                    .ghost()
+                    .small()
+                    .justify_start()
+                    .icon(Icon::default().path(if advanced {
+                        "icons/chevron-down.svg"
+                    } else {
+                        "icons/chevron-right.svg"
+                    }))
+                    .label("Advanced")
+                    .accessibility_label(if advanced {
+                        "Advanced, shown"
+                    } else {
+                        "Advanced, hidden"
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.inspector.advanced = !this.inspector.advanced;
                         cx.notify();
@@ -142,7 +140,7 @@ impl Workspace {
                             .icon(Icon::default().path("icons/x.svg"))
                             .ghost()
                             .xsmall()
-                            .tooltip("Hide the sidebar (⌘⌥\\)")
+                            .tip("Hide the sidebar (⌘⌥\\)")
                             .on_click(|_, _, cx| {
                                 settings::AppSettings::set(cx, |s| s.inspector_closed = true)
                             }),
@@ -278,7 +276,7 @@ impl Workspace {
                             .small()
                             .when(on, |b| b.primary())
                             .when(!on, |b| b.outline())
-                            .tooltip(tip)
+                            .tip(format!("{tip} ({c})"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.with_doc(cx, |d, cx| d.set_element_field(key, &next, cx));
                             })),

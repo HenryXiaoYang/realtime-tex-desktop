@@ -2,6 +2,7 @@
 // highlighted (the current one stronger), Enter / ⌘G to the next, ⇧Enter / ⌘⇧G to the one
 // before, and the replacement put in as typed, keeping the markup a match runs through.
 use super::*;
+use crate::ui::Tip;
 use document::find;
 use gpui_kit::component::Selectable;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -206,7 +207,7 @@ impl Doc {
                 .icon(Icon::default().path(icon))
                 .ghost()
                 .xsmall()
-                .tooltip(tip)
+                .tip(tip)
         };
         let row = div()
             .flex()

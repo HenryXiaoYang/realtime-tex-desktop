@@ -1,6 +1,7 @@
 // App settings: kept as a GPUI global, saved as JSON in
 // ~/Library/Application Support/Realtime Tex Desktop/settings.json, and edited in the Settings
 // window (⌘,), built from gpui-kit's settings components.
+use crate::ui::Tip;
 use crate::ui::keymap;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::setting::{
@@ -242,7 +243,7 @@ fn shortcut_row(id: &'static str, label: &'static str, _: &mut Window, cx: &mut 
                     .icon(Icon::default().path("icons/undo.svg"))
                     .ghost()
                     .xsmall()
-                    .tooltip("Back to the default")
+                    .tip("Back to the default")
                     .disabled(!changed)
                     .on_click(move |_, window, cx| {
                         keymap::set_key(id, default, cx);

@@ -4,6 +4,7 @@
 // tab folds the ribbon to its tab row.
 use super::*;
 use crate::document::format::{Align, Font, SIZES, Size, Style};
+use crate::ui::Tip;
 use crate::ui::editor::{FormatOp, RibbonState};
 use gpui_kit::component::input::{Copy, Cut, Paste};
 
@@ -85,22 +86,13 @@ impl Workspace {
             .enumerate()
         {
             tabs = tabs.child(
-                div()
-                    .id(("ribbon-tab", i))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .text_sm()
-                    .cursor_pointer()
-                    .when(!collapsed && t == tab, |d| d.bg(theme.secondary))
-                    .hover(|d| d.bg(theme.secondary))
-                    .child(name)
-                    .tooltip(|window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(
-                            "Double-click to fold the ribbon",
-                        )
-                        .build(window, cx)
-                    })
+                Button::new(("ribbon-tab", i))
+                    .label(name)
+                    .ghost()
+                    .small()
+                    .role(gpui_kit::Role::Tab)
+                    .selected(!collapsed && t == tab)
+                    .tooltip("Double-click to fold the ribbon")
                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                         // a double-click folds it or opens it again; a click on a folded one
                         // (or another tab) opens it
@@ -113,6 +105,17 @@ impl Workspace {
                     })),
             );
         }
+        // nothing to act on yet: say how to get something, beside the tabs where it shows
+        let tabs = tabs.when(!state.enabled && !collapsed, |d| {
+            d.child(
+                div()
+                    .ml_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .whitespace_nowrap()
+                    .child("Click in the text to format it or to insert there"),
+            )
+        });
         let ribbon = div()
             .flex()
             .flex_col()
@@ -181,7 +184,7 @@ impl Workspace {
             .small()
             .selected(on)
             .disabled(!enabled)
-            .tooltip(tip)
+            .tip(tip)
             .on_click(cx.listener(move |this, _, window, cx| this.format(op.clone(), window, cx)))
     }
 
@@ -191,7 +194,7 @@ impl Workspace {
                 .icon(Icon::default().path(icon))
                 .ghost()
                 .small()
-                .tooltip(tip)
+                .tip(tip)
                 .on_click(move |_, window, cx| window.dispatch_action(a.boxed_clone(), cx))
         };
         let row = div()
@@ -245,6 +248,7 @@ impl Workspace {
             ("Serif".into(), SERIF_FACE)
         };
         let face: SharedString = face.to_string().into();
+        let spoken_family = family.clone();
         let pick = {
             let weak = weak.clone();
             move |op: FormatOp| {
@@ -272,6 +276,7 @@ impl Workspace {
                 .disabled(!en)
                 .dropdown_caret(true)
                 .tooltip("Font")
+                .accessibility_label(format!("Font: {spoken_family}"))
                 .dropdown_menu(move |mut menu, _, cx| {
                     // each name in its own face, as Word shows them
                     let face_item = |label: SharedString, face: SharedString| {
@@ -315,6 +320,7 @@ impl Workspace {
                 .disabled(!en)
                 .dropdown_caret(true)
                 .tooltip("Size")
+                .accessibility_label(format!("Size: {}", size_label(now)))
                 .dropdown_menu(move |mut menu, _, _| {
                     for s in SIZES {
                         let px_size = px(size_px(s));
@@ -346,6 +352,7 @@ impl Workspace {
                         this.format(FormatOp::Color(spec), window, cx)
                     });
                 }),
+                cx,
             )
         };
         let top = div()
@@ -542,25 +549,24 @@ impl Workspace {
                 Style::Heading(_) => (px(12.0), FontWeight::BOLD),
                 _ => (px(12.0), FontWeight::NORMAL),
             };
+            // each style named in its own look
             row = row.child(
-                div()
-                    .id(("rb-style", i))
+                Button::new(("rb-style", i))
+                    .outline()
+                    .selected(on)
+                    .disabled(!st.enabled)
                     .w(px(78.0))
                     .h(px(44.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .border_1()
+                    .p_0()
                     .border_color(if on { theme.primary } else { theme.border })
-                    .bg(theme.background)
-                    .text_size(size)
-                    .font_weight(weight)
-                    .when(style == Style::Quote, |d| d.italic())
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .when(!st.enabled, |d| d.opacity(0.5))
-                    .child(label)
+                    .accessibility_label(format!("Style: {label}"))
+                    .child(
+                        div()
+                            .text_size(size)
+                            .font_weight(weight)
+                            .when(style == Style::Quote, |d| d.italic())
+                            .child(label),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.format(FormatOp::Style(style), window, cx)
                     })),

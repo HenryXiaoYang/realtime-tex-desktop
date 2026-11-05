@@ -18,12 +18,19 @@ struct PickItem {
 type OnPick = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 type OnOk = dyn Fn(&mut Window, &mut App);
 
-/// A searchable list in a dialog; Enter or a click takes a row.
+/// The most rows a picker draws at once (a .bib can hold thousands): typing narrows them down.
+const PICKER_ROWS: usize = 200;
+
+/// A searchable list in a dialog: typing filters it, ↑ and ↓ move through it, Enter or a click
+/// takes a row.
 struct Picker {
     input: Entity<InputState>,
     items: Vec<PickItem>,
     empty: &'static str,
     on_pick: OnPick,
+    /// The row ↑/↓ have moved to (among the matches).
+    selected: usize,
+    scroll: ScrollHandle,
     _sub: Subscription,
 }
 
@@ -38,6 +45,18 @@ impl Picker {
             })
             .collect()
     }
+
+    /// The selected row taken.
+    fn take(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let m = self.matches(cx);
+        if let Some(v) = m
+            .get(self.selected.min(m.len().saturating_sub(1)))
+            .map(|it| it.value.clone())
+        {
+            (self.on_pick)(&v, window, cx);
+            window.close_dialog(cx);
+        }
+    }
 }
 
 impl Render for Picker {
@@ -45,8 +64,10 @@ impl Render for Picker {
         let theme = cx.theme().clone();
         let mut list = div().flex().flex_col();
         let mut group: Option<SharedString> = None;
-        let matches: Vec<PickItem> = self.matches(cx).into_iter().cloned().collect();
-        if matches.is_empty() {
+        let all: Vec<PickItem> = self.matches(cx).into_iter().cloned().collect();
+        let total = all.len();
+        self.selected = self.selected.min(total.saturating_sub(1));
+        if all.is_empty() {
             list = list.child(
                 div()
                     .p_2()
@@ -55,11 +76,14 @@ impl Render for Picker {
                     .child(if self.items.is_empty() {
                         self.empty
                     } else {
-                        "Nothing matches"
+                        "Nothing matches. Try fewer letters"
                     }),
             );
         }
-        for (i, it) in matches.into_iter().enumerate() {
+        // the list's children, headings included, to scroll the selected row into view
+        let mut child = 0;
+        let mut selected_child = 0;
+        for (i, it) in all.into_iter().take(PICKER_ROWS).enumerate() {
             if group.as_ref() != Some(&it.group) {
                 group = Some(it.group.clone());
                 list = list.child(
@@ -72,44 +96,88 @@ impl Render for Picker {
                         .text_color(theme.muted_foreground)
                         .child(it.group.clone()),
                 );
+                child += 1;
+            }
+            if i == self.selected {
+                selected_child = child;
             }
             let on_pick = self.on_pick.clone();
             let value = it.value.clone();
+            let name = if it.detail.is_empty() {
+                it.title.to_string()
+            } else {
+                format!("{}, {}", it.title, it.detail)
+            };
             list = list.child(
-                div()
-                    .id(("pick", i))
-                    .flex()
-                    .flex_col()
-                    .px_2()
+                Button::new(("pick", i))
+                    .ghost()
+                    .w_full()
+                    .h_auto()
                     .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .child(div().text_sm().child(it.title.clone()))
-                    .when(!it.detail.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(it.detail.clone()),
-                        )
-                    })
+                    .justify_start()
+                    // ↑ and ↓ move through the rows: Tab goes past them
+                    .tab_stop(false)
+                    .selected(i == self.selected)
+                    .accessibility_label(name)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .min_w_0()
+                            .child(div().text_sm().child(it.title.clone()))
+                            .when(!it.detail.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .child(it.detail.clone()),
+                                )
+                            }),
+                    )
                     .on_click(move |_, window, cx| {
                         on_pick(&value, window, cx);
                         window.close_dialog(cx);
                     }),
             );
+            child += 1;
         }
+        if total > PICKER_ROWS {
+            list = list.child(
+                div()
+                    .p_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!(
+                        "Showing {PICKER_ROWS} of {total}. Type to narrow them down"
+                    )),
+            );
+        }
+        self.scroll.scroll_to_item(selected_child);
         div()
             .flex()
             .flex_col()
             .gap_2()
+            .capture_key_down(cx.listener(|p, ev: &KeyDownEvent, _, cx| {
+                let n = p.matches(cx).len().min(PICKER_ROWS);
+                match ev.keystroke.key.as_str() {
+                    "down" if n > 0 => p.selected = (p.selected + 1).min(n - 1),
+                    "up" => p.selected = p.selected.saturating_sub(1),
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
             .child(Input::new(&self.input))
             .child(
                 div()
                     .id("picker-list")
                     .h(px(320.0))
                     .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .child(list),
             )
     }
@@ -237,32 +305,28 @@ impl Workspace {
         enabled: bool,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) -> Stateful<Div> {
-        let face = widgets::big_face(icon, label, false, cx).id(id);
-        if enabled {
-            face.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
-        } else {
-            face.opacity(0.5).cursor_default()
-        }
+    ) -> Button {
+        widgets::big_button(id, icon, label, false, cx)
+            .disabled(!enabled)
+            .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
     }
 
-    fn insert_block(&self, tex: &str, cx: &mut Context<Self>) {
+    pub(super) fn insert_block(&self, tex: &str, cx: &mut Context<Self>) {
         self.with_doc(cx, |d, cx| d.insert_block(tex, &[], cx));
     }
 
     /// Space: a menu of LaTeX's vertical skips.
     fn space_menu(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
-        let face = widgets::big_face("icons/move-vertical.svg", "Space", true, cx);
+        let face = widgets::big_button("ins-space", "icons/move-vertical.svg", "Space", true, cx);
         if !enabled {
-            return face.opacity(0.5).cursor_default().into_any_element();
+            return face.disabled(true).into_any_element();
         }
         let weak = cx.entity().downgrade();
         gpui_kit::component::popover::Popover::new("ins-space-menu")
-            .trigger(Button::new("ins-space").ghost().h_auto().p_0().child(face))
+            .trigger(face)
             .content(move |_, _, cx| {
-                let theme = cx.theme().clone();
                 let popover = cx.entity();
-                let mut list = div().flex().flex_col().min_w(px(160.0));
+                let mut list = div().flex().flex_col().min_w(px(180.0));
                 for (i, (label, tex)) in [
                     ("Small", "\\smallskip"),
                     ("Medium", "\\medskip"),
@@ -274,15 +338,12 @@ impl Workspace {
                 {
                     let (weak, popover) = (weak.clone(), popover.clone());
                     list = list.child(
-                        div()
-                            .id(("space", i))
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .text_sm()
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .child(label)
+                        Button::new(("space", i))
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .justify_start()
+                            .label(label)
                             .on_click(move |_, window, cx| {
                                 let _ = weak.update(cx, |this, cx| this.insert_block(tex, cx));
                                 popover.update(cx, |p, cx| p.dismiss(window, cx));
@@ -309,9 +370,11 @@ impl Workspace {
                 .into_any_element();
         }
         let weak = cx.entity().downgrade();
-        let face = widgets::big_face("icons/table.svg", "Table", true, cx);
+        let face = widgets::big_button("ins-table", "icons/table.svg", "Table", true, cx);
         widgets::table_grid(
             face,
+            self.table_rows.clone(),
+            self.table_cols.clone(),
             Rc::new(move |(rows, cols), _, cx| {
                 let _ = weak.update(cx, |this, cx| {
                     this.with_doc(cx, |d, cx| d.insert_table(rows, cols, cx))
@@ -322,7 +385,7 @@ impl Workspace {
     }
 
     /// The file chooser for a picture, then the picture as a figure at the caret.
-    fn choose_picture(&self, cx: &mut Context<Self>) {
+    pub(super) fn choose_picture(&self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -419,7 +482,7 @@ impl Workspace {
     }
 
     /// Insert → Cross-reference: the document's labels, by kind.
-    fn open_reference_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_reference_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc) = self.doc().cloned() else {
             return;
         };
@@ -464,7 +527,7 @@ impl Workspace {
     }
 
     /// Insert → Citation: the entries of the document's .bib files.
-    fn open_citation_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_citation_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc) = self.doc().cloned() else {
             return;
         };
@@ -508,13 +571,11 @@ impl Workspace {
                 &input,
                 window,
                 |p: &mut Picker, _, ev: &InputEvent, window, cx| match ev {
-                    InputEvent::PressEnter { .. } => {
-                        if let Some(v) = p.matches(cx).first().map(|it| it.value.clone()) {
-                            (p.on_pick)(&v, window, cx);
-                            window.close_dialog(cx);
-                        }
+                    InputEvent::PressEnter { .. } => p.take(window, cx),
+                    InputEvent::Change => {
+                        p.selected = 0;
+                        cx.notify();
                     }
-                    InputEvent::Change => cx.notify(),
                     _ => {}
                 },
             );
@@ -523,6 +584,8 @@ impl Workspace {
                 items,
                 empty,
                 on_pick,
+                selected: 0,
+                scroll: ScrollHandle::new(),
                 _sub: sub,
             }
         });

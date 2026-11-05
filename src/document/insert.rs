@@ -59,6 +59,13 @@ pub fn new_label(src: &str, prefix: &str, stem: &str) -> String {
 
 /// `\href` to `url` showing `text` (TeX already), or `\url` when there is no text.
 pub fn link(url: &str, text: &str) -> String {
+    // an address typed without its scheme (`example.com/a`) is a web one
+    let url = url.trim();
+    let url = if !url.contains(':') && !url.starts_with('#') && url.contains('.') {
+        format!("https://{url}")
+    } else {
+        url.to_string()
+    };
     // spaces as %20; a brace the URL cannot balance would end the argument
     let url: String = url
         .trim()
@@ -541,6 +548,11 @@ mod tests {
             "\\href{https://x.org/\\#a}{site}"
         );
         assert_eq!(link("https://x.org", ""), "\\url{https://x.org}");
+        assert_eq!(
+            link("example.com/a", "t"),
+            "\\href{https://example.com/a}{t}"
+        );
+        assert_eq!(link("mailto:a@b.org", "t"), "\\href{mailto:a@b.org}{t}");
         assert_eq!(
             link(" https://x.org/a b{c} ", "t"),
             "\\href{https://x.org/a\\%20b\\%7Bc\\%7D}{t}"

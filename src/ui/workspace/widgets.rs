@@ -1,6 +1,7 @@
 // Small pieces of the ribbon and the sidebar: xcolor's colours as swatches, the grid that picks a
 // table's size, and a segmented choice.
 use super::*;
+use crate::ui::Tip;
 use gpui_kit::component::popover::Popover;
 
 /// What a widget calls with the value picked.
@@ -51,9 +52,25 @@ pub(super) fn color_of(spec: &str) -> Option<Hsla> {
         .map(|x| rgb(x).into())
 }
 
+/// A big ribbon button: its icon over its name, with a caret when it opens a menu. A real
+/// button (focusable, named for VoiceOver, Enter and Space press it).
+pub(super) fn big_button(
+    id: impl Into<ElementId>,
+    icon: &'static str,
+    label: &'static str,
+    caret: bool,
+    cx: &App,
+) -> Button {
+    Button::new(id)
+        .ghost()
+        .h_auto()
+        .p_0()
+        .accessibility_label(label)
+        .child(big_face(icon, label, caret, cx))
+}
+
 /// A big ribbon button's face: its icon over its name, with a caret when it opens a menu.
-pub(super) fn big_face(icon: &'static str, label: &'static str, caret: bool, cx: &App) -> Div {
-    let theme = cx.theme();
+fn big_face(icon: &'static str, label: &'static str, caret: bool, _: &App) -> Div {
     div()
         .flex()
         .flex_col()
@@ -67,8 +84,6 @@ pub(super) fn big_face(icon: &'static str, label: &'static str, caret: bool, cx:
         .min_w(px(48.0))
         .rounded_md()
         .text_xs()
-        .cursor_pointer()
-        .hover(|d| d.bg(theme.secondary))
         .child(Icon::default().path(icon).size(px(20.0)))
         .child(
             div()
@@ -87,17 +102,47 @@ pub(super) fn big_face(icon: &'static str, label: &'static str, caret: bool, cx:
 }
 
 /// A swatch: a square of colour `c`, ringed when `on`.
-fn swatch(id: impl Into<ElementId>, c: Hsla, on: bool, cx: &App) -> Stateful<Div> {
+/// A swatch: a button of colour `c` named `name` (for VoiceOver and its tooltip), ringed when
+/// `on`.
+fn swatch(id: impl Into<ElementId>, c: Hsla, name: SharedString, on: bool, cx: &App) -> Button {
     let theme = cx.theme();
-    div()
-        .id(id)
-        .size(px(18.0))
-        .rounded_sm()
-        .bg(c)
-        .border_1()
-        .border_color(if on { theme.primary } else { theme.border })
-        .when(on, |d| d.shadow_sm())
-        .cursor_pointer()
+    Button::new(id)
+        .ghost()
+        .p_0()
+        .size(px(22.0))
+        .selected(on)
+        .accessibility_label(name.clone())
+        .tooltip(name)
+        .child(
+            div()
+                .size(px(18.0))
+                .rounded_sm()
+                .bg(c)
+                .border_1()
+                .border_color(if on { theme.primary } else { theme.border }),
+        )
+}
+
+/// What a shade in the palette is called, from its hue and lightness.
+fn shade_name(h: usize, l: f32) -> String {
+    const HUES: [&str; 10] = [
+        "red", "orange", "yellow", "lime", "green", "teal", "cyan", "blue", "violet", "pink",
+    ];
+    let tone = match l {
+        l if l >= 0.8 => "Very light ",
+        l if l >= 0.6 => "Light ",
+        l if l >= 0.45 => "",
+        l if l >= 0.3 => "Dark ",
+        _ => "Very dark ",
+    };
+    let hue = HUES[h % 10];
+    if tone.is_empty() {
+        let mut c = hue.chars();
+        c.next()
+            .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+    } else {
+        format!("{tone}{hue}")
+    }
 }
 
 /// The text-colour palette: xcolor's named colours (which read well in the TeX), shades of
@@ -106,28 +151,27 @@ pub(super) fn color_palette(
     now: Option<String>,
     hex: Entity<InputState>,
     on_pick: OnPick<String>,
+    cx: &App,
 ) -> Popover {
-    let shown = now.as_deref().and_then(color_of);
+    // no colour at the caret: the text's own (black on paper, but visible in dark mode)
+    let shown = now
+        .as_deref()
+        .and_then(color_of)
+        .unwrap_or(cx.theme().foreground);
     Popover::new("rb-color-palette")
         .trigger(
             Button::new("rb-color")
                 .ghost()
                 .small()
                 .dropdown_caret(true)
-                .tooltip("Text colour")
+                .tip("Text colour")
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .items_center()
                         .child(Icon::default().path("icons/baseline.svg").size(px(14.0)))
-                        .child(
-                            div()
-                                .w(px(14.0))
-                                .h(px(3.0))
-                                .rounded_sm()
-                                .bg(shown.unwrap_or(hsla(0.0, 0.0, 0.0, 1.0))),
-                        ),
+                        .child(div().w(px(14.0)).h(px(3.0)).rounded_sm().bg(shown)),
                 ),
         )
         .content(move |_, _, cx| {
@@ -139,28 +183,31 @@ pub(super) fn color_palette(
                     popover.update(cx, |p, cx| p.dismiss(window, cx));
                 }
             };
-            let mut named = div().flex().flex_wrap().gap_1().w(px(10.0 * 22.0));
+            let mut named = div().flex().flex_wrap().gap_0p5().w(px(10.0 * 24.0));
             for (i, (name, label, x)) in XCOLORS.iter().enumerate() {
                 let on = now.as_deref() == Some(*name);
                 named = named.child(
-                    swatch(("xc", i), rgb(*x).into(), on, cx)
-                        .tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(*label).build(window, cx)
-                        })
+                    swatch(("xc", i), rgb(*x).into(), (*label).into(), on, cx)
                         .on_click(pick(name.to_string())),
                 );
             }
             // ten hues, from light to dark
-            let mut shades = div().flex().flex_col().gap_1();
+            let mut shades = div().flex().flex_col().gap_0p5();
             for l in [0.85, 0.7, 0.5, 0.35, 0.2] {
-                let mut row = div().flex().gap_1();
+                let mut row = div().flex().gap_0p5();
                 for h in 0..10 {
                     let c = hsla(h as f32 / 10.0, 0.8, l, 1.0);
                     let spec = color_spec(c);
                     let on = now.as_deref() == Some(spec.as_str());
                     row = row.child(
-                        swatch(("sh", (l * 100.0) as usize * 16 + h), c, on, cx)
-                            .on_click(pick(spec)),
+                        swatch(
+                            ("sh", (l * 100.0) as usize * 16 + h),
+                            c,
+                            shade_name(h, l).into(),
+                            on,
+                            cx,
+                        )
+                        .on_click(pick(spec)),
                     );
                 }
                 shades = shades.child(row);
@@ -173,6 +220,18 @@ pub(super) fn color_palette(
                 .flex_col()
                 .gap_2()
                 .p_1()
+                // the colour off again: the text's own
+                .child(
+                    Button::new("xc-auto")
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .justify_start()
+                        .selected(now.is_none())
+                        .icon(Icon::default().path("icons/baseline.svg"))
+                        .label("Automatic")
+                        .on_click(pick(String::new())),
+                )
                 .child(label("Named colours"))
                 .child(named)
                 .child(label("More colours"))
@@ -182,13 +241,19 @@ pub(super) fn color_palette(
         })
 }
 
-/// The grid that sizes a new table: hover over it to choose rows × columns, click to insert.
-pub(super) fn table_grid(face: Div, on_pick: OnPick<(usize, usize)>) -> Popover {
+/// The grid that sizes a new table: hover over it to choose rows × columns, click to insert;
+/// or (from the keyboard) the sizes typed in `rows` and `cols`, fields the caller keeps.
+pub(super) fn table_grid(
+    trigger: Button,
+    rows: Entity<InputState>,
+    cols: Entity<InputState>,
+    on_pick: OnPick<(usize, usize)>,
+) -> Popover {
     const ROWS: usize = 8;
     const COLS: usize = 8;
     let hover = Rc::new(std::cell::Cell::new((0usize, 0usize)));
     Popover::new("ins-table-grid")
-        .trigger(Button::new("ins-table").ghost().h_auto().p_0().child(face))
+        .trigger(trigger)
         .content(move |_, _, cx| {
             let theme = cx.theme().clone();
             let (hr, hc) = hover.get();
@@ -238,6 +303,45 @@ pub(super) fn table_grid(face: Div, on_pick: OnPick<(usize, usize)>) -> Popover 
                     format!("{hr} × {hc} table")
                 }))
                 .child(grid)
+                .child({
+                    // the same from the keyboard: sizes typed, then Insert
+                    let size = |input: &Entity<InputState>, cx: &App| {
+                        input
+                            .read(cx)
+                            .value()
+                            .trim()
+                            .parse::<usize>()
+                            .ok()
+                            .filter(|n| (1..=50).contains(n))
+                    };
+                    let (rows, cols, on_pick, popover) =
+                        (rows.clone(), cols.clone(), on_pick.clone(), popover.clone());
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .pt_1()
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .text_xs()
+                        .child(div().w(px(44.0)).child(Input::new(&rows).xsmall()))
+                        .child("rows ×")
+                        .child(div().w(px(44.0)).child(Input::new(&cols).xsmall()))
+                        .child("columns")
+                        .child(
+                            Button::new("ins-table-ok")
+                                .label("Insert")
+                                .xsmall()
+                                .outline()
+                                .tooltip("1 to 50 of each")
+                                .on_click(move |_, window, cx| {
+                                    if let Some(rc) = size(&rows, cx).zip(size(&cols, cx)) {
+                                        on_pick(rc, window, cx);
+                                        popover.update(cx, |p, cx| p.dismiss(window, cx));
+                                    }
+                                }),
+                        )
+                })
         })
 }
 
@@ -255,7 +359,7 @@ pub(super) fn segmented(
         let mut b = Button::new((id, i))
             .small()
             .selected(value == now)
-            .tooltip(label)
+            .tip(label)
             .on_click(move |_, window, cx| on_pick(value, window, cx));
         b = match icon {
             Some(i) => b.icon(Icon::default().path(i)).ghost(),
@@ -269,6 +373,13 @@ pub(super) fn segmented(
 #[cfg(test)]
 mod tests {
     use super::{color_of, color_spec};
+
+    #[test]
+    fn shades_have_names() {
+        assert_eq!(super::shade_name(7, 0.85), "Very light blue");
+        assert_eq!(super::shade_name(0, 0.5), "Red");
+        assert_eq!(super::shade_name(4, 0.2), "Very dark green");
+    }
 
     #[test]
     fn colours_name_themselves() {

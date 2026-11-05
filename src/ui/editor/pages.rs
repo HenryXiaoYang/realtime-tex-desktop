@@ -3,6 +3,29 @@
 use super::*;
 
 impl Doc {
+    /// The text printed on page `n`, block by block, for VoiceOver.
+    fn text_of_page(&self, n: u32) -> SharedString {
+        if let Some(t) = self.page_text.borrow().get(&n) {
+            return t.clone();
+        }
+        let text: Vec<String> = self
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                let rows: Vec<_> = b
+                    .rows
+                    .iter()
+                    .filter(|r| r.page == n)
+                    .map(|r| &r.row)
+                    .collect();
+                (!rows.is_empty()).then(|| glyphmap::glyph_text_of(&rows).text.iter().collect())
+            })
+            .collect();
+        let t: SharedString = text.join("\n").into();
+        self.page_text.borrow_mut().insert(n, t.clone());
+        t
+    }
+
     pub(super) fn render_page(
         &self,
         n: u32,
@@ -42,6 +65,14 @@ impl Doc {
                 )
         };
         let bounds = self.page_bounds.clone();
+        // the page is a picture: its text, for VoiceOver, in a layer over it
+        let spoken = div()
+            .id(("page-text", n as usize))
+            .absolute()
+            .inset_0()
+            .role(Role::Document)
+            .aria_label(format!("Page {n}"))
+            .aria_description(self.text_of_page(n));
         let page = div()
             .id(("page", n as usize))
             .relative()
@@ -57,6 +88,7 @@ impl Doc {
             }))
             .shadow_md()
             .cursor_text()
+            .child(spoken)
             .child(
                 canvas(
                     move |b, _, _| {

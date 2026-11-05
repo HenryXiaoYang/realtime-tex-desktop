@@ -445,6 +445,7 @@ impl Doc {
         self.source.replace_range(start..end, text);
         self.blocks = document::blocks(&self.spans, &self.source, &self.preview);
         self.maps.borrow_mut().clear();
+        self.page_text.borrow_mut().clear();
         self.restart_blink(cx);
         if self.find.is_some() {
             self.refind(cx);

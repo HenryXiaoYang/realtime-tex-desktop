@@ -1,5 +1,6 @@
 // The project panel: the file tree and the section outline, one above the other.
 use super::*;
+use crate::ui::Tip;
 
 impl Workspace {
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -9,7 +10,7 @@ impl Workspace {
                 .icon(Icon::default().path(icon))
                 .ghost()
                 .xsmall()
-                .tooltip(tip)
+                .tip(tip)
         };
         let weak = cx.entity().downgrade();
         let renaming = self.rename.clone();

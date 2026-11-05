@@ -73,6 +73,10 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   first, the rest under Advanced. Changes apply as they are made, adding any package they need;
   a value that cannot go into the TeX (a width that is not a number, a label with a `#`) is
   kept out, with a note under the field saying what it takes.
+- The menu bar holds every command (Edit → Find, Insert, Format, View, Window), each with its
+  shortcut. Every control has a name VoiceOver reads (icon buttons, swatches, styles), the
+  ribbon, the sidebar and the pickers work from the keyboard (↑/↓ in the cross-reference and
+  citation lists, a typed size for a table), and each page exposes its text to VoiceOver.
 - Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
   it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
   the clicked character; Up on the first line or Down on the last moves to the neighbouring
