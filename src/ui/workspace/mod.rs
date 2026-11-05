@@ -6,6 +6,7 @@ mod insert_tab;
 mod inspector;
 mod project_panel;
 mod ribbon;
+mod widgets;
 
 use files::*;
 
@@ -62,6 +63,8 @@ pub struct Workspace {
     inspector: inspector::Inspector,
     /// The ribbon's open tab.
     ribbon_tab: ribbon::RibbonTab,
+    /// The colour palette's hex field.
+    color_hex: Entity<InputState>,
     status: String,
     /// Folders open in the project panel (paths): only they are read from disk, so a large
     /// folder (node_modules) costs nothing until it is opened.
@@ -91,6 +94,7 @@ impl Workspace {
             sidebar: true,
             inspector: Default::default(),
             ribbon_tab: Default::default(),
+            color_hex: cx.new(|cx| InputState::new(window, cx).placeholder("1A2B3C")),
             status: String::new(),
             rename: None,
             expanded: Default::default(),
@@ -98,6 +102,31 @@ impl Workspace {
             _rename_sub: None,
             _dialog_subs: vec![],
         };
+        // a colour typed in the palette's hex field, on Enter
+        let hex = this.color_hex.clone();
+        this._subs.push(cx.subscribe_in(
+            &hex,
+            window,
+            |this, input, ev: &InputEvent, window, cx| {
+                if !matches!(ev, InputEvent::PressEnter { .. }) {
+                    return;
+                }
+                let v = input
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .trim_start_matches('#')
+                    .to_string();
+                if v.len() == 6 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                    this.format(
+                        crate::ui::editor::FormatOp::Color(v.to_ascii_uppercase()),
+                        window,
+                        cx,
+                    );
+                    input.update(cx, |s, cx| s.set_value("", window, cx));
+                }
+            },
+        ));
         let sub = cx.subscribe(&this.tree, |this, _, ev: &TreeEvent, cx| {
             match ev {
                 TreeEvent::Expanded(id) => this.expanded.insert(id.to_string()),

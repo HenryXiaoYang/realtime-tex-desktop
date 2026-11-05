@@ -238,85 +238,87 @@ impl Workspace {
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> Stateful<Div> {
-        let theme = cx.theme().clone();
-        div()
-            .id(id)
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
-            .min_w(px(56.0))
-            .rounded_md()
-            .text_xs()
-            .when(enabled, |d| {
-                d.cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
-            })
-            .when(!enabled, |d| d.opacity(0.5))
-            .child(Icon::default().path(icon).size(px(20.0)))
-            .child(label)
+        let face = widgets::big_face(icon, label, false, cx).id(id);
+        if enabled {
+            face.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
+        } else {
+            face.opacity(0.5).cursor_default()
+        }
     }
 
     fn insert_block(&self, tex: &str, cx: &mut Context<Self>) {
         self.with_doc(cx, |d, cx| d.insert_block(tex, &[], cx));
     }
 
+    /// Space: a menu of LaTeX's vertical skips.
     fn space_menu(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
+        let face = widgets::big_face("icons/move-vertical.svg", "Space", true, cx);
+        if !enabled {
+            return face.opacity(0.5).cursor_default().into_any_element();
+        }
         let weak = cx.entity().downgrade();
-        Button::new("ins-space")
-            .icon(Icon::default().path("icons/move-vertical.svg"))
-            .label("Space")
-            .ghost()
-            .small()
-            .disabled(!enabled)
-            .dropdown_caret(true)
-            .tooltip("Vertical space")
-            .dropdown_menu(move |mut menu, _, _| {
-                for (label, tex) in [
+        gpui_kit::component::popover::Popover::new("ins-space-menu")
+            .trigger(Button::new("ins-space").ghost().h_auto().p_0().child(face))
+            .content(move |_, _, cx| {
+                let theme = cx.theme().clone();
+                let popover = cx.entity();
+                let mut list = div().flex().flex_col().min_w(px(160.0));
+                for (i, (label, tex)) in [
                     ("Small", "\\smallskip"),
                     ("Medium", "\\medskip"),
                     ("Large", "\\bigskip"),
-                    ("Fill the page", "\\vfill"),
-                ] {
-                    let weak = weak.clone();
-                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                        let _ = weak.update(cx, |this, cx| this.insert_block(tex, cx));
-                    }));
+                    ("Fill the rest of the page", "\\vfill"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let (weak, popover) = (weak.clone(), popover.clone());
+                    list = list.child(
+                        div()
+                            .id(("space", i))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_sm()
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary))
+                            .child(label)
+                            .on_click(move |_, window, cx| {
+                                let _ = weak.update(cx, |this, cx| this.insert_block(tex, cx));
+                                popover.update(cx, |p, cx| p.dismiss(window, cx));
+                            }),
+                    );
                 }
-                menu
+                list
             })
             .into_any_element()
     }
 
+    /// Table: a grid to size it, as in Word.
     fn table_menu(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
+        if !enabled {
+            return self
+                .big_tool(
+                    "ins-table-off",
+                    "icons/table.svg",
+                    "Table",
+                    false,
+                    cx,
+                    |_, _, _| {},
+                )
+                .into_any_element();
+        }
         let weak = cx.entity().downgrade();
-        Button::new("ins-table")
-            .icon(Icon::default().path("icons/table.svg"))
-            .label("Table")
-            .ghost()
-            .small()
-            .disabled(!enabled)
-            .dropdown_caret(true)
-            .tooltip("Table")
-            .dropdown_menu(move |mut menu, _, _| {
-                for (rows, cols) in [(2, 2), (3, 3), (4, 3), (4, 4), (5, 4), (6, 5)] {
-                    let weak = weak.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(format!("{rows} rows × {cols} columns")).on_click(
-                            move |_, _, cx| {
-                                let _ = weak.update(cx, |this, cx| {
-                                    this.with_doc(cx, |d, cx| d.insert_table(rows, cols, cx))
-                                });
-                            },
-                        ),
-                    );
-                }
-                menu
-            })
-            .into_any_element()
+        let face = widgets::big_face("icons/table.svg", "Table", true, cx);
+        widgets::table_grid(
+            face,
+            Rc::new(move |(rows, cols), _, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.with_doc(cx, |d, cx| d.insert_table(rows, cols, cx))
+                });
+            }),
+        )
+        .into_any_element()
     }
 
     /// The file chooser for a picture, then the picture as a figure at the caret.

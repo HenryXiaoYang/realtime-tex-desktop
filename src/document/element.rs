@@ -411,13 +411,7 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
                     .and_then(|(_, o, _)| o)
                     .map(|o| src[o].to_string())
                     .unwrap_or_default();
-                out.push(f(
-                    "placement",
-                    "Placement (h t b p !)",
-                    Input::Text,
-                    true,
-                    placement,
-                ));
+                out.push(f("placement", "Placement", Input::Text, true, placement));
             }
             out
         }
@@ -429,13 +423,7 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
             vec![
                 f("caption", "Caption", Input::Text, false, text_of("caption")),
                 f("label", "Label", Input::Text, false, text_of("label")),
-                f(
-                    "placement",
-                    "Placement (h t b p !)",
-                    Input::Text,
-                    true,
-                    placement,
-                ),
+                f("placement", "Placement", Input::Text, true, placement),
             ]
         }
         Kind::Heading => {
@@ -785,6 +773,27 @@ fn checked(key: &str, v: &str) -> Option<String> {
         _ => true,
     };
     ok.then(|| v.to_string())
+}
+
+/// Why `value` cannot go into field `key` of an element of `kind`, for the sidebar to say; None
+/// when it can.
+pub fn hint(kind: Kind, key: &str, value: &str) -> Option<&'static str> {
+    let key = if kind == Kind::List && key == "label" {
+        "label-format"
+    } else {
+        key
+    };
+    checked(key, value.trim()).is_none().then_some(match key {
+        "width" => "A percentage of the line, or a length like 6cm",
+        "scale" | "angle" => "A number",
+        "page" | "start" => "A whole number",
+        "height" | "margin" => "A length like 2cm, 1in or 0.5\\textheight",
+        "trim" => "Four lengths: left bottom right top",
+        "placement" => "Letters from h t b p ! H",
+        "label" => "No \\ { } # % ~ $ & ^ or commas",
+        "file" => "No { } % # or \\",
+        _ => "Braces { } must pair up",
+    })
 }
 
 /// The edit that gives field `key` of `el` the value `value` (empty: none / off), or None when

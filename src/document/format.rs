@@ -55,6 +55,35 @@ pub fn formats_at(src: &str, block: Range<usize>, off: usize) -> Vec<String> {
         .collect()
 }
 
+/// The named font (`\\fontspec{Name}`) and the colour (an xcolor name, or HTML hex) the text
+/// at `off` is set in, innermost first.
+pub fn font_and_color_at(
+    src: &str,
+    block: Range<usize>,
+    off: usize,
+) -> (Option<String>, Option<String>) {
+    let (mut font, mut color) = (None, None);
+    // innermost first
+    for (name, start, open) in open_groups(&src[block.clone()], block.start, off)
+        .into_iter()
+        .rev()
+    {
+        if font.is_none() && name.is_empty() && src[open + 1..].starts_with("\\fontspec{") {
+            let b = open + 1 + "\\fontspec".len();
+            font = group_close(src, b).map(|e| src[b + 1..e].to_string());
+        }
+        if color.is_none() && name == "textcolor" {
+            let spec = &src[start + "\\textcolor".len()..open];
+            let spec = spec.strip_prefix("[HTML]").unwrap_or(spec);
+            color = spec
+                .strip_prefix('{')
+                .and_then(|s| s.split('}').next())
+                .map(str::to_string);
+        }
+    }
+    (font, color)
+}
+
 /// The declaration a bare group opening at `open` starts with (`{\large …`), and where it ends.
 fn declaration(src: &str, open: usize) -> Option<(&str, usize)> {
     let rest = src.get(open + 1..)?;
@@ -1009,5 +1038,18 @@ mod tests {
         assert_eq!(text, "\\usepackage{graphicx}\n");
         assert!(add_lualatex(src).is_some());
         assert!(add_lualatex("% !TEX program = xelatex\nx").is_none());
+    }
+    #[test]
+    fn the_font_and_colour_at_the_caret() {
+        let s = "a {\\fontspec{Avenir Next} b \\textcolor[HTML]{1A2B3C}{c \\textcolor{red}{d}}}";
+        let at = |w: &str| s.find(w).unwrap();
+        let fc = |w| font_and_color_at(s, 0..s.len(), at(w));
+        assert_eq!(fc("a "), (None, None));
+        assert_eq!(fc("b "), (Some("Avenir Next".into()), None));
+        assert_eq!(
+            fc("c "),
+            (Some("Avenir Next".into()), Some("1A2B3C".into()))
+        );
+        assert_eq!(fc("d}}"), (Some("Avenir Next".into()), Some("red".into())));
     }
 }

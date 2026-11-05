@@ -3,7 +3,7 @@
 // and the rest under Advanced. Changes apply as they are made (a text field's a moment after
 // typing stops). It shows unless closed (⌘⌥\ or its ×), which is remembered.
 use super::*;
-use crate::document::element::{Field, Input as FieldInput, Kind};
+use crate::document::element::{self, Field, Input as FieldInput, Kind};
 use gpui_kit::component::switch::Switch;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -18,7 +18,21 @@ pub struct Inspector {
     /// A field's change waiting for typing to stop, by field: one per field, so typing in a
     /// second field does not drop the first one's.
     pending: HashMap<&'static str, Task<()>>,
+    /// What is wrong with what a field holds, by field, shown under it.
+    hints: HashMap<&'static str, &'static str>,
     _subs: Vec<Subscription>,
+}
+
+/// The icon of an element's kind, beside its name.
+fn kind_icon(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Figure | Kind::Image => "icons/image.svg",
+        Kind::Table => "icons/table.svg",
+        Kind::Heading => "icons/heading.svg",
+        Kind::Equation => "icons/sigma.svg",
+        Kind::List => "icons/list.svg",
+        Kind::Document => "icons/file-text.svg",
+    }
 }
 
 impl Workspace {
@@ -40,6 +54,9 @@ impl Workspace {
         // other element: its values into the text fields (not while one is being typed in)
         let id = (el.kind, el.range.start);
         let refill = self.inspector.shown != Some(id);
+        if refill {
+            self.inspector.hints.clear();
+        }
         self.inspector.shown = Some(id);
         for f in fields
             .iter()
@@ -107,8 +124,17 @@ impl Workspace {
                     .border_color(theme.border)
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
+                            .child(
+                                Icon::default()
+                                    .path(kind_icon(el.kind))
+                                    .size(px(14.0))
+                                    .text_color(theme.muted_foreground),
+                            )
                             .child(el.kind.title()),
                     )
                     .child(
@@ -157,6 +183,19 @@ impl Workspace {
                     return;
                 }
                 let value = input.read(cx).value().to_string();
+                let kind_now = this.doc().map(|d| d.read(cx).element().kind);
+                let hint = kind_now.and_then(|k| element::hint(k, key, &value));
+                let had = match hint {
+                    Some(h) => this.inspector.hints.insert(key, h).is_some(),
+                    None => this.inspector.hints.remove(key).is_some(),
+                };
+                if hint.is_some() || had {
+                    cx.notify();
+                }
+                if hint.is_some() {
+                    this.inspector.pending.remove(key);
+                    return;
+                }
                 // the element it was typed for (the caret may move on before it applies)
                 let Some((kind, start)) = this.doc().map(|d| {
                     let el = d.read(cx).element();
@@ -190,7 +229,63 @@ impl Workspace {
     fn inspector_field(&self, f: &Field, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let key = f.key;
+        let set = {
+            let weak = cx.entity().downgrade();
+            Rc::new(move |v: &'static str, _: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.with_doc(cx, |d, cx| d.set_element_field(key, v, cx));
+                });
+            })
+        };
         let control: AnyElement = match &f.input {
+            FieldInput::Choice(_) if key == "align" => widgets::segmented(
+                "insp-align",
+                &[
+                    ("left", Some("icons/text-align-start.svg"), "Left"),
+                    ("center", Some("icons/text-align-center.svg"), "Center"),
+                    ("right", Some("icons/text-align-end.svg"), "Right"),
+                ],
+                &f.value,
+                set,
+            ),
+            // a float's placement: each letter on or off
+            FieldInput::Text if key == "placement" => {
+                let now = f.value.clone();
+                let mut row = div().flex().gap_0p5();
+                for (i, (c, tip)) in [
+                    ('h', "Here"),
+                    ('t', "Top of a page"),
+                    ('b', "Bottom of a page"),
+                    ('p', "A page of floats"),
+                    ('!', "Even if it looks bad"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let on = now.contains(c);
+                    let next: String = if on {
+                        now.chars().filter(|x| *x != c).collect()
+                    } else {
+                        // in LaTeX's order
+                        "htbp!"
+                            .chars()
+                            .filter(|x| *x == c || now.contains(*x))
+                            .collect()
+                    };
+                    row = row.child(
+                        Button::new(("insp-place", i))
+                            .label(c.to_string())
+                            .small()
+                            .when(on, |b| b.primary())
+                            .when(!on, |b| b.outline())
+                            .tooltip(tip)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.with_doc(cx, |d, cx| d.set_element_field(key, &next, cx));
+                            })),
+                    );
+                }
+                row.into_any_element()
+            }
             FieldInput::Text | FieldInput::Number => match self.inspector.inputs.get(key) {
                 Some(i) => Input::new(i).small().into_any_element(),
                 None => div().into_any_element(),
@@ -253,6 +348,9 @@ impl Workspace {
                     .child(f.label),
             )
             .child(control)
+            .when_some(self.inspector.hints.get(key), |d, h| {
+                d.child(div().text_xs().text_color(theme.danger).child(*h))
+            })
             .into_any_element()
     }
 }

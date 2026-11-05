@@ -35,10 +35,11 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   opens a new paragraph above it; in a heading's middle it splits it in two; in a table it does
   nothing yet.
 - The ribbon (under the file tabs, in Visual mode; double-click its tab to fold it): Home has
-  paste/cut/copy/undo/redo; the font (Serif, Sans, Mono or any installed font through fontspec,
+  paste/cut/copy/undo/redo; the font (Serif, Sans, Mono or any installed font through fontspec, each shown in its own face,
   which also names LuaLaTeX for the file), the size (LaTeX's named sizes or points, ⌘⇧. / ⌘⇧,
   a step), bold ⌘B, italic ⌘I, underline ⌘U, strikethrough, sub- and superscript, small caps,
-  colour; bullets, numbering, indent; alignment (⌘L, ⌘E, ⌘R, ⌘J); and styles (Normal, Title,
+  colour (a palette of xcolor's named colours, shades, or any hex code; the button shows the
+  colour at the caret); bullets, numbering, indent; alignment (⌘L, ⌘E, ⌘R, ⌘J); and styles (Normal, Title,
   Part/Chapter when the class has them, Heading 1–4 = section…paragraph, ⌘⌥1–3, Quote). The
   buttons light up for the text at the caret and turn off what is on. They act on the
   selection (or the caret's word, or its paragraphs); a package an edit needs (xcolor, ulem,
@@ -55,7 +56,8 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   cuts. ⌘V of rich text from another app (a web page, Word, Pages) keeps its bold, italic,
   underline, links (adding hyperref), headings, paragraphs, line breaks, lists, code and super-
   and subscripts as TeX, the rest as plain text; ⌘⇧V pastes plain text.
-- The Insert tab: a page break, space, the table of contents, a table, a picture, a formula
+- The Insert tab: a page break, space, the table of contents, a table (sized on a grid, as in
+  Word), a picture, a formula
   (⌘M) or a numbered equation, a link (⌘K: over the selection it becomes the link's text), a
   cross-reference (the document's labels by kind, searchable; it goes in as "Figure~\\ref{…}"),
   a footnote, and a citation (the entries of the .bib files the document names, or of those
@@ -68,7 +70,9 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   of what the caret is in or what is selected — a figure (width, placement, caption, label), an
   image, a table, a heading (level, numbered, short title, label), an equation (numbered,
   environment, label), a list, or the document (class, font size, paper, margins) — common ones
-  first, the rest under Advanced. Changes apply as they are made, adding any package they need.
+  first, the rest under Advanced. Changes apply as they are made, adding any package they need;
+  a value that cannot go into the TeX (a width that is not a number, a label with a `#`) is
+  kept out, with a note under the field saying what it takes.
 - Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
   it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
   the clicked character; Up on the first line or Down on the last moves to the neighbouring

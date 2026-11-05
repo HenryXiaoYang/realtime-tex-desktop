@@ -36,6 +36,9 @@ pub struct RibbonState {
     pub headings: Vec<&'static str>,
     /// There is text to format: a caret or a selection on the pages.
     pub enabled: bool,
+    /// The named font (fontspec) and the colour of the text at the caret.
+    pub font: Option<String>,
+    pub color: Option<String>,
 }
 
 impl RibbonState {
@@ -82,7 +85,10 @@ impl Doc {
             };
         };
         let item = document::caret::item_at(&self.source, t.start);
+        let (font, color) = format::font_and_color_at(&self.source, blocks.clone(), t.start);
         RibbonState {
+            font,
+            color,
             formats: format::formats_at(&self.source, blocks.clone(), t.start),
             size: format::size_at(&self.source, blocks.clone(), t.start),
             align: Some(format::alignment_of(&self.source, blocks.clone())),

@@ -15,23 +15,26 @@ pub(super) enum RibbonTab {
     Insert,
 }
 
-/// Colours offered for text: xcolor's base names.
-const COLORS: &[(&str, &str)] = &[
-    ("Black", "black"),
-    ("Dark gray", "darkgray"),
-    ("Gray", "gray"),
-    ("Red", "red"),
-    ("Orange", "orange"),
-    ("Brown", "brown"),
-    ("Olive", "olive"),
-    ("Green", "green"),
-    ("Teal", "teal"),
-    ("Cyan", "cyan"),
-    ("Blue", "blue"),
-    ("Violet", "violet"),
-    ("Purple", "purple"),
-    ("Magenta", "magenta"),
-];
+/// Faces that show what Serif, Sans and Mono look like (the system's, always there).
+const SERIF_FACE: &str = "Times New Roman";
+const SANS_FACE: &str = "Helvetica Neue";
+const MONO_FACE: &str = "Menlo";
+
+/// How big a named size shows in its menu (pixels, roughly LaTeX's at 10 pt).
+fn size_px(s: &str) -> f32 {
+    match s {
+        "tiny" => 9.0,
+        "scriptsize" => 10.0,
+        "footnotesize" => 11.0,
+        "small" => 12.0,
+        "normalsize" => 13.0,
+        "large" => 15.0,
+        "Large" => 17.0,
+        "LARGE" => 20.0,
+        "huge" => 23.0,
+        _ => 26.0,
+    }
+}
 
 /// Point sizes offered beside the named ones.
 const POINTS: &[f32] = &[
@@ -56,7 +59,7 @@ fn size_label(s: &str) -> &'static str {
 
 impl Workspace {
     /// Apply a formatting operation to the open document.
-    fn format(&self, op: FormatOp, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn format(&self, op: FormatOp, window: &mut Window, cx: &mut Context<Self>) {
         self.with_doc(cx, |d, cx| d.format(op, window, cx));
     }
 
@@ -231,15 +234,17 @@ impl Workspace {
     fn font_group(&self, st: &RibbonState, cx: &mut Context<Self>) -> AnyElement {
         let en = st.enabled;
         let weak = cx.entity().downgrade();
-        let family = if st.has("texttt") {
-            "Mono"
+        // the font at the caret, shown in itself
+        let (family, face): (SharedString, &str) = if let Some(f) = &st.font {
+            (f.clone().into(), f.as_str())
+        } else if st.has("texttt") {
+            ("Mono".into(), MONO_FACE)
         } else if st.has("textsf") {
-            "Sans"
-        } else if st.formats.iter().any(|f| f == "fontspec") {
-            "Font…"
+            ("Sans".into(), SANS_FACE)
         } else {
-            "Serif"
+            ("Serif".into(), SERIF_FACE)
         };
+        let face: SharedString = face.to_string().into();
         let pick = {
             let weak = weak.clone();
             move |op: FormatOp| {
@@ -251,34 +256,52 @@ impl Workspace {
         };
         let font_menu = {
             let pick = pick.clone();
+            let now = st.font.clone();
             Button::new("rb-font")
-                .label(family)
+                .child(
+                    div()
+                        .w(px(104.0))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .font_family(face)
+                        .child(family),
+                )
                 .outline()
                 .small()
-                .w(px(130.0))
                 .disabled(!en)
                 .dropdown_caret(true)
                 .tooltip("Font")
                 .dropdown_menu(move |mut menu, _, cx| {
-                    for (label, f) in [
-                        ("Serif", Font::Serif),
-                        ("Sans", Font::Sans),
-                        ("Mono", Font::Mono),
+                    // each name in its own face, as Word shows them
+                    let face_item = |label: SharedString, face: SharedString| {
+                        PopupMenuItem::element(move |_, _| {
+                            div().font_family(face.clone()).child(label.clone())
+                        })
+                    };
+                    menu = menu.label("Document fonts");
+                    for (label, face, f) in [
+                        ("Serif", SERIF_FACE, Font::Serif),
+                        ("Sans", SANS_FACE, Font::Sans),
+                        ("Mono", MONO_FACE, Font::Mono),
                     ] {
-                        menu =
-                            menu.item(PopupMenuItem::new(label).on_click(pick(FormatOp::Font(f))));
+                        menu = menu.item(
+                            face_item(label.into(), face.into()).on_click(pick(FormatOp::Font(f))),
+                        );
                     }
                     menu = menu.separator().label("Installed fonts (LuaLaTeX)");
                     let mut names = cx.text_system().all_font_names();
                     names.sort();
                     names.dedup();
                     for n in names.into_iter().filter(|n| !n.starts_with('.')) {
+                        let checked = now.as_deref() == Some(n.as_str());
                         menu = menu.item(
-                            PopupMenuItem::new(n.clone())
+                            face_item(n.clone().into(), n.clone().into())
+                                .checked(checked)
                                 .on_click(pick(FormatOp::Font(Font::Named(n)))),
                         );
                     }
-                    menu.scrollable(true).max_h(px(420.0))
+                    menu.scrollable(true).max_h(px(480.0)).min_w(px(240.0))
                 })
         };
         let size_menu = {
@@ -294,10 +317,13 @@ impl Workspace {
                 .tooltip("Size")
                 .dropdown_menu(move |mut menu, _, _| {
                     for s in SIZES {
+                        let px_size = px(size_px(s));
                         menu = menu.item(
-                            PopupMenuItem::new(size_label(s))
-                                .checked(*s == now)
-                                .on_click(pick(FormatOp::Size(Size::Named(s)))),
+                            PopupMenuItem::element(move |_, _| {
+                                div().text_size(px_size).child(size_label(s))
+                            })
+                            .checked(*s == now)
+                            .on_click(pick(FormatOp::Size(Size::Named(s)))),
                         );
                     }
                     menu = menu.separator().label("Points");
@@ -311,23 +337,16 @@ impl Workspace {
                 })
         };
         let color_menu = {
-            let pick = pick.clone();
-            Button::new("rb-color")
-                .icon(Icon::default().path("icons/palette.svg"))
-                .ghost()
-                .small()
-                .disabled(!en)
-                .dropdown_caret(true)
-                .tooltip("Text colour")
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (label, c) in COLORS {
-                        menu = menu.item(
-                            PopupMenuItem::new(*label)
-                                .on_click(pick(FormatOp::Color(c.to_string()))),
-                        );
-                    }
-                    menu
-                })
+            let weak = weak.clone();
+            widgets::color_palette(
+                st.color.clone(),
+                self.color_hex.clone(),
+                Rc::new(move |spec, window, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.format(FormatOp::Color(spec), window, cx)
+                    });
+                }),
+            )
         };
         let top = div()
             .flex()
