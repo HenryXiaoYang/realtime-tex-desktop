@@ -215,6 +215,33 @@ pub fn char_sources(gt: &GlyphText, src: &str) -> Vec<Option<Range<usize>>> {
         .collect()
 }
 
+/// The text `src` prints, as plain text: a line per paragraph.
+pub fn plain_text(src: &str) -> String {
+    let mut out: Vec<String> = vec![];
+    let mut para = String::new();
+    for line in src.split('\n') {
+        if line.trim().is_empty() {
+            out.push(std::mem::take(&mut para));
+        } else {
+            para.push_str(line);
+            para.push('\n');
+        }
+    }
+    out.push(para);
+    out.iter()
+        .map(|p| {
+            visible_source(p)
+                .text
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Whether `src` prints any text (markup and spaces do not).
 pub fn has_visible(src: &str) -> bool {
     visible_source(src).text.iter().any(|c| *c != ' ')
@@ -630,6 +657,14 @@ mod tests {
         // a theorem-like environment's title prints
         let v = visible_source("\\begin{definition}{Flowchart} text");
         assert_eq!(v.text.iter().collect::<String>(), "Flowchart text");
+    }
+
+    #[test]
+    fn plain_text_has_a_line_per_paragraph() {
+        assert_eq!(
+            plain_text("Some \\textbf{bold}\ntext.\n\n50\\% more"),
+            "Some bold text.\n50% more"
+        );
     }
 
     #[test]

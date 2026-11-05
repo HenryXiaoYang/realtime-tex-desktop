@@ -70,6 +70,13 @@ impl Doc {
         if clicks < 2 {
             self.first_click = Some((page, x, y, bi));
         }
+        // Shift-click with the caret: text selected from it to the click
+        if shift && clicks < 2 && self.active.is_none() && self.caret.is_some() {
+            self.extend_to_click(page, x, y, cx);
+            self.dragging = true;
+            self.focus.focus(window, cx);
+            return;
+        }
         // Shift-click with no box open selects from the selection's anchor to this block
         if let (true, None, Some(i)) = (shift, &self.active, bi) {
             let anchor = self
@@ -97,6 +104,8 @@ impl Doc {
             self.leave(window, cx);
             self.caret = None;
             let placed = bi.is_some_and(|i| self.caret_click(i, page, x, y, cx));
+            // a drag from here selects
+            self.dragging = placed;
             if !placed {
                 self.selected =
                     bi.map(|i| (self.blocks[i].range.start, self.blocks[i].range.start));
@@ -108,8 +117,13 @@ impl Doc {
         let Some(bi) = bi else {
             return;
         };
-        // a word of running text: the caret stays (selecting words comes with selection)
+        // running text: a double-click selects the word, a triple-click the paragraph
         if self.is_plain_text_at(bi, page, x, y) {
+            if clicks >= 3 {
+                self.select_block_text(bi, cx);
+            } else {
+                self.select_word(bi, page, x, y, cx);
+            }
             return;
         }
         let b = &self.blocks[bi];

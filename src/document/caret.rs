@@ -154,22 +154,7 @@ impl CharMap {
 
     /// The stop nearest (`x`, `y`) sp: on the nearest line, then the nearest across.
     pub fn stop_near(&self, x: f64, y: f64) -> Option<usize> {
-        let dist = |s: &Stop| {
-            let (t, b) = (s.y - 0.75 * s.size, s.y + 0.25 * s.size);
-            let v = if y < t {
-                t - y
-            } else if y > b {
-                y - b
-            } else {
-                0.0
-            };
-            (v, (s.x - x).abs())
-        };
-        self.stops
-            .iter()
-            .enumerate()
-            .min_by(|a, b| dist(a.1).partial_cmp(&dist(b.1)).unwrap())
-            .map(|(i, _)| i)
+        nearest_stop(&self.stops, x, y)
     }
 
     /// The source a Backspace (`back`) or Delete at stop `i` removes: the char beside it, or the
@@ -322,6 +307,26 @@ const PICTURES: &[&str] = &[
     "circuitikz",
     "forest",
 ];
+
+/// The stop of `stops` nearest (`x`, `y`) sp: on the nearest line, then the nearest across.
+pub fn nearest_stop(stops: &[Stop], x: f64, y: f64) -> Option<usize> {
+    let dist = |s: &Stop| {
+        let (t, b) = (s.y - 0.75 * s.size, s.y + 0.25 * s.size);
+        let v = if y < t {
+            t - y
+        } else if y > b {
+            y - b
+        } else {
+            0.0
+        };
+        (v, (s.x - x).abs())
+    };
+    stops
+        .iter()
+        .enumerate()
+        .min_by(|a, b| dist(a.1).partial_cmp(&dist(b.1)).unwrap())
+        .map(|(i, _)| i)
+}
 
 /// `$…$` and `\(…\)` in `src`, delimiters included.
 pub fn math_regions(src: &str) -> Vec<Range<usize>> {
@@ -869,6 +874,113 @@ fn group_command(src: &str, open: usize) -> (usize, String) {
     }
 }
 
+/// Deleting the selection `lo..hi` of `src` (offsets of caret stops): everything in it goes
+/// except the markup it only partly holds, which stays whole — the `}` of a group opened
+/// before it, the `\\textbf{` of one closed after it, an environment's `\\begin` or `\\end` whose
+/// partner is outside. Paragraphs and items it spans join. The caret stays where it began.
+pub fn delete_range(src: &str, lo: usize, hi: usize) -> Edit {
+    let (lo, hi) = (lo.min(hi), lo.max(hi).min(src.len()));
+    let s = src.as_bytes();
+    // what stays: byte ranges in lo..hi
+    let mut keep: Vec<Range<usize>> = vec![];
+    // groups and environments opened inside, not closed yet: where their opening markup is
+    let mut open: Vec<(usize, usize, Option<String>)> = vec![];
+    let mut i = lo;
+    while i < hi {
+        if s[i] == b'%' && (i == 0 || !is_cmd(s, i - 1)) {
+            while i < hi && s[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if is_cmd(s, i) {
+            let rest = &src[i..hi];
+            let env = |p: &str| {
+                rest.strip_prefix(p)
+                    .and_then(|r| r.split_once('}'))
+                    .map(|(n, _)| n.to_string())
+            };
+            if let Some(name) = env("\\begin{") {
+                let mut j = i + "\\begin{".len() + name.len() + 1;
+                // its arguments belong to its opening
+                loop {
+                    let k = match s.get(j) {
+                        Some(b'[') => src[j..hi].find(']').map(|e| j + e + 1),
+                        Some(b'{') => group_close(src, j).filter(|&e| e < hi).map(|e| e + 1),
+                        _ => None,
+                    };
+                    match k {
+                        Some(k) => j = k,
+                        None => break,
+                    }
+                }
+                open.push((i, j, Some(name)));
+                i = j;
+                continue;
+            }
+            if let Some(name) = env("\\end{") {
+                let j = i + "\\end{".len() + name.len() + 1;
+                match open
+                    .iter()
+                    .rposition(|o| o.2.as_deref() == Some(name.as_str()))
+                {
+                    // its \begin is inside too: the whole environment goes
+                    Some(k) => open.truncate(k),
+                    None => keep.push(i..j),
+                }
+                i = j;
+                continue;
+            }
+            i += 2;
+            while i < hi && (s[i].is_ascii_alphabetic() || s[i] == b'@') {
+                i += 1;
+            }
+            continue;
+        }
+        match s[i] {
+            b'{' => {
+                let (start, _) = group_command(src, i);
+                open.push((start.max(lo), i + 1, None));
+            }
+            b'}' => match open.iter().rposition(|o| o.2.is_none()) {
+                Some(k) => open.truncate(k),
+                // closes a group opened before the selection
+                None => keep.push(i..i + 1),
+            },
+            _ => {}
+        }
+        i += 1;
+    }
+    keep.extend(open.into_iter().map(|(a, b, _)| a..b));
+    keep.sort_by_key(|r| r.start);
+    let text: String = keep.iter().map(|r| &src[r.clone()]).collect();
+    Edit {
+        range: lo..hi,
+        // where the selection began: typing goes on in the formatting there, as in Word
+        caret: lo,
+        text,
+    }
+}
+
+/// Whether `tex` stands on its own: its groups and environments all close in it.
+pub fn balanced(tex: &str) -> bool {
+    if depth(tex) != 0 || min_depth(tex) < 0 {
+        return false;
+    }
+    let mut envs: Vec<String> = vec![];
+    for (_, _, t) in tokens(tex) {
+        match t {
+            Tok::Begin(n) => envs.push(n),
+            Tok::End(n) if envs.last() == Some(&n) => {
+                envs.pop();
+            }
+            Tok::End(_) => return false,
+            Tok::Item => {}
+        }
+    }
+    envs.is_empty()
+}
+
 /// Headings: Enter inside one splits it in two, as it splits formatting.
 const HEADINGS: &[&str] = &[
     "part",
@@ -1331,6 +1443,43 @@ mod tests {
         assert_eq!(heading_title("\\subsection{}", 0), Some(12..12));
         assert_eq!(heading_title("\\sectionmark{x}", 0), None);
         assert_eq!(heading_title("plain", 0), None);
+    }
+
+    /// Delete between the two `|` of `src`, as the source after with the caret `|`.
+    fn del(src: &str) -> String {
+        let lo = src.find('|').unwrap();
+        let hi = src.rfind('|').unwrap() - 1;
+        let s = src.replacen('|', "", 2);
+        apply(&s, &delete_range(&s, lo, hi))
+    }
+
+    #[test]
+    fn deleting_a_selection_keeps_markup_it_only_partly_holds() {
+        assert_eq!(del("plain te|xt and mo|re"), "plain te|re");
+        // all of a command inside goes; a group's end outside stays
+        assert_eq!(del("a |\\textbf{b} c|d"), "a |d");
+        assert_eq!(del("\\textbf{bo|ld} te|xt"), "\\textbf{bo|}xt");
+        assert_eq!(del("te|xt \\textbf{bo|ld}"), "te|\\textbf{ld}");
+        // paragraphs and items join
+        assert_eq!(del("one tw|o\n\nthree fo|ur"), "one tw|ur");
+        assert_eq!(
+            del("\\begin{itemize}\n  \\item on|e\n  \\item tw|o\n\\end{itemize}"),
+            "\\begin{itemize}\n  \\item on|o\n\\end{itemize}"
+        );
+        // out of a list into the text after: the list's end stays
+        assert_eq!(
+            del("\\begin{itemize}\n  \\item on|e\n\\end{itemize}\n\nAft|er"),
+            "\\begin{itemize}\n  \\item on|\\end{itemize}er"
+        );
+        // into a list from before: its beginning stays, with its options
+        assert_eq!(
+            del("Bef|ore\n\\begin{itemize}[nosep]\n  \\item on|e\n\\end{itemize}"),
+            "Bef|\\begin{itemize}[nosep]e\n\\end{itemize}"
+        );
+        // a whole environment inside goes
+        assert_eq!(del("a |b \\begin{center}x\\end{center} c| d"), "a | d");
+        assert!(balanced("\\textbf{a} \\begin{center}b\\end{center}"));
+        assert!(!balanced("bo} x \\textbf{y"));
     }
 
     #[test]

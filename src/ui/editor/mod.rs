@@ -10,6 +10,7 @@ mod pages;
 mod selection;
 mod session;
 mod source_box;
+mod text_selection;
 mod typing;
 
 use crate::document::{self, glyphmap};
@@ -80,7 +81,17 @@ actions!(
         SelectCaretBlock,
         InsertMath,
         MoveParagraphUp,
-        MoveParagraphDown
+        MoveParagraphDown,
+        SelectLeft,
+        SelectRight,
+        SelectUp,
+        SelectDown,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectLineStart,
+        SelectLineEnd,
+        SelectDocStart,
+        SelectDocEnd
     ]
 );
 
@@ -113,6 +124,21 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-up", MoveParagraphUp, caret),
         KeyBinding::new("ctrl-shift-down", MoveParagraphDown, caret),
         KeyBinding::new("cmd-v", Paste, caret),
+        KeyBinding::new("cmd-c", Copy, caret),
+        KeyBinding::new("cmd-x", Cut, caret),
+        KeyBinding::new("cmd-a", SelectAll, caret),
+        KeyBinding::new("shift-left", SelectLeft, caret),
+        KeyBinding::new("shift-right", SelectRight, caret),
+        KeyBinding::new("shift-up", SelectUp, caret),
+        KeyBinding::new("shift-down", SelectDown, caret),
+        KeyBinding::new("alt-shift-left", SelectWordLeft, caret),
+        KeyBinding::new("alt-shift-right", SelectWordRight, caret),
+        KeyBinding::new("cmd-shift-left", SelectLineStart, caret),
+        KeyBinding::new("cmd-shift-right", SelectLineEnd, caret),
+        KeyBinding::new("shift-home", SelectLineStart, caret),
+        KeyBinding::new("shift-end", SelectLineEnd, caret),
+        KeyBinding::new("cmd-shift-up", SelectDocStart, caret),
+        KeyBinding::new("cmd-shift-down", SelectDocEnd, caret),
     ]);
     let pages = Some("Pages");
     cx.bind_keys([
@@ -280,6 +306,8 @@ pub struct Doc {
     blink: Option<Task<()>>,
     /// Where the caret was last drawn (window coordinates), for an input method's window.
     caret_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// A drag that began on text is under way: moving the pointer selects.
+    dragging: bool,
     /// What the last edit made: the bytes it wrote.
     last_edit: Range<usize>,
     _tasks: Vec<Task<()>>,
@@ -392,6 +420,7 @@ impl Doc {
             caret_on: true,
             blink: None,
             caret_bounds: Default::default(),
+            dragging: false,
             last_edit: 0..0,
             _tasks: vec![],
             _subs: [sub, keys, code_sub],
@@ -641,6 +670,9 @@ impl Render for Doc {
             }))
             // ⌘A on the pages: every block (in a box, the box's text)
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                if this.caret.is_some() && this.active.is_none() {
+                    return this.select_all_text(cx);
+                }
                 if this.active.is_some() || this.blocks.is_empty() {
                     cx.propagate();
                     return;
@@ -651,14 +683,24 @@ impl Render for Doc {
             }))
             .on_action(cx.listener({
                 let f = on_sel(|d, lo, hi, _, cx| d.copy_blocks(lo, hi, cx));
-                move |this, _: &Copy, w, cx| f(this, w, cx)
+                move |this, _: &Copy, w, cx| {
+                    if !(this.active.is_none() && this.copy_selection(cx)) {
+                        f(this, w, cx)
+                    }
+                }
             }))
             .on_action(cx.listener({
                 let f = on_sel(|d, lo, hi, w, cx| {
                     d.copy_blocks(lo, hi, cx);
                     d.delete_blocks(lo, hi, w, cx);
                 });
-                move |this, _: &Cut, w, cx| f(this, w, cx)
+                move |this, _: &Cut, w, cx| {
+                    if this.active.is_none() && this.copy_selection(cx) {
+                        this.delete_selection(cx);
+                    } else {
+                        f(this, w, cx)
+                    }
+                }
             }))
             .on_action(cx.listener({
                 let f = on_sel(|d, _, hi, w, cx| {
@@ -668,7 +710,7 @@ impl Render for Doc {
                 });
                 move |this, _: &Paste, w, cx| {
                     if this.caret.is_some() && this.active.is_none() {
-                        paste_at_caret(this, cx)
+                        this.paste_at_caret(cx)
                     } else {
                         f(this, w, cx)
                     }

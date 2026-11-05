@@ -84,14 +84,21 @@ impl Doc {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseUpEvent, window, cx| {
+                    this.dragging = false;
                     if ev.click_count >= 2 && this.active.is_none() {
-                        this.on_page_click(n, ev.position, 2, ev.modifiers.shift, window, cx);
+                        let clicks = ev.click_count;
+                        this.on_page_click(n, ev.position, clicks, ev.modifiers.shift, window, cx);
                         cx.stop_propagation();
                     }
                 }),
             )
             .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
-                this.on_page_hover(n, ev.position, cx)
+                if ev.pressed_button == Some(MouseButton::Left) {
+                    this.drag_to(n, ev.position, cx);
+                } else {
+                    this.dragging = false;
+                    this.on_page_hover(n, ev.position, cx)
+                }
             }))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if !hovered && this.hover_gap.is_some_and(|g| g.0 == n) {
@@ -191,6 +198,7 @@ impl Doc {
                 .children(blank)
                 .children(outline)
                 .children(insert)
+                .children(self.render_selection(n))
                 .children(self.render_caret(n, window, cx))
                 .children(spinner)
                 .into_any_element();

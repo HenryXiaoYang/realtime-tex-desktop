@@ -287,6 +287,7 @@ impl Doc {
         let end = self.last_edit.end.min(self.source.len());
         if let Some(c) = self.caret.as_mut() {
             c.off = end;
+            c.anchor = None;
             c.goal_x = None;
         }
     }
@@ -427,14 +428,18 @@ impl Doc {
                 (r.start, r.end) = (r.start.min(start), mv(r.end.max(end)));
             }
         }
-        if let Some(c) = self.caret.as_mut()
-            && c.off > start
-        {
-            c.off = if c.off >= end {
-                mv(c.off)
+        let follow = |o: usize| {
+            if o <= start {
+                o
+            } else if o >= end {
+                mv(o)
             } else {
                 start + text.len()
-            };
+            }
+        };
+        if let Some(c) = self.caret.as_mut() {
+            c.off = follow(c.off);
+            c.anchor = c.anchor.map(follow);
         }
         self.last_edit = start..start + text.len();
         self.source.replace_range(start..end, text);

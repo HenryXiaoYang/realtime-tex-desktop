@@ -7,6 +7,8 @@ use document::caret::{self, CharMap, Edit};
 /// The caret: a source offset, kept on its text across edits.
 pub(super) struct Caret {
     pub off: usize,
+    /// Where a selection began; the selection runs from here to `off`.
+    pub anchor: Option<usize>,
     /// Where Up and Down aim across (sp), from the column the caret was in.
     pub goal_x: Option<f64>,
     /// An input method's text being composed at the caret (not in the source yet), and the
@@ -242,6 +244,7 @@ impl Doc {
         self.selected = None;
         self.caret = Some(Caret {
             off,
+            anchor: None,
             goal_x: None,
             marked: None,
         });
@@ -513,7 +516,7 @@ impl Doc {
     }
 
     /// The stops of every text block on `page`.
-    fn page_stops(&self, page: u32) -> Vec<caret::Stop> {
+    pub(super) fn page_stops(&self, page: u32) -> Vec<caret::Stop> {
         (0..self.blocks.len())
             .filter(|&b| {
                 self.blocks[b].rows.iter().any(|r| r.page == page) && self.is_text_block(b)
@@ -653,6 +656,8 @@ impl Doc {
     /// Type `text` at the caret (escaped, so it prints as typed). `commit`: an input method's
     /// commit, an undo step of its own.
     pub(super) fn type_text(&mut self, text: &str, commit: bool, cx: &mut Context<Self>) {
+        // typing over a selection replaces it, in the same undo step
+        let replaced = self.delete_selection(cx);
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
@@ -666,7 +671,16 @@ impl Doc {
         let esc = caret::escape(text);
         let at = self.caret_at();
         let font = self.caret_font();
-        self.step(text, false, commit);
+        if replaced {
+            self.typing = Some(Typing {
+                at: Instant::now(),
+                end: off,
+                text: text.to_string(),
+                delete: false,
+            });
+        } else {
+            self.step(text, false, commit);
+        }
         if !self.replace(off..off, &esc, cx) {
             return;
         }
@@ -715,6 +729,9 @@ impl Doc {
     /// Backspace (`back`) or Delete: the char beside the caret, a whole macro or formula, or at
     /// a paragraph's or item's edge, joining it to the one before (after).
     fn delete(&mut self, back: bool, cx: &mut Context<Self>) {
+        if self.delete_selection(cx) {
+            return;
+        }
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
@@ -858,6 +875,7 @@ impl Doc {
     /// Enter: a new list item, or a paragraph break; Shift-Enter (`line`): a line break. Not
     /// in a table's cells (rows come with table editing).
     fn enter(&mut self, line: bool, cx: &mut Context<Self>) {
+        self.delete_selection(cx);
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
@@ -967,6 +985,7 @@ impl Doc {
         if let Some((start, _)) = self.selected.take() {
             self.caret = Some(Caret {
                 off: start + rel,
+                anchor: None,
                 goal_x: None,
                 marked: None,
             });
@@ -1122,6 +1141,14 @@ fn with_marked(src: &str, c: &Caret) -> String {
     }
 }
 
+/// What the input handler is asked, on stderr, with `RTD_LOG_INPUT` set (to see what macOS and
+/// input methods send).
+fn log_input(what: std::fmt::Arguments) {
+    if std::env::var_os("RTD_LOG_INPUT").is_some() {
+        eprintln!("input: {what}");
+    }
+}
+
 fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
@@ -1146,6 +1173,7 @@ impl EntityInputHandler for Doc {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
+        log_input(format_args!("text for {range:?}"));
         let c = self.caret.as_ref()?;
         let text = with_marked(&self.source, c);
         let (a, b) = (byte_of(&text, range.start), byte_of(&text, range.end));
@@ -1178,6 +1206,7 @@ impl EntityInputHandler for Doc {
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        log_input(format_args!("unmark"));
         if let Some((m, _)) = self.caret.as_mut().and_then(|c| c.marked.take()) {
             self.type_text(&m, true, cx);
         }
@@ -1190,6 +1219,13 @@ impl EntityInputHandler for Doc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        log_input(format_args!(
+            "replace {range:?} with {text:?}; caret {:?} selection {:?}",
+            self.caret
+                .as_ref()
+                .map(|c| (c.off, c.anchor, c.marked.clone())),
+            self.selection_range()
+        ));
         let Some(c) = self.caret.as_mut() else { return };
         if c.marked.take().is_some() {
             return self.type_text(text, true, cx);
@@ -1197,6 +1233,7 @@ impl EntityInputHandler for Doc {
         // a backslash starts a command: nobody types one to print it, so TeX it is, in the
         // paragraph's source box (with its completions) at the caret
         if text.starts_with('\\') {
+            self.delete_selection(cx);
             let text = format!("{text}{}", complete::MARK);
             return self.edit_tex_at_caret(&text, window, cx);
         }
@@ -1224,6 +1261,7 @@ impl EntityInputHandler for Doc {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        log_input(format_args!("mark {new_text:?} selecting {new_selected:?}"));
         let Some(c) = self.caret.as_mut() else { return };
         c.marked = (!new_text.is_empty()).then(|| (new_text.to_string(), new_selected));
         self.restart_blink(cx);
@@ -1252,56 +1290,70 @@ impl EntityInputHandler for Doc {
 
 /// The caret keys, on the pages while the caret is there.
 pub(super) fn caret_actions(view: Stateful<Div>, cx: &mut Context<Doc>) -> Stateful<Div> {
-    view.on_action(cx.listener(|d, _: &CaretLeft, _, cx| d.move_h(-1, cx)))
-        .on_action(cx.listener(|d, _: &CaretRight, _, cx| d.move_h(1, cx)))
-        .on_action(cx.listener(|d, _: &CaretUp, _, cx| d.move_v(-1, cx)))
-        .on_action(cx.listener(|d, _: &CaretDown, _, cx| d.move_v(1, cx)))
-        .on_action(cx.listener(|d, _: &CaretWordLeft, _, cx| d.move_word(-1, cx)))
-        .on_action(cx.listener(|d, _: &CaretWordRight, _, cx| d.move_word(1, cx)))
-        .on_action(cx.listener(|d, _: &CaretLineStart, _, cx| d.move_line_edge(false, cx)))
-        .on_action(cx.listener(|d, _: &CaretLineEnd, _, cx| d.move_line_edge(true, cx)))
-        .on_action(cx.listener(|d, _: &CaretDocStart, _, cx| d.move_doc_edge(false, cx)))
-        .on_action(cx.listener(|d, _: &CaretDocEnd, _, cx| d.move_doc_edge(true, cx)))
-        .on_action(cx.listener(|d, _: &Backspace, _, cx| d.delete(true, cx)))
-        .on_action(cx.listener(|d, _: &DeleteForward, _, cx| d.delete(false, cx)))
-        .on_action(cx.listener(|d, _: &NewParagraph, _, cx| d.enter(false, cx)))
-        .on_action(cx.listener(|d, _: &LineBreak, _, cx| d.enter(true, cx)))
-        .on_action(cx.listener(|d, _: &Indent, _, cx| d.tab(false, cx)))
-        .on_action(cx.listener(|d, _: &Outdent, _, cx| d.tab(true, cx)))
-        .on_action(cx.listener(|d, _: &SelectCaretBlock, _, cx| d.select_caret_block(cx)))
-        .on_action(cx.listener(|d, _: &InsertMath, w, cx| d.insert_math(w, cx)))
-        .on_action(cx.listener(|d, _: &MoveParagraphUp, _, cx| {
-            if d.caret.is_some() {
-                d.move_caret_block(true, cx)
-            } else {
-                cx.propagate()
-            }
-        }))
-        .on_action(cx.listener(|d, _: &MoveParagraphDown, _, cx| {
-            if d.caret.is_some() {
-                d.move_caret_block(false, cx)
-            } else {
-                cx.propagate()
-            }
-        }))
-}
-
-/// Paste at the caret, as plain text for now.
-pub(super) fn paste_at_caret(d: &mut Doc, cx: &mut Context<Doc>) {
-    if let Some(t) = cx.read_from_clipboard().and_then(|c| c.text()) {
-        d.overlay = None;
-        d.step("", false, true);
-        let Some(off) = d.caret.as_ref().map(|c| c.off) else {
-            return;
-        };
-        let esc = caret::escape(&t);
-        if d.replace(off..off, &esc, cx)
-            && let Some(c) = d.caret.as_mut()
-        {
-            c.off = off + esc.len();
+    view.on_action(cx.listener(|d, _: &CaretLeft, _, cx| {
+        if !d.collapse(false, cx) {
+            d.move_h(-1, cx)
         }
-        d.typing = None;
-    }
+    }))
+    .on_action(cx.listener(|d, _: &CaretRight, _, cx| {
+        if !d.collapse(true, cx) {
+            d.move_h(1, cx)
+        }
+    }))
+    .on_action(cx.listener(|d, _: &SelectLeft, _, cx| d.extending(cx, |d, cx| d.move_h(-1, cx))))
+    .on_action(cx.listener(|d, _: &SelectRight, _, cx| d.extending(cx, |d, cx| d.move_h(1, cx))))
+    .on_action(cx.listener(|d, _: &SelectUp, _, cx| d.extending(cx, |d, cx| d.move_v(-1, cx))))
+    .on_action(cx.listener(|d, _: &SelectDown, _, cx| d.extending(cx, |d, cx| d.move_v(1, cx))))
+    .on_action(
+        cx.listener(|d, _: &SelectWordLeft, _, cx| d.extending(cx, |d, cx| d.move_word(-1, cx))),
+    )
+    .on_action(
+        cx.listener(|d, _: &SelectWordRight, _, cx| d.extending(cx, |d, cx| d.move_word(1, cx))),
+    )
+    .on_action(cx.listener(|d, _: &SelectLineStart, _, cx| {
+        d.extending(cx, |d, cx| d.move_line_edge(false, cx))
+    }))
+    .on_action(cx.listener(|d, _: &SelectLineEnd, _, cx| {
+        d.extending(cx, |d, cx| d.move_line_edge(true, cx))
+    }))
+    .on_action(cx.listener(|d, _: &SelectDocStart, _, cx| {
+        d.extending(cx, |d, cx| d.move_doc_edge(false, cx))
+    }))
+    .on_action(
+        cx.listener(|d, _: &SelectDocEnd, _, cx| {
+            d.extending(cx, |d, cx| d.move_doc_edge(true, cx))
+        }),
+    )
+    .on_action(cx.listener(|d, _: &CaretUp, _, cx| d.move_v(-1, cx)))
+    .on_action(cx.listener(|d, _: &CaretDown, _, cx| d.move_v(1, cx)))
+    .on_action(cx.listener(|d, _: &CaretWordLeft, _, cx| d.move_word(-1, cx)))
+    .on_action(cx.listener(|d, _: &CaretWordRight, _, cx| d.move_word(1, cx)))
+    .on_action(cx.listener(|d, _: &CaretLineStart, _, cx| d.move_line_edge(false, cx)))
+    .on_action(cx.listener(|d, _: &CaretLineEnd, _, cx| d.move_line_edge(true, cx)))
+    .on_action(cx.listener(|d, _: &CaretDocStart, _, cx| d.move_doc_edge(false, cx)))
+    .on_action(cx.listener(|d, _: &CaretDocEnd, _, cx| d.move_doc_edge(true, cx)))
+    .on_action(cx.listener(|d, _: &Backspace, _, cx| d.delete(true, cx)))
+    .on_action(cx.listener(|d, _: &DeleteForward, _, cx| d.delete(false, cx)))
+    .on_action(cx.listener(|d, _: &NewParagraph, _, cx| d.enter(false, cx)))
+    .on_action(cx.listener(|d, _: &LineBreak, _, cx| d.enter(true, cx)))
+    .on_action(cx.listener(|d, _: &Indent, _, cx| d.tab(false, cx)))
+    .on_action(cx.listener(|d, _: &Outdent, _, cx| d.tab(true, cx)))
+    .on_action(cx.listener(|d, _: &SelectCaretBlock, _, cx| d.select_caret_block(cx)))
+    .on_action(cx.listener(|d, _: &InsertMath, w, cx| d.insert_math(w, cx)))
+    .on_action(cx.listener(|d, _: &MoveParagraphUp, _, cx| {
+        if d.caret.is_some() {
+            d.move_caret_block(true, cx)
+        } else {
+            cx.propagate()
+        }
+    }))
+    .on_action(cx.listener(|d, _: &MoveParagraphDown, _, cx| {
+        if d.caret.is_some() {
+            d.move_caret_block(false, cx)
+        } else {
+            cx.propagate()
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -1624,6 +1676,45 @@ mod tests {
         wait(cx, &doc, "the undo", |d| {
             d.spans_pending == 0 && !d.compiling
         });
+        // a selected word: highlighted, typed over in one undo step, copied and pasted as TeX
+        let before = cx.read(|cx| doc.read(cx).source.clone());
+        doc.update(cx, |d, cx| {
+            d.set_caret(off, cx);
+            d.extending(cx, |d, cx| d.move_word(1, cx));
+            let r = d.selection_range().expect("a word selected");
+            assert!(
+                !d.source[r.clone()].contains(' '),
+                "{:?}",
+                &d.source[r.clone()]
+            );
+            let on = d.blocks[d.block_of(off).unwrap()].rows[0].page;
+            assert!(!d.render_selection(on).is_empty(), "it is highlighted");
+            assert!(d.copy_selection(cx));
+            d.type_text("W", false, cx);
+            assert!(d.selection_range().is_none());
+        });
+        let word = cx.read(|cx| cx.read_from_clipboard().and_then(|c| c.text()).unwrap());
+        assert!(
+            cx.read(|cx| doc.read(cx).source[off..].starts_with(&format!(
+                "W{}",
+                &before[off + word.len()..off + word.len() + 3]
+            )))
+        );
+        doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+        assert_eq!(
+            cx.read(|cx| doc.read(cx).source.clone()),
+            before,
+            "one undo step"
+        );
+        calm(cx, &doc);
+        doc.update(cx, |d, cx| {
+            d.set_caret(off, cx);
+            d.paste_at_caret(cx);
+        });
+        assert!(cx.read(|cx| doc.read(cx).source[off..].starts_with(&format!("{word}{word}"))));
+        doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+        assert_eq!(cx.read(|cx| doc.read(cx).source.clone()), before);
+        calm(cx, &doc);
         // the caret moves through the text and back
         wait(cx, &doc, "one paragraph", |d| d.spans_pending == 0);
         doc.update(cx, |d, cx| {
@@ -1686,7 +1777,18 @@ mod tests {
             usize,
             fn(&mut Doc, &mut gpui_kit::Context<Doc>),
         );
-        let ops: [Op; 7] = [
+        let ops: [Op; 9] = [
+            ("select-down-delete", 1, |d, cx| {
+                d.extending(cx, |d, cx| {
+                    d.move_v(1, cx);
+                    d.move_v(1, cx);
+                });
+                d.delete(true, cx);
+            }),
+            ("select-word-type", 1, |d, cx| {
+                d.extending(cx, |d, cx| d.move_word(1, cx));
+                d.type_text("Zq", false, cx);
+            }),
             ("type", 1, |d, cx| d.type_text("Zq", false, cx)),
             ("enter@start", 0, |d, cx| d.enter(false, cx)),
             ("enter@mid", 1, |d, cx| d.enter(false, cx)),

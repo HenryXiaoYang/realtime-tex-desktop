@@ -34,6 +34,12 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   Backspace removes it. Enter at the start of a paragraph or heading
   opens a new paragraph above it; in a heading's middle it splits it in two; in a table it does
   nothing yet.
+- Selecting text: drag over it, Shift-click, Shift with any caret move (⇧←/→/↑/↓, ⌥⇧ by word,
+  ⌘⇧ to the line's or document's ends), double-click a word, triple-click a paragraph, ⌘A for
+  all. Typing replaces the selection, Backspace/Delete removes it (markup it only partly holds,
+  like the `}` of a `\textbf` that began before it or a list's `\end`, stays whole), ⌘C copies it
+  as plain text and, when it stands on its own, as TeX that ⌘V pastes back here as it was; ⌘X
+  cuts.
 - Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
   it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
   the clicked character; Up on the first line or Down on the last moves to the neighbouring
@@ -123,6 +129,7 @@ src/
       session.rs       keeping in step with rtex: layouts, live paragraphs, page images
       pages.rs         drawing a page, split around the source box, with the compile spinner
       typing.rs        Visual mode's caret: moving, typing, input methods, the typed-text overlay
+      text_selection.rs  selecting text on the pages; deleting, typing over, copying, pasting it
       source_box.rs    the inline source box
       editing.rs       opening, typing in and leaving the box; insert spots; undo
       selection.rs     block selection and block commands
@@ -143,6 +150,7 @@ Backspace, lists, an input method) and prints how long typing took to typeset. `
 test --release edit_everywhere -- --ignored --nocapture` types, presses Enter, Shift-Enter,
 Backspace and Delete at the start, middle and end of every block, through rtex, and fails on a
 LaTeX error, a lost caret, a caret Enter moved the wrong way or an undo that does not restore the
-source (`RTD_SWEEP_ONLY=26:` or `26:enter@end` runs one block or edit and shows it).
+source (`RTD_SWEEP_ONLY=26:` or `26:enter@end` runs one block or edit and shows it). `RTD_LOG_INPUT=1`
+when launching the app logs what macOS and input methods send to the pages' text input.
 
 Set `RTD_LOG=1` to print the rtex protocol traffic to stderr.
