@@ -3,6 +3,7 @@
 // keystroke goes to rtex, which re-typesets it in milliseconds. Other text files open as source.
 mod complete;
 mod editing;
+mod element_edit;
 mod file_view;
 mod find_bar;
 mod formatting;

@@ -2,6 +2,7 @@
 // laid out like Zed.
 mod chrome;
 mod files;
+mod inspector;
 mod project_panel;
 mod ribbon;
 
@@ -40,7 +41,8 @@ actions!(
         ToggleSidebar,
         ToggleSource,
         Recompile,
-        OpenSettings
+        OpenSettings,
+        ToggleInspector
     ]
 );
 
@@ -54,6 +56,8 @@ pub struct Workspace {
     active: usize,
     resources: Arc<Mutex<render::Resources>>,
     sidebar: bool,
+    /// The sidebar on the right, for the element at the caret.
+    inspector: inspector::Inspector,
     status: String,
     /// Folders open in the project panel (paths): only they are read from disk, so a large
     /// folder (node_modules) costs nothing until it is opened.
@@ -80,6 +84,7 @@ impl Workspace {
             active: 0,
             resources,
             sidebar: true,
+            inspector: Default::default(),
             status: String::new(),
             rename: None,
             expanded: Default::default(),
@@ -128,6 +133,12 @@ impl Render for Workspace {
             |this: &mut Self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>| {
                 this.with_doc(cx, |d, cx| d.leave(window, cx))
             };
+        let inspector_visible = self.inspector_visible(cx);
+        let inspector = if inspector_visible {
+            self.render_inspector(window, cx)
+        } else {
+            div().into_any_element()
+        };
         let center = div()
             .size_full()
             .flex()
@@ -191,6 +202,9 @@ impl Render for Workspace {
                 this.sidebar = !this.sidebar;
                 cx.notify();
             }))
+            .on_action(cx.listener(|_, _: &ToggleInspector, _, cx| {
+                settings::AppSettings::set(cx, |s| s.inspector_closed = !s.inspector_closed);
+            }))
             // the title bar keeps its mouse to itself: it moves the window
             .child(self.render_title_bar(cx))
             .child(
@@ -208,7 +222,14 @@ impl Render for Workspace {
                                         .child(self.render_sidebar(cx)),
                                 ),
                         )
-                        .child(resizable_panel().child(center)),
+                        .child(resizable_panel().child(center))
+                        .child(
+                            resizable_panel()
+                                .size(px(280.0))
+                                .size_range(px(220.0)..px(520.0))
+                                .visible(inspector_visible)
+                                .child(inspector),
+                        ),
                 ),
             )
             .child(

@@ -55,6 +55,11 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   cuts. ⌘V of rich text from another app (a web page, Word, Pages) keeps its bold, italic,
   underline, links (adding hyperref), headings, paragraphs, line breaks, lists, code and super-
   and subscripts as TeX, the rest as plain text; ⌘⇧V pastes plain text.
+- The sidebar on the right (Visual mode; ⌘⌥\\ or its × hides it, remembered) shows the settings
+  of what the caret is in or what is selected — a figure (width, placement, caption, label), an
+  image, a table, a heading (level, numbered, short title, label), an equation (numbered,
+  environment, label), a list, or the document (class, font size, paper, margins) — common ones
+  first, the rest under Advanced. Changes apply as they are made, adding any package they need.
 - Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
   it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
   the clicked character; Up on the first line or Down on the last moves to the neighbouring

@@ -37,6 +37,8 @@ pub struct AppSettings {
     pub tex_bin: String,
     /// The ribbon folded to its tab row.
     pub ribbon_collapsed: bool,
+    /// The sidebar on the right closed (it stays so until shown again).
+    pub inspector_closed: bool,
     /// Shortcuts changed from their defaults: command to key (empty: none).
     pub shortcuts: std::collections::BTreeMap<String, String>,
 }
@@ -57,6 +59,7 @@ impl Default for AppSettings {
             rtex_path: String::new(),
             tex_bin: "/Library/TeX/texbin".into(),
             ribbon_collapsed: false,
+            inspector_closed: false,
             shortcuts: Default::default(),
         }
     }

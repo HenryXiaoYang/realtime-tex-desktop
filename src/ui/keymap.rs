@@ -209,6 +209,14 @@ pub fn commands() -> Vec<Command> {
             ToggleSidebar
         ),
         cmd!(
+            "inspector",
+            "View",
+            "Toggle Sidebar",
+            ANY,
+            "cmd-alt-\\",
+            ToggleInspector
+        ),
+        cmd!(
             "source",
             "View",
             "Switch Visual / Source",
