@@ -173,9 +173,9 @@ impl Workspace {
         let body = div()
             .id("ribbon-body")
             .flex()
-            .items_start()
             .gap_3()
             .px_3()
+            .pt_2()
             .pb_2()
             .overflow_x_scroll()
             .children(groups);
@@ -203,7 +203,9 @@ impl Workspace {
             .when(rule, |d| d.pr_3().border_r_1().border_color(theme.border))
             .children(rows)
             .child(
+                // at the group's foot, so the names line up across the ribbon
                 div()
+                    .mt_auto()
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .text_center()
@@ -241,7 +243,8 @@ impl Workspace {
                 .tip(tip)
                 .on_click(move |_, window, cx| window.dispatch_action(a.boxed_clone(), cx))
         };
-        let row = div()
+        // paste, cut and copy above; undo and redo centred under them
+        let top = div()
             .flex()
             .gap_0p5()
             .child(act(
@@ -262,6 +265,11 @@ impl Workspace {
                 "Copy (⌘C)",
                 Box::new(Copy),
             ))
+            .into_any_element();
+        let bottom = div()
+            .flex()
+            .justify_center()
+            .gap_0p5()
             .child(act(
                 "rb-undo",
                 "icons/undo.svg",
@@ -275,7 +283,7 @@ impl Workspace {
                 Box::new(Redo),
             ))
             .into_any_element();
-        Self::group("Clipboard", vec![row], cx)
+        Self::group("Clipboard", vec![top, bottom], cx)
     }
 
     fn font_group(&self, st: &RibbonState, cx: &mut Context<Self>) -> AnyElement {

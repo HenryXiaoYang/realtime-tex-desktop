@@ -134,7 +134,6 @@ pub(super) fn measured_row(groups: Vec<AnyElement>, w: Option<Rc<Cell<f32>>>) ->
         .relative()
         .flex()
         .flex_shrink_0()
-        .items_start()
         .gap_3()
         .children(w.map(measure))
         .children(groups)
