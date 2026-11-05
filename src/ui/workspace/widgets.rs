@@ -199,7 +199,7 @@ pub(super) fn color_palette(
                                 .line_height(px(14.0))
                                 .child("A"),
                         )
-                        .child(div().w(px(18.0)).h(px(3.0)).rounded_sm().bg(shown)),
+                        .child(div().w(px(14.0)).h(px(5.0)).rounded_sm().bg(shown)),
                 ),
         )
         .content(move |_, _, cx| {
