@@ -423,6 +423,7 @@ impl Doc {
         self.source.replace_range(start..end, text);
         self.blocks = document::blocks(&self.spans, &self.source, &self.preview);
         self.maps.borrow_mut().clear();
+        self.restart_blink(cx);
         self.outline = document::outline(&self.source);
         self.dirty = true;
         if AppSettings::get(cx).autosave {

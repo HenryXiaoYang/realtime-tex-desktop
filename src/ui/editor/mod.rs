@@ -275,6 +275,9 @@ pub struct Doc {
     typing: Option<Typing>,
     /// Caret maps by (block start, page), until the blocks or the source change.
     maps: RefCell<HashMap<(usize, u32), Rc<document::caret::CharMap>>>,
+    /// The caret's blink: shown now, and the timer that flips it.
+    caret_on: bool,
+    blink: Option<Task<()>>,
     /// Where the caret was last drawn (window coordinates), for an input method's window.
     caret_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// What the last edit made: the bytes it wrote.
@@ -386,6 +389,8 @@ impl Doc {
             overlay: None,
             typing: None,
             maps: Default::default(),
+            caret_on: true,
+            blink: None,
             caret_bounds: Default::default(),
             last_edit: 0..0,
             _tasks: vec![],

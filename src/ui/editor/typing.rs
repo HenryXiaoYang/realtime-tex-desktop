@@ -175,8 +175,32 @@ impl Doc {
             marked: None,
         });
         self.typing = None;
+        self.restart_blink(cx);
         self.scroll_to(off, true, cx);
         cx.notify();
+    }
+
+    /// Show the caret and blink it from now, at the theme's rate: each move or edit restarts
+    /// the blink, as in any editor. It stops when the caret goes.
+    pub(super) fn restart_blink(&mut self, cx: &mut Context<Self>) {
+        self.caret_on = true;
+        let Some(interval) = cx.theme().cursor_blink.interval() else {
+            self.blink = None;
+            return;
+        };
+        self.blink = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(interval).await;
+                let on = this.update(cx, |d, cx| {
+                    d.caret_on = !d.caret_on;
+                    cx.notify();
+                    d.caret.is_some()
+                });
+                if !matches!(on, Ok(true)) {
+                    break;
+                }
+            }
+        }));
     }
 
     /// A click at (`x`, `y`) sp on `page` in block `bi`: the caret there. False when the
@@ -856,7 +880,7 @@ impl Doc {
             .top(px(top))
             .w(px(1.5))
             .h(px(fs * 1.05))
-            .bg(fg)
+            .when(self.caret_on, |c| c.bg(fg))
             .child(
                 canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
                     .absolute()
@@ -980,6 +1004,7 @@ impl EntityInputHandler for Doc {
     ) {
         let Some(c) = self.caret.as_mut() else { return };
         c.marked = (!new_text.is_empty()).then(|| (new_text.to_string(), new_selected));
+        self.restart_blink(cx);
         cx.notify();
     }
 
@@ -1168,6 +1193,14 @@ mod tests {
         wait(cx, &doc, "the caret drawn", |d| {
             d.caret_bounds.get().is_some()
         });
+        // it blinks, and a move shows it again at once
+        doc.update(cx, |d, cx| d.set_caret(off + 11, cx));
+        assert!(cx.read(|cx| doc.read(cx).caret_on));
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        assert!(!cx.read(|cx| doc.read(cx).caret_on), "off after a blink");
+        doc.update(cx, |d, cx| d.set_caret(off + 11, cx));
+        assert!(cx.read(|cx| doc.read(cx).caret_on), "on again after a move");
         cx.read(|cx| {
             let d = doc.read(cx);
             let b = d.caret_bounds.get().unwrap();
