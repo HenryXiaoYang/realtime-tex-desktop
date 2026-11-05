@@ -123,7 +123,7 @@ impl Workspace {
                 }
                 let guides: Vec<Div> = open
                     .iter()
-                    .map(|l| guide_line(12.0 + *l as f32 * 12.0 + 3.5, cx))
+                    .map(|l| guide_line(12.0 + *l as f32 * OUTLINE_INDENT + 3.5, cx))
                     .collect();
                 open.push(level);
                 div()
@@ -133,7 +133,7 @@ impl Workspace {
                     .flex()
                     .gap_2()
                     .text_sm()
-                    .pl(px(12.0 + level as f32 * 12.0))
+                    .pl(px(12.0 + level as f32 * OUTLINE_INDENT))
                     .py_0p5()
                     .rounded_md()
                     .hover(|s| s.bg(theme.sidebar_accent))
@@ -258,6 +258,9 @@ fn indent_guides(depth: usize, folder: bool, cx: &App) -> Vec<AnyElement> {
         })
         .collect()
 }
+
+/// How much deeper each level of the outline sits, in px.
+const OUTLINE_INDENT: f32 = 20.0;
 
 /// An indent guide `left` px into its row, its full height: the panel's text, faint, so it
 /// shows on any panel (the theme's border is the dark panel's own gray).
