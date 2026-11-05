@@ -204,6 +204,19 @@ impl Render for Workspace {
         } else {
             div().into_any_element()
         };
+        let pages =
+            div()
+                .size_full()
+                .children(self.doc().cloned())
+                .when(self.tabs.is_empty(), |d| {
+                    d.flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme.muted_foreground)
+                        .child("Open a file from the project panel")
+                });
+        // the tabs and the ribbon across the whole width (the styles have room), the sidebar
+        // beside the pages under them
         let center = div()
             .size_full()
             .flex()
@@ -214,16 +227,19 @@ impl Render for Workspace {
                     .child(self.render_tabs(cx)),
             )
             .children(self.render_ribbon(cx))
-            .child(div().flex_1().min_h_0().children(self.doc().cloned()).when(
-                self.tabs.is_empty(),
-                |d| {
-                    d.flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(theme.muted_foreground)
-                        .child("Open a file from the project panel")
-                },
-            ));
+            .child(
+                div().flex_1().min_h_0().child(
+                    h_resizable("pages-sidebar")
+                        .child(resizable_panel().child(pages))
+                        .child(
+                            resizable_panel()
+                                .size(px(280.0))
+                                .size_range(px(220.0)..px(520.0))
+                                .visible(self.fit.right)
+                                .child(inspector),
+                        ),
+                ),
+            );
         div()
             .size_full()
             .flex()
@@ -312,14 +328,7 @@ impl Render for Workspace {
                                         .child(self.render_sidebar(cx)),
                                 ),
                         )
-                        .child(resizable_panel().child(center))
-                        .child(
-                            resizable_panel()
-                                .size(px(280.0))
-                                .size_range(px(220.0)..px(520.0))
-                                .visible(self.fit.right)
-                                .child(inspector),
-                        ),
+                        .child(resizable_panel().child(center)),
                 ),
             )
             .child(
