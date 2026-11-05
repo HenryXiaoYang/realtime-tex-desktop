@@ -32,6 +32,44 @@ fn panel_of(sidebar: Hsla, muted: Hsla, desk: Hsla) -> Hsla {
     }
 }
 
+/// The tools' colours, each (light theme, dark theme) readable 3:1 on the ribbon in its theme.
+const AMBER: (u32, u32) = (0xB25E00, 0xF2A93B);
+const BLUE: (u32, u32) = (0x3557D4, 0x86A1FF);
+const GREEN: (u32, u32) = (0x1B8250, 0x55C98F);
+const TEAL: (u32, u32) = (0x0B7A8C, 0x43C5D6);
+const VIOLET: (u32, u32) = (0x6A45D9, 0xAE95FF);
+const SLATE: (u32, u32) = (0x55627E, 0xA3AECA);
+
+/// An icon's colour by what its tool does (pasting warm, lists and links blue, tables green,
+/// pictures teal, formulas violet), as an office suite's ribbon colours its tools; None: the
+/// text's own (bold, italic, alignment and the like stay ink).
+pub fn icon_tint(icon: &str, cx: &App) -> Option<Hsla> {
+    let name = icon.trim_start_matches("icons/").trim_end_matches(".svg");
+    let (light, dark) = match name {
+        "clipboard-paste" | "bookmark" | "quote" => AMBER,
+        "scissors" | "copy" | "separator-horizontal" | "move-vertical" => SLATE,
+        "list"
+        | "list-ordered"
+        | "list-indent-increase"
+        | "list-indent-decrease"
+        | "list-tree"
+        | "link"
+        | "file-text" => BLUE,
+        "table" => GREEN,
+        "image" | "file-image" => TEAL,
+        "radical" | "sigma" => VIOLET,
+        _ => return None,
+    };
+    Some(
+        rgb(if cx.theme().mode.is_dark() {
+            dark
+        } else {
+            light
+        })
+        .into(),
+    )
+}
+
 /// Paper, as the renderer draws it (render::DARK_PAPER when dark).
 pub fn paper(dark: bool) -> Rgba {
     rgb(if dark { 0x000000 } else { 0xffffff })
@@ -125,6 +163,16 @@ fn readable_on(c: Hsla, bg: Hsla, ratio: f32) -> Hsla {
 #[cfg(test)]
 mod surface_tests {
     use super::*;
+
+    #[test]
+    fn the_tools_colours_read_on_the_ribbon() {
+        // the theme's ribbon (title bar), light and dark
+        let (light, dark) = (hex(0xF3F4F7), hex(0x26282D));
+        for (l, d) in [AMBER, BLUE, GREEN, TEAL, VIOLET, SLATE] {
+            assert!(contrast(hex(l), light) >= 3.0, "{l:06X} on light");
+            assert!(contrast(hex(d), dark) >= 3.0, "{d:06X} on dark");
+        }
+    }
 
     fn hex(c: u32) -> Hsla {
         rgb(c).into()

@@ -61,6 +61,16 @@ pub(super) fn color_of(spec: &str) -> Option<Hsla> {
         .map(|x| rgb(x).into())
 }
 
+/// A tool's icon, in its colour while it can be used (greyed with its button when not).
+pub(super) fn tool_icon(path: &'static str, enabled: bool, cx: &App) -> Icon {
+    let tint = enabled
+        .then(|| crate::ui::palette::icon_tint(path, cx))
+        .flatten();
+    Icon::default()
+        .path(path)
+        .when_some(tint, |i, c| i.text_color(c))
+}
+
 /// A big ribbon button: its icon over its name, with a caret when it opens a menu. A real
 /// button (focusable, named for VoiceOver, Enter and Space press it).
 /// `compact` (a narrow ribbon): the icon alone, its name in the tooltip.
@@ -70,12 +80,14 @@ pub(super) fn big_button(
     label: &'static str,
     caret: bool,
     compact: bool,
+    enabled: bool,
     cx: &App,
 ) -> Button {
     let b = Button::new(id)
         .ghost()
         .h_auto()
         .p_0()
+        .disabled(!enabled)
         .accessibility_label(label);
     if compact {
         b.tooltip(label).child(
@@ -85,7 +97,7 @@ pub(super) fn big_button(
                 .gap_0p5()
                 .px_1()
                 .h(px(34.0))
-                .child(Icon::default().path(icon).size(px(20.0)))
+                .child(tool_icon(icon, enabled, cx).size(px(20.0)))
                 .when(caret, |d| {
                     d.child(
                         Icon::default()
@@ -95,12 +107,12 @@ pub(super) fn big_button(
                 }),
         )
     } else {
-        b.child(big_face(icon, label, caret, cx))
+        b.child(big_face(icon, label, caret, enabled, cx))
     }
 }
 
 /// A big ribbon button's face: its icon over its name, with a caret when it opens a menu.
-fn big_face(icon: &'static str, label: &'static str, caret: bool, _: &App) -> Div {
+fn big_face(icon: &'static str, label: &'static str, caret: bool, enabled: bool, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
@@ -114,7 +126,7 @@ fn big_face(icon: &'static str, label: &'static str, caret: bool, _: &App) -> Di
         .min_w(px(48.0))
         .rounded_md()
         .text_xs()
-        .child(Icon::default().path(icon).size(px(20.0)))
+        .child(tool_icon(icon, enabled, cx).size(px(20.0)))
         .child(
             div()
                 .flex()

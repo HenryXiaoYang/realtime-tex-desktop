@@ -58,7 +58,7 @@ impl Workspace {
                         .gap_1()
                         .text_sm()
                         .pl(px(entry.depth() as f32 * TREE_INDENT))
-                        .child(Icon::default().path(icon).xsmall().flex_shrink_0())
+                        .child(widgets::tool_icon(icon, true, cx).xsmall().flex_shrink_0())
                         .map(|row| match &field {
                             // Escape cancels before the field's own bindings see it
                             Some(state) => row.child({
@@ -128,7 +128,7 @@ impl Workspace {
                     .rounded_md()
                     .hover(|s| s.bg(theme.sidebar_accent))
                     .cursor_pointer()
-                    .children(number.map(|n| div().text_color(theme.muted_foreground).child(n)))
+                    .children(number.map(|n| div().text_color(theme.link).child(n)))
                     .child(title)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.with_doc(cx, |d, cx| d.jump_to(off, cx))

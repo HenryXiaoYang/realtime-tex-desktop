@@ -7,7 +7,9 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
-use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, TitleBar};
+use gpui_kit::component::{
+    ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, ThemeRegistry, TitleBar,
+};
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -86,6 +88,7 @@ impl AppSettings {
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         cx.set_global::<AppSettings>(s);
+        install_theme(cx);
         Self::apply(cx);
     }
 
@@ -119,6 +122,26 @@ impl AppSettings {
         Theme::update(cx, |t| t.font_size = px(s.ui_font_size as f32));
         crate::engine::configure(&s.rtex_path, &s.tex_bin);
     }
+}
+
+/// The app's own colours (theme.json), light and dark: an accent for what acts and what is
+/// picked, softer grays than black on white. Every switch of mode, the system's too, takes them.
+fn install_theme(cx: &mut App) {
+    let registry = ThemeRegistry::global_mut(cx);
+    if let Err(e) = registry.load_themes_from_str(include_str!("theme.json")) {
+        eprintln!("the app's theme: {e}");
+        return;
+    }
+    let get = |name: &str| registry.themes().get(name).cloned();
+    let (light, dark) = (get("Realtime Tex Light"), get("Realtime Tex Dark"));
+    Theme::update(cx, |t| {
+        if let Some(l) = light {
+            t.light_theme = l;
+        }
+        if let Some(d) = dark {
+            t.dark_theme = d;
+        }
+    });
 }
 
 /// Keyboard shortcuts: each command and its key; click the key and press a new one.

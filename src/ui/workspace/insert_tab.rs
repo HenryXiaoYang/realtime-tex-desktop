@@ -306,8 +306,7 @@ impl Workspace {
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> Button {
-        widgets::big_button(id, icon, label, false, self.insert_compact(), cx)
-            .disabled(!enabled)
+        widgets::big_button(id, icon, label, false, self.insert_compact(), enabled, cx)
             .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
     }
 
@@ -323,6 +322,7 @@ impl Workspace {
             "Space",
             true,
             self.insert_compact(),
+            enabled,
             cx,
         );
         if !enabled {
@@ -383,6 +383,7 @@ impl Workspace {
             "Table",
             true,
             self.insert_compact(),
+            enabled,
             cx,
         );
         widgets::table_grid(

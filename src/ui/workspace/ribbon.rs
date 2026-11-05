@@ -172,8 +172,20 @@ impl Workspace {
             .track_scroll(&self.fit.ribbon_scroll)
             .children(groups);
         // the ribbon's width, and (the Insert tab) whether its buttons' names fit, for next frame
+        // the tools on a card a step up from the bar they sit in: white on light, lifted gray
+        // on dark
         let body = div()
             .relative()
+            .mx_2()
+            .mb_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .bg(if theme.mode.is_dark() {
+                theme.muted
+            } else {
+                theme.background
+            })
             .child(self.measure_ribbon())
             .child(body)
             .child(self.watch_insert(tab == RibbonTab::Insert));
@@ -233,7 +245,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Button {
         Button::new(id)
-            .icon(Icon::default().path(icon))
+            .icon(widgets::tool_icon(icon, enabled, cx))
             .ghost()
             .small()
             .selected(on)
@@ -245,7 +257,7 @@ impl Workspace {
     fn clipboard_group(&self, cx: &mut Context<Self>) -> AnyElement {
         let act = |id: &'static str, icon: &'static str, tip: &'static str, a: Box<dyn Action>| {
             Button::new(id)
-                .icon(Icon::default().path(icon))
+                .icon(widgets::tool_icon(icon, true, cx))
                 .ghost()
                 .small()
                 .tip(tip)
