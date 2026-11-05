@@ -281,18 +281,29 @@ impl Doc {
         true
     }
 
-    /// ⌘V at the caret, over the selection: TeX copied here goes in as it was; anything else
-    /// as plain text, escaped.
-    pub(super) fn paste_at_caret(&mut self, cx: &mut Context<Self>) {
+    /// ⌘V at the caret, over the selection: TeX copied here goes in as it was; rich text from
+    /// another app (its HTML) as TeX for its bold, italic, links, headings, lists…; anything
+    /// else (or everything, with `plain`: ⌘⇧V) as plain text, escaped.
+    pub(super) fn paste_at_caret(&mut self, plain: bool, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
         let Some(text) = item.text() else { return };
-        let tex = item
-            .metadata()
-            .and_then(|m| m.strip_prefix(TEX_TAG))
-            .filter(|t| caret::balanced(t))
-            .map(str::to_string);
+        let mut packages = vec![];
+        let tex = if plain {
+            None
+        } else {
+            item.metadata()
+                .and_then(|m| m.strip_prefix(TEX_TAG))
+                .filter(|t| caret::balanced(t))
+                .map(str::to_string)
+                .or_else(|| {
+                    let (tex, p) = document::html::html_to_tex(&clipboard_html()?);
+                    packages = p;
+                    // a converter that kept only the text adds nothing over the plain paste
+                    (!tex.is_empty() && caret::balanced(&tex)).then_some(tex)
+                })
+        };
         if !self.delete_selection(cx) {
             self.checkpoint();
         }
@@ -307,5 +318,41 @@ impl Doc {
         {
             c.off = off + ins.len();
         }
+        self.add_packages(&packages, cx);
+    }
+}
+
+/// The HTML on the clipboard (a web page's, Word's), which GPUI does not read: macOS gives it
+/// to AppleScript as hex. None when there is none.
+fn clipboard_html() -> Option<String> {
+    let out = std::process::Command::new("osascript")
+        .args(["-e", "the clipboard as «class HTML»"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    applescript_html(&String::from_utf8(out.stdout).ok()?)
+}
+
+/// AppleScript's `«data HTML3C62…»`: the hex of the HTML, as text.
+fn applescript_html(reply: &str) -> Option<String> {
+    let hex = reply.trim().strip_prefix("«data HTML")?.strip_suffix('»')?;
+    let bytes: Option<Vec<u8>> = (0..hex.len() / 2)
+        .map(|i| u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::applescript_html;
+
+    #[test]
+    fn reads_applescripts_html_data() {
+        // "<b>hé</b>" as UTF-8 hex
+        assert_eq!(
+            applescript_html("«data HTML3C623E68C3A93C2F623E»\n").as_deref(),
+            Some("<b>hé</b>")
+        );
+        assert_eq!(applescript_html("some text"), None);
     }
 }

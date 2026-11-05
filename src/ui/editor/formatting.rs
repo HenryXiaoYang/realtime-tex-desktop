@@ -132,15 +132,21 @@ impl Doc {
             c.anchor = (!fmt.select.is_empty()).then_some(fmt.select.start);
             c.goal_x = None;
         }
-        // the packages it needs, before \begin{document}: the caret and selection follow
+        self.add_packages(&fmt.packages, cx);
+        cx.notify();
+    }
+
+    /// The packages `packages` before `\begin{document}` when the preamble lacks them, with a
+    /// note in the status bar (the caret and selection follow); fontspec also names LuaLaTeX.
+    pub(super) fn add_packages(&mut self, packages: &[&str], cx: &mut Context<Self>) {
         let mut added = vec![];
-        for p in &fmt.packages {
+        for p in packages {
             if let Some((at, text)) = format::add_package(&self.source, p) {
                 self.replace(at..at, &text, cx);
                 added.push(*p);
             }
         }
-        if fmt.packages.contains(&"fontspec")
+        if packages.contains(&"fontspec")
             && let Some((at, text)) = format::add_lualatex(&self.source)
         {
             self.replace(at..at, &text, cx);
@@ -155,6 +161,5 @@ impl Doc {
                     .join(", ")
             );
         }
-        cx.notify();
     }
 }

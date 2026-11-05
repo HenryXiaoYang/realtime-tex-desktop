@@ -5,6 +5,7 @@ pub mod caret;
 pub mod find;
 pub mod format;
 pub mod glyphmap;
+pub mod html;
 mod outline;
 mod preview;
 

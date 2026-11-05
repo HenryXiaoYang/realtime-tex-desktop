@@ -52,7 +52,9 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   all. Typing replaces the selection, Backspace/Delete removes it (markup it only partly holds,
   like the `}` of a `\textbf` that began before it or a list's `\end`, stays whole), ⌘C copies it
   as plain text and, when it stands on its own, as TeX that ⌘V pastes back here as it was; ⌘X
-  cuts.
+  cuts. ⌘V of rich text from another app (a web page, Word, Pages) keeps its bold, italic,
+  underline, links (adding hyperref), headings, paragraphs, line breaks, lists, code and super-
+  and subscripts as TeX, the rest as plain text; ⌘⇧V pastes plain text.
 - Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
   it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
   the clicked character; Up on the first line or Down on the last moves to the neighbouring
@@ -140,6 +142,7 @@ src/
     glyphmap.rs        click-to-source: glyph text aligned with the visible source
     caret.rs           where a caret stands among glyphs; typing, Enter, Tab, Backspace as edits
     find.rs            find and replace over the printed text
+    html.rs            rich text pasted from other apps (their HTML) as TeX
     format.rs          formatting as source edits: inline commands, sizes, colours, fonts, lists,
                        alignment, styles, packages
   render/              rasterizing (skrifa, tiny-skia, hayro)

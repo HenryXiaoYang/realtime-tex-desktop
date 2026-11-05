@@ -1738,7 +1738,7 @@ mod tests {
         calm(cx, &doc);
         doc.update(cx, |d, cx| {
             d.set_caret(off, cx);
-            d.paste_at_caret(cx);
+            d.paste_at_caret(false, cx);
         });
         assert!(cx.read(|cx| doc.read(cx).source[off..].starts_with(&format!("{word}{word}"))));
         doc.update_in(cx, |d, window, cx| d.undo(window, cx));

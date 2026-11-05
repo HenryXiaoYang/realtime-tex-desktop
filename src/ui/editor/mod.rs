@@ -107,6 +107,7 @@ actions!(
         AlignCenter,
         AlignRight,
         AlignJustify,
+        PastePlain,
         OpenFind,
         OpenReplace,
         FindNext,
@@ -644,6 +645,11 @@ impl Render for Doc {
         let typing = self.caret.is_some() && self.active.is_none();
         let view = caret_actions(div().id("pages"), cx)
             .on_action(cx.listener(|d, _: &OpenFind, w, cx| d.open_find(false, w, cx)))
+            .on_action(cx.listener(|d, _: &PastePlain, _, cx| {
+                if d.caret.is_some() && d.active.is_none() {
+                    d.paste_at_caret(true, cx)
+                }
+            }))
             .on_action(cx.listener(|d, _: &OpenReplace, w, cx| d.open_find(true, w, cx)))
             .on_action(cx.listener(|d, _: &FindNext, w, cx| d.find_step(1, w, cx)))
             .on_action(cx.listener(|d, _: &FindPrev, w, cx| d.find_step(-1, w, cx)));
@@ -736,7 +742,7 @@ impl Render for Doc {
                 });
                 move |this, _: &Paste, w, cx| {
                     if this.caret.is_some() && this.active.is_none() {
-                        this.paste_at_caret(cx)
+                        this.paste_at_caret(false, cx)
                     } else {
                         f(this, w, cx)
                     }

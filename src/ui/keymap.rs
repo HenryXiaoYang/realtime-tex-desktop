@@ -55,6 +55,14 @@ pub fn commands() -> Vec<Command> {
         cmd!("quit", "File", "Quit", ANY, "cmd-q", Quit),
         cmd!("undo", "Edit", "Undo", ANY, "cmd-z", Undo),
         cmd!("redo", "Edit", "Redo", ANY, "cmd-shift-z", Redo),
+        cmd!(
+            "paste-plain",
+            "Edit",
+            "Paste as Plain Text",
+            PAGES,
+            "cmd-shift-v",
+            PastePlain
+        ),
         cmd!("find", "Edit", "Find", BOTH, "cmd-f", OpenFind),
         cmd!(
             "replace",
