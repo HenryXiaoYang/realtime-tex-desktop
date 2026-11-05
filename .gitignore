@@ -1,0 +1,24 @@
+# Rust build output (also holds the bundled .app and .dmg from scripts/)
+/target/
+**/*.rs.bk
+*.pdb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local Claude Code settings
+.claude/settings.local.json
+.claude/worktrees/
+
+# Env / secrets
+.env
+.env.*

@@ -1,0 +1,229 @@
+// Keeping a Doc in step with its rtex session: layouts and live paragraphs in, page images and
+// the formula preview out.
+use super::*;
+
+impl Doc {
+    pub(super) fn on_msg(&mut self, msg: engine::Msg, window: &mut Window, cx: &mut Context<Self>) {
+        match msg {
+            engine::Msg::Layout {
+                pages,
+                pages_total,
+                placements,
+                stale_since,
+                layout_version,
+            } => {
+                self.layout_version = layout_version;
+                let dirty = self
+                    .preview
+                    .apply_layout(pages, pages_total, placements, stale_since);
+                self.bump(dirty);
+                self.status.clear();
+                self.compiling = stale_since.is_some();
+            }
+            engine::Msg::Paragraph {
+                par_id,
+                removed,
+                dl,
+                fragments,
+                source_revision,
+            } => {
+                let dirty = self.preview.apply_paragraph(
+                    par_id,
+                    dl,
+                    if removed { vec![] } else { fragments },
+                    source_revision,
+                );
+                self.bump(dirty);
+                self.status.clear();
+            }
+            engine::Msg::Spans(spans) => {
+                self.spans_pending = self.spans_pending.saturating_sub(1);
+                // a reply older than the last edit has stale ranges; the last request will answer
+                if self.spans_pending == 0 {
+                    self.spans = spans;
+                }
+            }
+            engine::Msg::Status(s) => self.status = s,
+            engine::Msg::Failed => {
+                self.status = "LaTeX failed; showing the last good layout".into();
+                self.compiling = false;
+            }
+            engine::Msg::Compiling => self.compiling = true,
+            engine::Msg::Exported { path, ok } => {
+                self.status = match (path, ok) {
+                    (Some(p), true) => format!("Exported {p}"),
+                    (Some(p), false) => format!("Exported {p}, but LaTeX reported errors"),
+                    (None, _) => "Export failed: LaTeX did not produce a PDF".into(),
+                }
+            }
+            engine::Msg::Exited(tail) => {
+                self.status = format!("rtex stopped: {tail}");
+                self.rtex = None;
+                self.compiling = false;
+            }
+        }
+        self.blocks = document::blocks(&self.spans, &self.source, &self.preview);
+        self.render_live(window, cx);
+        cx.notify();
+    }
+
+    /// rtex copies each installed layout to bg/layout-<version>.pdf; one still being written
+    /// does not end with %%EOF yet.
+    pub(super) fn layout_pdf(&self) -> Option<PathBuf> {
+        let p = engine::build_dir(&self.root, &self.path)
+            .join(format!("bg/layout-{}.pdf", self.layout_version));
+        let data = std::fs::read(&p).ok()?;
+        let tail = &data[data.len().saturating_sub(1024)..];
+        tail.windows(5).any(|w| w == b"%%EOF").then_some(p)
+    }
+
+    pub(super) fn bump(&mut self, pages: BTreeSet<u32>) {
+        for p in pages {
+            *self.versions.entry(p).or_default() += 1;
+        }
+    }
+
+    /// Rasterize pages near the viewport whose image is missing, outdated or at another zoom.
+    pub(super) fn ensure_images(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let settle = Duration::from_millis(150);
+        let since = self.zoomed_at.elapsed();
+        if since < settle {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(settle - since).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+            return;
+        }
+        let scale = self.zoom as f64 * window.scale_factor() as f64 / SP_PER_BP;
+        let dark = self.dark_pages(cx);
+        // the key holds the paper too, so a theme switch redraws every page
+        let zkey = (scale * 1e6) as u32 * 2 + dark as u32;
+        let view_h = f32::from(self.scroll.bounds().size.height).max(1000.0);
+        let view_top = -f32::from(self.scroll.offset().y);
+        let mut y = PAGES_TOP;
+        for (&n, dl) in &self.preview.pages {
+            let h = page_px(dl.page_height.unwrap_or(0.0), self.zoom);
+            let near = y + h > view_top - view_h && y < view_top + 2.0 * view_h;
+            y += h + PAGE_GAP;
+            let v = self.versions.get(&n).copied().unwrap_or(0);
+            if !near
+                || self.images.get(&n).is_some_and(|im| im.key == (v, zkey))
+                || !self.inflight.insert((n, v, zkey))
+            {
+                continue;
+            }
+            let (mut rows, live, clear) = self.preview.page_parts(n);
+            // a degraded page (TikZ…) comes from the layout's PDF, with live rows drawn over it
+            let pdf = self
+                .preview
+                .inexact
+                .contains(&n)
+                .then(|| self.layout_pdf())
+                .flatten();
+            if pdf.is_some() {
+                rows.clear();
+            }
+            rows.extend(live);
+            let job = render::Job {
+                rows,
+                other: Some(dl.clone()),
+                region: [
+                    0.0,
+                    0.0,
+                    dl.page_width.unwrap_or(40258437.0),
+                    dl.page_height.unwrap_or(52099153.0),
+                ],
+                scale,
+                clear: if pdf.is_some() { clear } else { vec![] },
+                pdf: pdf.map(|p| (p, n as usize - 1)),
+                dark,
+            };
+            let fonts = self.resources.clone();
+            let task = cx.background_executor().spawn(async move {
+                render::render(&mut fonts.lock().unwrap_or_else(|e| e.into_inner()), &job)
+            });
+            cx.spawn_in(window, async move |this, cx| {
+                let (w, h, data) = task.await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.inflight.remove(&(n, v, zkey));
+                    if this.versions.get(&n).copied().unwrap_or(0) != v {
+                        // outdated: redraw, so the next frame asks for the current version
+                        cx.notify();
+                        return;
+                    }
+                    let img = to_image(w, h, data);
+                    if let Some(old) = this.images.insert(
+                        n,
+                        PageImage {
+                            img,
+                            key: (v, zkey),
+                        },
+                    ) {
+                        let _ = window.drop_image(old.img);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// The live typeset result of the block being edited, shown under its source.
+    pub(super) fn render_live(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(b) = self.active_block() else { return };
+        let rows: Vec<render::Row> = b.rows.iter().map(|r| r.row.clone()).collect();
+        let Some(bbox) = union(b.rows.iter().map(|r| r.bbox)) else {
+            return;
+        };
+        let pad = 2.0 * 65536.0;
+        let region = [
+            bbox[0] - pad,
+            bbox[1] - pad,
+            bbox[2] - bbox[0] + 2.0 * pad,
+            bbox[3] - bbox[1] + 2.0 * pad,
+        ];
+        let job = render::Job {
+            rows,
+            other: None,
+            region,
+            scale: self.zoom as f64 * window.scale_factor() as f64 / SP_PER_BP,
+            pdf: None,
+            clear: vec![],
+            dark: self.dark_pages(cx),
+        };
+        let fonts = self.resources.clone();
+        let task = cx.background_executor().spawn(async move {
+            render::render(&mut fonts.lock().unwrap_or_else(|e| e.into_inner()), &job)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let (w, h, data) = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Some((old, _)) = this.live.replace((to_image(w, h, data), region)) {
+                    let _ = window.drop_image(old);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Pages on dark paper: the dark theme, unless the settings keep pages white.
+    pub(super) fn dark_pages(&self, cx: &App) -> bool {
+        cx.theme().mode.is_dark() && AppSettings::get(cx).dark_pages
+    }
+
+    /// The page at the top third of the view, and how many there are.
+    pub fn page_position(&self) -> (u32, u32) {
+        let mark =
+            -f32::from(self.scroll.offset().y) + f32::from(self.scroll.bounds().size.height) / 3.0;
+        let mut y = PAGES_TOP;
+        for (&n, dl) in &self.preview.pages {
+            y += page_px(dl.page_height.unwrap_or(0.0), self.zoom) + PAGE_GAP;
+            if y > mark {
+                return (n, self.preview.pages_total);
+            }
+        }
+        (self.preview.pages_total, self.preview.pages_total)
+    }
+}
