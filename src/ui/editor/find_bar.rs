@@ -166,10 +166,11 @@ impl Doc {
     }
 
     /// The matches on page `n`, the current one stronger.
-    pub(super) fn render_matches(&self, n: u32) -> Vec<AnyElement> {
+    pub(super) fn render_matches(&self, n: u32, cx: &App) -> Vec<AnyElement> {
         let Some(f) = self.find.as_ref() else {
             return vec![];
         };
+        let marks = palette::marks(self.dark_pages(cx), cx);
         let on_page = |m: &Range<usize>| {
             self.blocks.iter().any(|b| {
                 b.range.start <= m.start
@@ -183,9 +184,9 @@ impl Doc {
             .filter(|(_, m)| on_page(m))
             .flat_map(|(i, m)| {
                 let color = if f.current == Some(i) {
-                    rgba(0xf59e0b90)
+                    marks.match_current
                 } else {
-                    rgba(0xfde04770)
+                    marks.match_other
                 };
                 self.highlights(n, m.clone(), color)
             })

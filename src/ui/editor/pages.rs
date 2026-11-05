@@ -80,12 +80,8 @@ impl Doc {
             .flex_col()
             .flex_none()
             .w(px(w))
-            // render::DARK_PAPER, under the page image while it loads
-            .bg(rgb(if self.dark_pages(cx) {
-                0x000000
-            } else {
-                0xffffff
-            }))
+            // the paper, under the page image while it loads
+            .bg(palette::paper(self.dark_pages(cx)))
             .shadow_md()
             .cursor_text()
             .child(spoken)
@@ -182,6 +178,7 @@ impl Doc {
             );
         // the selected block's outline, while no box is open
         let pad = 3.0 * self.zoom;
+        let accent = palette::marks(self.dark_pages(cx), cx).accent;
         let outline = self
             .selection()
             .filter(|_| self.active.is_none())
@@ -206,8 +203,7 @@ impl Doc {
                     .w(px(page_px(r[2], self.zoom) + pad - x))
                     .h(px(page_px(r[3], self.zoom) + pad - y))
                     .border_2()
-                    // a blue that reads on white and on dark paper
-                    .border_color(rgb(0x3b82f6))
+                    .border_color(accent)
             });
         let insert = self
             .hover_gap
@@ -244,8 +240,8 @@ impl Doc {
                 .children(blank)
                 .children(outline)
                 .children(insert)
-                .children(self.render_matches(n))
-                .children(self.render_selection(n))
+                .children(self.render_matches(n, cx))
+                .children(self.render_selection(n, cx))
                 .children(self.render_caret(n, window, cx))
                 .children(spinner)
                 .into_any_element();
@@ -310,8 +306,9 @@ impl Doc {
         let (l, r) = if l < r { (l, r) } else { (pw * 0.2, pw * 0.8) };
         let (left, right) = (page_px(l, self.zoom), page_px(r, self.zoom));
         let size = 11.0;
-        let accent = rgb(0x3b82f6);
-        let rule = || div().flex_1().h(px(1.0)).bg(rgba(0x3b82f699));
+        let marks = palette::marks(self.dark_pages(cx), cx);
+        let accent = marks.accent;
+        let rule = || div().flex_1().h(px(1.0)).bg(accent.opacity(0.6));
         div()
             .absolute()
             .left(px(left))
@@ -330,9 +327,9 @@ impl Doc {
                     .items_center()
                     .justify_center()
                     .bg(accent)
-                    .text_color(rgb(0xffffff))
+                    .text_color(marks.on_accent)
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(0x2563eb)))
+                    .hover(|s| s.bg(accent.opacity(0.85)))
                     .child(Icon::default().path("icons/plus.svg").size(px(8.0)))
                     .on_mouse_down(
                         MouseButton::Left,

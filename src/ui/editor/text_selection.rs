@@ -194,15 +194,16 @@ impl Doc {
     }
 
     /// The selection's highlights on page `n`: a box over each run of selected glyphs on a line.
-    pub(super) fn render_selection(&self, n: u32) -> Vec<AnyElement> {
+    pub(super) fn render_selection(&self, n: u32, cx: &App) -> Vec<AnyElement> {
         let Some(sel) = self.selection_range().filter(|_| self.active.is_none()) else {
             return vec![];
         };
-        self.highlights(n, sel, rgba(0x3b82f650))
+        let color = palette::marks(self.dark_pages(cx), cx).text_selection;
+        self.highlights(n, sel, color)
     }
 
     /// Boxes in `color` over the glyphs on page `n` that show the source `sel`.
-    pub(super) fn highlights(&self, n: u32, sel: Range<usize>, color: Rgba) -> Vec<AnyElement> {
+    pub(super) fn highlights(&self, n: u32, sel: Range<usize>, color: Hsla) -> Vec<AnyElement> {
         let mut boxes: Vec<[f64; 4]> = vec![];
         for bi in 0..self.blocks.len() {
             let b = &self.blocks[bi];

@@ -22,6 +22,7 @@ mod typing;
 use crate::document::{self, glyphmap};
 use crate::engine;
 use crate::render::{self, viewer};
+use crate::ui::palette;
 use crate::ui::settings::AppSettings;
 pub use formatting::{FormatOp, RibbonState};
 use futures::StreamExt;
@@ -777,7 +778,7 @@ impl Render for Doc {
             })
             // dark theme: a near-black desk, between the gray sidebar and the black page
             .bg(if theme.mode.is_dark() {
-                rgb(0x141414).into()
+                rgb(palette::DARK_DESK).into()
             } else {
                 theme.muted
             })

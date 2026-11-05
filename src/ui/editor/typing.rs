@@ -1085,17 +1085,9 @@ impl Doc {
         let baseline = (lh - ascent - descent) / 2.0 + ascent;
         let left = page_px(x, self.zoom);
         let top = page_px(y, self.zoom) - baseline;
-        // render's ink on its paper
-        let fg = rgb(if self.dark_pages(cx) {
-            0xe0e0e0
-        } else {
-            0x000000
-        });
-        let paper = rgb(if self.dark_pages(cx) {
-            0x000000
-        } else {
-            0xffffff
-        });
+        // the renderer's ink on its paper
+        let fg = palette::ink(self.dark_pages(cx));
+        let paper = palette::paper(self.dark_pages(cx));
         let bounds = self.caret_bounds.clone();
         let text = (!typed.is_empty() || !marked.is_empty()).then(|| {
             div()

@@ -116,7 +116,7 @@ impl Doc {
                     .absolute()
                     .inset_0()
                     .border_1()
-                    .border_color(rgba(0x3b82f680)),
+                    .border_color(palette::marks(self.dark_pages(cx), cx).accent.opacity(0.5)),
             )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(self.box_editor(box_w, fs, lh, min_h, family, cx))
@@ -395,11 +395,7 @@ fn sized_editor(
 }
 
 pub(super) fn source_box_colors(dark: bool) -> (Rgba, Rgba) {
-    if dark {
-        (rgb(0x262626), rgb(0xe6e6e6))
-    } else {
-        (rgb(0xebebeb), rgb(0x1f1f1f))
-    }
+    palette::source_box(dark)
 }
 
 /// The font in file `path` (face `index`) as GPUI selects it: its family, registered unless it

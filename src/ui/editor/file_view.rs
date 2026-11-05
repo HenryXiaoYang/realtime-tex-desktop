@@ -61,7 +61,7 @@ impl Doc {
                 .flex_none()
                 .w(px(w))
                 .h(px(h))
-                .bg(rgb(0xffffff))
+                .bg(palette::paper(false))
                 .shadow_md()
                 .children(
                     self.view_images
@@ -73,7 +73,7 @@ impl Doc {
             .id("viewer")
             .size_full()
             .bg(if theme.mode.is_dark() {
-                rgb(0x141414).into()
+                rgb(palette::DARK_DESK).into()
             } else {
                 theme.muted
             })

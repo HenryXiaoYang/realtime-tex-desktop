@@ -276,7 +276,7 @@ fn type_on_pages(cx: &mut TestAppContext) {
             &d.source[r.clone()]
         );
         let on = d.blocks[d.block_of(off).unwrap()].rows[0].page;
-        assert!(!d.render_selection(on).is_empty(), "it is highlighted");
+        assert!(!d.render_selection(on, cx).is_empty(), "it is highlighted");
         assert!(d.copy_selection(cx));
         d.type_text("W", false, cx);
         assert!(d.selection_range().is_none());

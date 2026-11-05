@@ -208,7 +208,7 @@ impl Workspace {
             .size_full()
             // gray in the dark theme, set off from the black pages
             .bg(if theme.mode.is_dark() {
-                rgb(0x2c2c2c).into()
+                rgb(crate::ui::palette::DARK_PANEL).into()
             } else {
                 theme.sidebar
             })
