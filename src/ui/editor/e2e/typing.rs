@@ -838,3 +838,72 @@ fn type_in_a_colour(cx: &mut TestAppContext) {
     let src = cx.read(|cx| doc.read(cx).source.clone());
     assert!(src.contains("last words\\textcolor{blue}{你}"), "{src}");
 }
+
+/// A space typed at a paragraph's end, or mid-line, leaves the caret on its line.
+#[gpui_kit::test]
+#[ignore]
+fn space_keeps_the_line(cx: &mut TestAppContext) {
+    let tex = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\n\nsome words here\n\nlast words\n\n\\end{document}\n";
+    let dir = scratch("space", tex);
+    let (doc, cx) = open(cx, dir, "main.tex", 2);
+    for after in ["words here", "some"] {
+        doc.update_in(cx, |d, window, cx| {
+            let at = d.source.find(after).unwrap() + after.len();
+            d.set_caret(at, cx);
+            for ch in "ab".chars() {
+                d.replace_text_in_range(None, &ch.to_string(), window, cx);
+            }
+        });
+        calm(cx, &doc);
+        let y0 = cx.read(|cx| doc.read(cx).caret_at().unwrap());
+        doc.update_in(cx, |d, window, cx| {
+            d.replace_text_in_range(None, " ", window, cx)
+        });
+        let typed = cx.read(|cx| doc.read(cx).caret_at().unwrap());
+        calm(cx, &doc);
+        let y1 = cx.read(|cx| doc.read(cx).caret_at().unwrap());
+        println!("{after}: before {y0:?} typed {typed:?} typeset {y1:?}");
+        assert_eq!(y0.2, y1.2, "{after}: the caret stays on its line");
+        assert!(y1.1 > y0.1, "{after}: a space on");
+    }
+}
+
+/// Spaces typed one after another each print (ties after the first), and Backspace takes them
+/// back one by one.
+#[gpui_kit::test]
+#[ignore]
+fn spaces_in_a_row(cx: &mut TestAppContext) {
+    let tex = "\\documentclass{article}\n\\begin{document}\nsome words here\n\nlast words\n\n\\end{document}\n";
+    let dir = scratch("spaces", tex);
+    let (doc, cx) = open(cx, dir, "main.tex", 1);
+    let base = cx.read(|cx| doc.read(cx).source.clone());
+    for after in ["words here", "some"] {
+        doc.update_in(cx, |d, _, cx| {
+            let at = d.source.find(after).unwrap() + after.len();
+            d.set_caret(at, cx);
+        });
+        let mut xs = vec![cx.read(|cx| doc.read(cx).caret_at().unwrap().1)];
+        for _ in 0..3 {
+            doc.update_in(cx, |d, window, cx| {
+                d.replace_text_in_range(None, " ", window, cx)
+            });
+            calm(cx, &doc);
+            xs.push(cx.read(|cx| doc.read(cx).caret_at().unwrap().1));
+        }
+        let src = cx.read(|cx| doc.read(cx).source.clone());
+        assert!(src.contains(&format!("{after} ~~")), "{after}: {src}");
+        assert!(
+            xs.windows(2).all(|w| w[1] > w[0]),
+            "{after}: each space moves the caret {xs:?}"
+        );
+        for _ in 0..3 {
+            doc.update_in(cx, |d, _, cx| d.delete(true, cx));
+            calm(cx, &doc);
+        }
+        assert_eq!(
+            cx.read(|cx| doc.read(cx).source.clone()),
+            base,
+            "{after}: three Backspaces"
+        );
+    }
+}

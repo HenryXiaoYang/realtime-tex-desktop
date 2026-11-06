@@ -102,7 +102,11 @@ impl Doc {
     /// Where the caret stands: its block, page, that page's map and the stop in it.
     pub(super) fn caret_stop(&self) -> Option<(usize, u32, Rc<CharMap>, usize)> {
         let off = self.caret.as_ref()?.off;
-        let bi = self.block_of(off).filter(|&bi| self.is_text_block(bi))?;
+        // spaces typed after a paragraph's text are not in its range (TeX prints none)
+        let bi = self
+            .block_of(off)
+            .or_else(|| self.block_of(self.source[..off].trim_end_matches([' ', '\t', '~']).len()))
+            .filter(|&bi| self.is_text_block(bi))?;
         let mut best = None;
         for page in self.pages_of(bi) {
             let Some(m) = self.map_of(bi, page) else {
@@ -135,7 +139,16 @@ impl Doc {
             {
                 return Some((page, at.0, at.1, s.size));
             }
-            return Some((page, s.x, s.y, s.size));
+            // after spaces TeX did not print (a paragraph's last): as far on as typed, a space's
+            // width for each tie and one for a run of spaces
+            let gap = self.source.get(s.off..off).unwrap_or("x");
+            let spaces = if gap.trim_matches([' ', '\t', '~']).is_empty() {
+                gap.matches('~').count() + gap.contains([' ', '\t']) as usize
+            } else {
+                0
+            };
+            let x = s.x + 0.333 * s.size * spaces as f64;
+            return Some((page, x, s.y, s.size));
         }
         let size = |b: &document::Block| {
             glyphmap::main_font(&b.rows.iter().map(|r| &r.row).collect::<Vec<_>>())
@@ -662,14 +675,15 @@ impl Doc {
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
-        // a space after a space, or before any text, prints nothing in TeX
+        // a space after a space, or before any text, prints nothing in TeX: a tie (~) does
         let src = &self.source;
-        if text.trim().is_empty()
-            && (off == 0 || src[..off].ends_with(|c: char| c.is_whitespace() || c == '~'))
-        {
-            return;
-        }
-        let esc = caret::escape(text);
+        let blank = text.trim().is_empty()
+            && (off == 0 || src[..off].ends_with(|c: char| c.is_whitespace() || c == '~'));
+        let esc = match text {
+            " " if blank => "~".to_string(),
+            _ if blank => return,
+            _ => caret::escape(text),
+        };
         let at = self.caret_at();
         let font = self.caret_font();
         if replaced {
@@ -776,23 +790,34 @@ impl Doc {
             return self.apply(e, cx);
         }
         if let Some((bi, page, m, i)) = self.caret_stop() {
-            let gone = m.deletion(i, back, &self.source).or_else(|| {
-                // the block goes on from the page before (after)
-                let pages: Vec<u32> = self.pages_of(bi).collect();
-                let at = pages.iter().position(|&p| p == page)?;
-                let other = if back {
-                    pages.get(at.checked_sub(1)?)
-                } else {
-                    pages.get(at + 1)
-                }?;
-                let m = self.map_of(bi, *other)?;
-                let j = if back {
-                    m.stops.len().checked_sub(1)?
-                } else {
-                    0
-                };
-                m.deletion(j, back, &self.source)
+            // spaces past the text TeX printed (a paragraph's end): a tie, or the run of spaces
+            let gap = self
+                .source
+                .get(m.stops[i].off..off)
+                .filter(|g| back && !g.is_empty() && g.trim_matches([' ', '\t', '~']).is_empty());
+            let spaces = gap.map(|g| match g.strip_suffix('~') {
+                Some(_) => off - 1..off,
+                None => g.trim_end_matches([' ', '\t']).len() + off - g.len()..off,
             });
+            let gone = spaces
+                .or_else(|| m.deletion(i, back, &self.source))
+                .or_else(|| {
+                    // the block goes on from the page before (after)
+                    let pages: Vec<u32> = self.pages_of(bi).collect();
+                    let at = pages.iter().position(|&p| p == page)?;
+                    let other = if back {
+                        pages.get(at.checked_sub(1)?)
+                    } else {
+                        pages.get(at + 1)
+                    }?;
+                    let m = self.map_of(bi, *other)?;
+                    let j = if back {
+                        m.stops.len().checked_sub(1)?
+                    } else {
+                        0
+                    };
+                    m.deletion(j, back, &self.source)
+                });
             if let Some(r) = gone {
                 self.overlay = None;
                 self.step("", true, false);
