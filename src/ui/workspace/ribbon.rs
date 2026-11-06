@@ -111,9 +111,12 @@ impl Workspace {
             RibbonTab::Home => 0,
             RibbonTab::Insert => 1,
         };
+        // the whole width, so its hairline divides the tabs from the tools rather than stopping
+        // after the last tab
         let mut bar = TabBar::new("ribbon-tabs")
             .underline()
             .small()
+            .flex_1()
             .selected_index(tab_ix);
         for (name, t) in [("Home", RibbonTab::Home), ("Insert", RibbonTab::Insert)] {
             bar = bar.child(Tab::new().label(name).on_click(cx.listener(
@@ -135,16 +138,16 @@ impl Workspace {
             .items_center()
             .gap_1()
             .px_2()
-            .h_7()
             .tooltip(|window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new("Double-click a tab to fold the ribbon")
                     .build(window, cx)
             })
             .child(bar);
+        // folded, the tabs' own hairline is the ribbon's edge
         let ribbon = div()
             .flex()
             .flex_col()
-            .border_b_1()
+            .when(!collapsed, |d| d.border_b_1())
             .border_color(theme.border)
             .bg(theme.title_bar)
             .child(tabs);
@@ -176,8 +179,7 @@ impl Workspace {
         // on dark
         let body = div()
             .relative()
-            .mx_2()
-            .mb_2()
+            .m_2()
             .rounded_lg()
             .border_1()
             .border_color(theme.border)
