@@ -51,7 +51,7 @@ impl Workspace {
                             .small()
                             .primary()
                             .disabled(!can_export)
-                            .tooltip("Typeset the whole document to a PDF (⌘⌥E)")
+                            .tooltip(crate::ui::keys_in("Typeset the whole document to a PDF (⌘⌥E)"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.with_doc(cx, |d, cx| d.export(cx))
                             })),
@@ -254,6 +254,7 @@ impl Workspace {
             }
             None => (self.status.clone(), None),
         };
+        let status = crate::ui::keys_in(&status);
         div()
             .flex()
             .flex_none()

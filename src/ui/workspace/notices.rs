@@ -148,11 +148,7 @@ impl Workspace {
                     note
                 } else {
                     // done, so it goes by itself; hovering it holds it for the button
-                    with_action(note, "Open PDF", move |_, _| {
-                        let _ = std::process::Command::new("/usr/bin/open")
-                            .arg(&pdf)
-                            .spawn();
-                    })
+                    with_action(note, "Open PDF", move |_, cx| cx.open_with_system(Path::new(&pdf)))
                     .autohide(true)
                 }
             }
@@ -296,7 +292,8 @@ pub(super) fn fit_notifications(below: f32, beside: f32, width: f32, cx: &mut Ap
     }
 }
 
-#[cfg(test)]
+// unix: the test takes write permission away with a Unix mode
+#[cfg(all(test, unix))]
 mod e2e {
     use super::super::Workspace;
     use super::place_notifications;

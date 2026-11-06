@@ -386,7 +386,7 @@ fn new_button(id: &'static str) -> Button {
     Button::new(id)
         .icon(Icon::default().path("icons/folder-plus.svg"))
         .label("New Project")
-        .tooltip("New Project (⌘⇧N)")
+        .tooltip(crate::ui::keys_in("New Project (⌘⇧N)"))
         .on_click(|_, _, cx| projects::new_project(cx))
 }
 
@@ -394,7 +394,7 @@ fn open_button(id: &'static str) -> Button {
     Button::new(id)
         .icon(Icon::default().path("icons/folder-open.svg"))
         .label("Open")
-        .tooltip("Open a folder or a .tex file (⌘O)")
+        .tooltip(crate::ui::keys_in("Open a folder or a .tex file (⌘O)"))
         .on_click(|_, _, cx| projects::choose_and_open(cx))
 }
 
@@ -450,13 +450,10 @@ fn initials(name: &str) -> String {
 
 /// `p`, the home folder as ~.
 fn tilde(p: &Path) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let s = p.to_string_lossy().to_string();
-    match s.strip_prefix(&home) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("~{rest}")
-        }
-        _ => s,
+    match std::env::home_dir().and_then(|h| p.strip_prefix(h).ok().map(Path::to_path_buf)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => p.to_string_lossy().to_string(),
     }
 }
 

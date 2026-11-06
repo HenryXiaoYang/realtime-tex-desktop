@@ -18,7 +18,7 @@ pub trait Tip {
 
 impl Tip for Button {
     fn tip(self, tip: impl Into<SharedString>) -> Self {
-        let tip: SharedString = tip.into();
+        let tip: SharedString = keys_in(&tip.into()).into();
         let name = spoken(&tip);
         self.accessibility_label(name).tooltip(tip)
     }
@@ -50,6 +50,42 @@ pub fn clip(text: &str, max: usize) -> String {
     }
 }
 
+/// `text` with its Mac shortcuts (⌘⇧R) as Windows and Linux write them (Ctrl+Shift+R).
+pub fn keys_in(text: &str) -> String {
+    if cfg!(target_os = "macos") {
+        return text.to_string();
+    }
+    keys_off_mac(text)
+}
+
+fn keys_off_mac(text: &str) -> String {
+    const MODS: &str = "⌃⌥⇧⌘";
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if !MODS.contains(c) {
+            out.push(c);
+            continue;
+        }
+        let mut mods = vec![c];
+        while let Some(m) = chars.next_if(|m| MODS.contains(*m)) {
+            mods.push(m);
+        }
+        for (of, name) in [("⌃⌘", "Ctrl+"), ("⌥", "Alt+"), ("⇧", "Shift+")] {
+            if mods.iter().any(|m| of.contains(*m)) {
+                out.push_str(name);
+            }
+        }
+        match chars.next() {
+            Some('⌫') => out.push_str("Backspace"),
+            Some('↩') => out.push_str("Enter"),
+            Some(k) => out.push(k),
+            None => {}
+        }
+    }
+    out
+}
+
 /// A tooltip as a name: without its shortcut, `Bold (⌘B)` is `Bold`.
 fn spoken(tip: &str) -> String {
     tip.split(" (").next().unwrap_or(tip).trim().to_string()
@@ -57,6 +93,14 @@ fn spoken(tip: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shortcuts_read_as_the_platform_writes_them() {
+        assert_eq!(
+            super::keys_off_mac("Recompile (⌘⇧R), then ⌥⌘\\ or ⌘⌫"),
+            "Recompile (Ctrl+Shift+R), then Ctrl+Alt+\\ or Ctrl+Backspace"
+        );
+    }
+
     #[test]
     fn errors_read_as_sentences() {
         use std::io::{Error, ErrorKind};

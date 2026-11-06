@@ -3,6 +3,7 @@
 use super::protocol::{Msg, parse};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -21,9 +22,20 @@ pub fn stop_all() {
 }
 
 /// Process group `pgid` ended: rtex and any lualatex it left running.
+#[cfg(unix)]
 fn kill_group(pgid: u32) {
     let _ = Command::new("/bin/kill")
         .args(["-KILL", "--", &format!("-{pgid}")])
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Windows has no process groups to signal: rtex's process tree ended instead.
+#[cfg(windows)]
+fn kill_group(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
 }
@@ -46,7 +58,11 @@ impl Rtex {
     ) -> Result<Self, String> {
         let main = main_for(root, file);
         let bin = find_binary().ok_or("rtex isn’t installed where the app looks. Install the Realtime TeX extension in VS Code, or choose the rtex binary in Settings › Engine")?;
-        let mut child = Command::new(&bin)
+        let mut cmd = Command::new(&bin);
+        // its own process group, so that rtex and its LaTeX runs end together
+        #[cfg(unix)]
+        cmd.process_group(0);
+        let mut child = cmd
             .args(["serve", "--project"])
             .arg(root)
             .args(["--main", &main])
@@ -55,8 +71,6 @@ impl Rtex {
             .args(SERVE_ARGS.read().unwrap().iter())
             .current_dir(root)
             .env("PATH", tex_path())
-            // its own process group, so that rtex and its LaTeX runs end together
-            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -176,9 +190,10 @@ fn find_binary() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("RTEX_BIN") {
         return Some(p.into());
     }
+    let exe = format!("rtex{}", std::env::consts::EXE_SUFFIX);
     if let Some(p) = std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
-            .map(|d| d.join("rtex"))
+            .map(|d| d.join(&exe))
             .find(|p| p.is_file())
     }) {
         return Some(p);
@@ -186,17 +201,16 @@ fn find_binary() -> Option<PathBuf> {
     // the copy inside the app (scripts/dmg.sh puts it in Contents/Resources)
     if let Some(p) = std::env::current_exe()
         .ok()
-        .and_then(|e| Some(e.parent()?.join("../Resources/rtex/bin/rtex")))
+        .and_then(|e| Some(e.parent()?.join("../Resources/rtex/bin").join(&exe)))
         .filter(|p| p.is_file())
     {
         return Some(p);
     }
-    let home = std::env::var_os("HOME")?;
-    let dir = Path::new(&home).join("Library/Application Support/Code/User/globalStorage/henryxiaoyang.realtime-tex/rtex-release");
+    let dir = data_dir().join("Code/User/globalStorage/henryxiaoyang.realtime-tex/rtex-release");
     let mut versions: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
-        .map(|e| e.path().join("bin/rtex"))
+        .map(|e| e.path().join("bin").join(&exe))
         .filter(|p| p.is_file())
         .collect();
     // shortcut: string order of tags (v0.0.6 < v0.0.10 sorts wrong), fine while there are few releases
@@ -233,16 +247,63 @@ fn main_for(root: &Path, file: &str) -> String {
 }
 
 /// rtex's build files for one main file, kept out of the user's folder:
-/// ~/Library/Caches/realtime-tex-desktop/<hash>. Each open file has its own session, so its own folder.
+/// <cache>/realtime-tex-desktop/<hash>. Each open file has its own session, so its own folder.
 pub fn build_dir(root: &Path, main: &str) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (root, main).hash(&mut h);
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join(format!(
-        "Library/Caches/realtime-tex-desktop/{:016x}",
-        h.finish()
-    ))
+    cache_dir().join(format!("realtime-tex-desktop/{:016x}", h.finish()))
+}
+
+fn home() -> PathBuf {
+    std::env::home_dir().unwrap_or_default()
+}
+
+/// Where apps keep what they remember: ~/Library/Application Support, %APPDATA%, ~/.config.
+pub fn data_dir() -> PathBuf {
+    let env = |k| std::env::var_os(k).map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        home().join("Library/Application Support")
+    } else if cfg!(windows) {
+        env("APPDATA").unwrap_or_else(|| home().join("AppData/Roaming"))
+    } else {
+        env("XDG_CONFIG_HOME").unwrap_or_else(|| home().join(".config"))
+    }
+}
+
+/// Where apps keep files they can make again: ~/Library/Caches, %LOCALAPPDATA%, ~/.cache.
+fn cache_dir() -> PathBuf {
+    let env = |k| std::env::var_os(k).map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        home().join("Library/Caches")
+    } else if cfg!(windows) {
+        env("LOCALAPPDATA").unwrap_or_else(|| home().join("AppData/Local"))
+    } else {
+        env("XDG_CACHE_HOME").unwrap_or_else(|| home().join(".cache"))
+    }
+}
+
+/// Where a TeX distribution puts lualatex when it is not on PATH (an app started from the
+/// Finder or the desktop does not get the shell's PATH).
+pub fn default_tex_bin() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "/Library/TeX/texbin"
+    } else {
+        ""
+    }
+}
+
+/// lualatex, if this PATH has it.
+pub fn find_lualatex() -> Option<PathBuf> {
+    let exe = format!("lualatex{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(&tex_path())
+        .map(|d| d.join(&exe))
+        .find(|p| p.is_file())
+}
+
+/// Whether rtex is where the app looks.
+pub fn rtex_found() -> bool {
+    find_binary().is_some_and(|p| p.is_file())
 }
 
 /// `kpsewhich <name>`: where TeX finds a file.
@@ -257,9 +318,15 @@ pub fn kpsewhich(name: &str) -> Option<PathBuf> {
     (!s.is_empty()).then(|| PathBuf::from(s))
 }
 
-/// PATH with MacTeX's bin folder, which a GUI app launched from Finder does not inherit.
-pub fn tex_path() -> String {
-    let p = std::env::var("PATH").unwrap_or_default();
+/// PATH with the TeX folders from the settings (several: separated as PATH separates them), and
+/// on the Mac MacTeX's and Homebrew's, which an app launched from the Finder does not inherit.
+pub fn tex_path() -> std::ffi::OsString {
     let extra = CONFIG.read().unwrap().1.clone();
-    format!("{extra}:{p}:/Library/TeX/texbin:/usr/local/bin:/opt/homebrew/bin")
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&extra).collect();
+    dirs.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    if cfg!(target_os = "macos") {
+        dirs.extend(["/Library/TeX/texbin", "/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from));
+    }
+    dirs.retain(|d| !d.as_os_str().is_empty());
+    std::env::join_paths(dirs).unwrap_or_default()
 }

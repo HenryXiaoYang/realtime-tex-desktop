@@ -106,7 +106,7 @@ impl Doc {
                     .as_ref()
                     .filter(|_| AppSettings::get(cx).open_after_export)
                 {
-                    let _ = std::process::Command::new("/usr/bin/open").arg(p).spawn();
+                    cx.open_with_system(Path::new(p));
                 }
                 self.notices.push(Notice::Exported {
                     path: path.clone(),

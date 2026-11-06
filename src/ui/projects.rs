@@ -159,7 +159,7 @@ pub fn choose_and_open(cx: &mut App) {
 
 /// Ask where a new project goes, make its folder with a main.tex, and open it.
 pub fn new_project(cx: &mut App) {
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let home = std::env::home_dir().unwrap_or_default();
     // beside the newest project, else in Documents
     let dir = cx
         .global::<Projects>()

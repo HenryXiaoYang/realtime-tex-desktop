@@ -17,7 +17,8 @@ pub struct Command {
     pub label: &'static str,
     /// The key contexts it is bound in (None: anywhere).
     pub contexts: &'static [Option<&'static str>],
-    pub key: &'static str,
+    /// Its default key, as this platform has it.
+    pub key: String,
     pub action: fn() -> Box<dyn Action>,
 }
 
@@ -32,7 +33,7 @@ macro_rules! cmd {
             group: $group,
             label: $label,
             contexts: $ctx,
-            key: $key,
+            key: platform_key($key),
             action: || Box::new($action),
         }
     };
@@ -265,7 +266,7 @@ pub fn key_of(c: &Command, cx: &App) -> String {
         .shortcuts
         .get(c.id)
         .cloned()
-        .unwrap_or_else(|| c.key.to_string())
+        .unwrap_or_else(|| c.key.clone())
 }
 
 /// `key` bound to `action` in each of `contexts` (a key that does not parse binds nothing).
@@ -306,7 +307,7 @@ pub fn bind_all(cx: &mut App) {
         bind(&c, &key_of(&c, cx), cx);
     }
     // the + beside = zooms in too
-    cx.bind_keys([KeyBinding::new("cmd-+", ZoomIn, None)]);
+    cx.bind_keys([KeyBinding::new(fixed_key("cmd-+"), ZoomIn, None)]);
 }
 
 /// Give command `id` key `key` (empty: none), saved; its old key stops working at once and the
@@ -344,7 +345,7 @@ pub fn reset_all(cx: &mut App) {
     let changed: Vec<String> = AppSettings::get(cx).shortcuts.keys().cloned().collect();
     for id in changed {
         if let Some(c) = commands().into_iter().find(|c| c.id == id) {
-            set_key(&id, c.key, cx);
+            set_key(&id, &c.key, cx);
         }
     }
 }
@@ -365,7 +366,44 @@ pub fn clash<'a>(id: &str, key: &str, all: &'a [Command], cx: &App) -> Option<&'
         .find(|o| o.id != id && !key.is_empty() && key_of(o, cx) == key && overlap(o))
 }
 
-/// A key as macOS writes it: ⌃⌥⇧⌘ then the key.
+/// `key` (as GPUI writes it) for this platform: off the Mac ⌘ is Ctrl, and a word or the
+/// document's ends are reached with Ctrl as Windows and Linux reach them.
+pub fn platform_key(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        return key.to_string();
+    }
+    let moved = match key {
+        "alt-left" => "ctrl-left",
+        "alt-right" => "ctrl-right",
+        "alt-shift-left" => "ctrl-shift-left",
+        "alt-shift-right" => "ctrl-shift-right",
+        "cmd-left" => "home",
+        "cmd-right" => "end",
+        "cmd-shift-left" => "shift-home",
+        "cmd-shift-right" => "shift-end",
+        "cmd-up" => "ctrl-home",
+        "cmd-down" => "ctrl-end",
+        "cmd-shift-up" => "ctrl-shift-home",
+        "cmd-shift-down" => "ctrl-shift-end",
+        k => k,
+    };
+    moved
+        .split('-')
+        .map(|p| if p == "cmd" { "ctrl" } else { p })
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// `platform_key` for a key bound once at launch (GPUI keeps the text): kept for good off the
+/// Mac, where it changed.
+pub fn fixed_key(key: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        return key;
+    }
+    Box::leak(platform_key(key).into_boxed_str())
+}
+
+/// A key as this platform writes it: ⌃⌥⇧⌘ then the key on the Mac, Ctrl+Shift+Z elsewhere.
 pub fn display(key: &str) -> String {
     if key.is_empty() {
         return "—".into();
@@ -400,7 +438,7 @@ pub fn display(key: &str) -> String {
             })
         }
     };
-    out + &k
+    crate::ui::keys_in(&(out + &k))
 }
 
 /// The command whose new key is being recorded in the Settings window, and a clash waiting for
@@ -465,7 +503,8 @@ pub fn record(id: &'static str, cx: &mut App) {
     });
 }
 
-#[cfg(test)]
+// the Mac: the tests press ⌘ keys
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::{bind_all, display, reset_all, set_key};
     use crate::ui::editor::FormatBold;

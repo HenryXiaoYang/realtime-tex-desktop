@@ -278,10 +278,7 @@ impl Workspace {
     pub(super) fn trash(&mut self, rel: String, window: &mut Window, cx: &mut Context<Self>) {
         self.close_under(&rel, false, window, cx);
         let path = self.root.join(&rel);
-        let failed = match std::process::Command::new("/usr/bin/trash")
-            .arg(&path)
-            .output()
-        {
+        let failed = match trash_command(&path).output() {
             Ok(o) if o.status.success() => None,
             Ok(o) => Some(String::from_utf8_lossy(&o.stderr).trim().to_string()),
             Err(e) => Some(e.to_string()),
@@ -348,15 +345,16 @@ impl Workspace {
             })
         };
         let abs = root.join(rel);
-        let shell = |label: &'static str, args: &'static [&'static str]| {
+        let shell = |label: &'static str, reveal: bool| {
             let abs = abs.clone();
             item(
                 label,
-                Rc::new(move |_, _, _, _| {
-                    let _ = std::process::Command::new("open")
-                        .args(args)
-                        .arg(&abs)
-                        .spawn();
+                Rc::new(move |_, _, _, cx| {
+                    if reveal {
+                        cx.reveal_path(&abs)
+                    } else {
+                        cx.open_with_system(&abs)
+                    }
                 }),
             )
         };
@@ -384,7 +382,7 @@ impl Workspace {
                     "Open",
                     Rc::new(|this, rel, w, cx| this.open(rel, w, cx)),
                 ))
-                .item(shell("Open in Default App", &[]))
+                .item(shell("Open in Default App", false))
                 .separator();
         }
         menu.item(item(
@@ -396,7 +394,7 @@ impl Workspace {
             Rc::new(move |this, _, w, cx| this.new_entry(&d2, true, w, cx)),
         ))
         .separator()
-        .item(shell("Reveal in Finder", &["-R"]))
+        .item(shell(REVEAL, true))
         .item(copy("Copy Path", abs.to_string_lossy().to_string()))
         .item(copy("Copy Relative Path", rel.to_string()))
         .separator()
@@ -484,6 +482,41 @@ pub(super) fn list_dir(
 
 /// The id ending of the stand-in row of a folder not read yet (or empty).
 pub(super) const PLACEHOLDER: &str = "\u{1}";
+
+/// What the file manager is called here.
+const REVEAL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(windows) {
+    "Show in Explorer"
+} else {
+    "Show in File Manager"
+};
+
+/// The command that moves `path` to the Trash (the Recycle Bin on Windows), recoverably.
+fn trash_command(path: &Path) -> std::process::Command {
+    if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("/usr/bin/trash");
+        c.arg(path);
+        c
+    } else if cfg!(windows) {
+        let mut c = std::process::Command::new("powershell");
+        let kind = if path.is_dir() { "Directory" } else { "File" };
+        // a quoted PowerShell string: a ' inside is written ''
+        let quoted = path.to_string_lossy().replace('\'', "''");
+        c.args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::Delete{kind}('{quoted}', 'OnlyErrorDialogs', 'SendToRecycleBin')"
+            ),
+        ]);
+        c
+    } else {
+        let mut c = std::process::Command::new("gio");
+        c.arg("trash").arg(path);
+        c
+    }
+}
 
 #[cfg(test)]
 mod tests {

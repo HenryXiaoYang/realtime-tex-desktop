@@ -1,5 +1,5 @@
 // App settings: kept as a GPUI global, saved as JSON in
-// ~/Library/Application Support/Realtime Tex Desktop/settings.json, and edited in the Settings
+// <app data>/Realtime Tex Desktop/settings.json (~/Library/Application Support on the Mac), and edited in the Settings
 // window (⌘,), built from gpui-kit's settings components.
 use crate::ui::Tip;
 use crate::ui::keymap;
@@ -74,7 +74,7 @@ impl Default for AppSettings {
             picture_cache: true,
             debug_dir: String::new(),
             rtex_path: String::new(),
-            tex_bin: "/Library/TeX/texbin".into(),
+            tex_bin: crate::engine::default_tex_bin().into(),
             ribbon_collapsed: false,
             inspector_closed: false,
             shortcuts: Default::default(),
@@ -86,8 +86,7 @@ impl Global for AppSettings {}
 
 /// Where the app keeps what it remembers.
 pub fn support_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join("Library/Application Support/Realtime Tex Desktop")
+    crate::engine::data_dir().join("Realtime Tex Desktop")
 }
 
 fn file() -> PathBuf {
@@ -275,7 +274,7 @@ fn shortcut_row(id: &'static str, label: &'static str, _: &mut Window, cx: &mut 
             .into_any_element();
     }
     let changed = key != c.key;
-    let default = c.key;
+    let default = c.key.clone();
     row.child(
         div()
             .flex()
@@ -305,7 +304,7 @@ fn shortcut_row(id: &'static str, label: &'static str, _: &mut Window, cx: &mut 
                     .tip("Back to the default")
                     .disabled(!changed)
                     .on_click(move |_, window, cx| {
-                        keymap::set_key(id, default, cx);
+                        keymap::set_key(id, &default, cx);
                         window.refresh();
                     }),
             ),
@@ -495,7 +494,7 @@ impl Render for SettingsView {
                         )
                         .default_value(d.tex_bin.clone()),
                     )
-                    .description("Where lualatex and kpsewhich are (MacTeX: /Library/TeX/texbin). Several folders: separate them with ':'.")
+                    .description("Where lualatex and kpsewhich are (MacTeX: /Library/TeX/texbin). Several folders: separate them as PATH does (':', on Windows ';').")
                     .layout(Axis::Vertical),
                 ]),
         )
