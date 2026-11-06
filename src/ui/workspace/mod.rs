@@ -87,6 +87,11 @@ pub struct Workspace {
     table_rows: Entity<InputState>,
     table_cols: Entity<InputState>,
     status: String,
+    /// The rtex log shown under the pages, its scroll, and how long it was when last drawn
+    /// (it follows new lines to the bottom).
+    logs: bool,
+    log_scroll: ScrollHandle,
+    log_seen: usize,
     /// Folders open in the project panel (paths): only they are read from disk, so a large
     /// folder (node_modules) costs nothing until it is opened.
     expanded: std::collections::HashSet<String>,
@@ -121,6 +126,9 @@ impl Workspace {
             table_rows: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             table_cols: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             status: String::new(),
+            logs: false,
+            log_scroll: ScrollHandle::new(),
+            log_seen: 0,
             rename: None,
             expanded: Default::default(),
             _subs: vec![],
@@ -200,6 +208,11 @@ impl Render for Workspace {
         self.fit_panels(window, cx);
         let inspector = if self.fit.right {
             self.render_inspector(window, cx)
+        } else {
+            div().into_any_element()
+        };
+        let logs = if self.logs {
+            self.render_logs(cx).into_any_element()
         } else {
             div().into_any_element()
         };
@@ -314,20 +327,35 @@ impl Render for Workspace {
             .child(self.render_title_bar(cx))
             .child(
                 div().flex_1().min_h_0().child(
-                    h_resizable("workspace")
+                    v_resizable("workspace-logs")
+                        .child(
+                            resizable_panel().child(
+                                h_resizable("workspace")
+                                    .child(
+                                        resizable_panel()
+                                            .size(px(260.0))
+                                            .size_range(px(160.0)..px(640.0))
+                                            .visible(self.fit.left)
+                                            .child(
+                                                div()
+                                                    .size_full()
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(leave),
+                                                    )
+                                                    .child(self.render_sidebar(cx)),
+                                            ),
+                                    )
+                                    .child(resizable_panel().child(center)),
+                            ),
+                        )
                         .child(
                             resizable_panel()
-                                .size(px(260.0))
-                                .size_range(px(160.0)..px(640.0))
-                                .visible(self.fit.left)
-                                .child(
-                                    div()
-                                        .size_full()
-                                        .on_mouse_down(MouseButton::Left, cx.listener(leave))
-                                        .child(self.render_sidebar(cx)),
-                                ),
-                        )
-                        .child(resizable_panel().child(center)),
+                                .size(px(200.0))
+                                .size_range(px(80.0)..px(800.0))
+                                .visible(self.logs)
+                                .child(logs),
+                        ),
                 ),
             )
             .child(

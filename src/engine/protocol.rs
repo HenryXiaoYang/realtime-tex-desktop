@@ -123,6 +123,8 @@ pub enum Msg {
         ok: bool,
     },
     Exited(String),
+    /// A line of rtex's output for the log: an event it sent (cut short) or a line of its stderr.
+    Log(String),
 }
 
 pub(super) fn parse(line: &str) -> Option<Msg> {

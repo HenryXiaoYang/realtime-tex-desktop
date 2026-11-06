@@ -268,6 +268,8 @@ pub struct Doc {
     pub status: String,
     /// A full compile is under way for an edit the live path could not take.
     pub compiling: bool,
+    /// rtex's events and stderr, oldest first.
+    pub log: String,
     rtex: Option<engine::Rtex>,
     spans: Vec<engine::Span>,
     spans_pending: usize,
@@ -410,6 +412,7 @@ impl Doc {
             dirty: false,
             status: String::new(),
             compiling: false,
+            log: String::new(),
             rtex: None,
             spans: vec![],
             spans_pending: 0,

@@ -315,7 +315,49 @@ impl Workspace {
                     .gap_3()
                     .pr_2()
                     .children(pages)
-                    .child("LuaLaTeX · rtex"),
+                    .child("LuaLaTeX · rtex")
+                    .child(
+                        Button::new("toggle-logs")
+                            .icon(Icon::default().path("icons/logs.svg"))
+                            .ghost()
+                            .xsmall()
+                            .selected(self.logs)
+                            .tip("Show or Hide the rtex Log")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.logs = !this.logs;
+                                cx.notify();
+                            })),
+                    ),
             )
+    }
+
+    /// The open file's rtex log (its events and stderr), kept scrolled to its end as lines come in.
+    pub(super) fn render_logs(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let log = self
+            .doc()
+            .map(|d| d.read(cx).log.clone())
+            .unwrap_or_default();
+        if log.len() != self.log_seen {
+            self.log_seen = log.len();
+            self.log_scroll.scroll_to_bottom();
+        }
+        div()
+            .id("rtex-log")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.log_scroll)
+            .p_2()
+            .bg(crate::ui::palette::panel(&theme))
+            .border_t_1()
+            .border_color(theme.border)
+            .font_family(crate::ui::editor::MONO)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(if log.is_empty() {
+                "rtex has written nothing yet".to_string()
+            } else {
+                log
+            })
     }
 }

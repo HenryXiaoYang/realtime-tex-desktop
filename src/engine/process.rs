@@ -63,17 +63,23 @@ impl Rtex {
         let stderr = child.stderr.take().unwrap();
         let tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let tail2 = tail.clone();
+        let log_tx = tx.clone();
         std::thread::spawn(move || {
             for l in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = log_tx.unbounded_send(Msg::Log(l.clone()));
                 *tail2.lock().unwrap() = l;
             }
         });
         std::thread::spawn(move || {
             let log = std::env::var_os("RTD_LOG").is_some();
             for l in BufReader::new(stdout).lines().map_while(Result::ok) {
+                // shortcut: an event cut at 1000 bytes (a layout's display lists run to megabytes),
+                // a long diagnostic too; summarise per event if that hides errors
+                let short = &l[..l.floor_char_boundary(1000)];
                 if log {
-                    eprintln!("<- {}", &l[..l.len().min(400)]);
+                    eprintln!("<- {short}");
                 }
+                let _ = tx.unbounded_send(Msg::Log(short.to_string()));
                 if let Some(m) = parse(&l)
                     && tx.unbounded_send(m).is_err()
                 {

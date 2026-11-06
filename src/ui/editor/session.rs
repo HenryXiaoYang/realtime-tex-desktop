@@ -2,8 +2,28 @@
 // the formula preview out.
 use super::*;
 
+/// The most of rtex's log a Doc keeps (bytes); past it the older half goes.
+const LOG_MAX: usize = 256 * 1024;
+
+/// `line` added to `log`; a log past `max` bytes keeps only its newer half, from a line start.
+fn push_log(log: &mut String, line: &str, max: usize) {
+    log.push_str(line);
+    log.push('\n');
+    if log.len() > max {
+        let cut = log.ceil_char_boundary(log.len() - max / 2);
+        let cut = log[cut..].find('\n').map_or(cut, |i| cut + i + 1);
+        log.drain(..cut);
+    }
+}
+
 impl Doc {
     pub(super) fn on_msg(&mut self, msg: engine::Msg, window: &mut Window, cx: &mut Context<Self>) {
+        // a log line changes nothing on the pages: kept, without redoing the blocks below
+        if let engine::Msg::Log(l) = msg {
+            push_log(&mut self.log, &l, LOG_MAX);
+            cx.notify();
+            return;
+        }
         match msg {
             engine::Msg::Layout {
                 pages,
@@ -68,6 +88,7 @@ impl Doc {
                     }
                 }
             }
+            engine::Msg::Log(_) => {}
             engine::Msg::Exited(tail) => {
                 self.status =
                     format!("The typesetter stopped ({tail}). Recompile (⌘⇧R) starts it again");
@@ -240,5 +261,21 @@ impl Doc {
             }
         }
         (self.preview.pages_total, self.preview.pages_total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_log;
+
+    #[test]
+    fn the_log_drops_its_older_half_at_whole_lines() {
+        let mut log = String::new();
+        for i in 0..10 {
+            push_log(&mut log, &format!("line {i} é"), 40);
+        }
+        assert!(log.len() <= 40, "{log:?}");
+        assert!(log.ends_with("line 9 é\n"));
+        assert!(log.starts_with("line "), "cut at a line start: {log:?}");
     }
 }
