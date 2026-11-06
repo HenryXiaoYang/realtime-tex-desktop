@@ -907,3 +907,76 @@ fn spaces_in_a_row(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// A file the main file \input's is edited on the whole document's pages.
+#[gpui_kit::test]
+#[ignore]
+fn type_in_an_input_file(cx: &mut TestAppContext) {
+    let main = "\\documentclass{article}\n\\begin{document}\nIn the main file.\n\n\\input{part}\n\\end{document}\n";
+    let dir = scratch("input", main);
+    std::fs::write(
+        dir.join("part.tex"),
+        "\\section{Part}\n\nSome words here.\n\nMore words.\n",
+    )
+    .unwrap();
+    let (doc, cx) = open(cx, dir.clone(), "part.tex", 1);
+    let bi = cx.read(|cx| {
+        let d = doc.read(cx);
+        (0..d.blocks.len())
+            .find(|&b| typed(d, b).contains("Some words here"))
+            .expect("the part's paragraph typeset")
+    });
+    doc.update_in(cx, |d, window, cx| {
+        let at = d.source.find("words here").unwrap() + "words here".len();
+        d.set_caret(at, cx);
+        for ch in "ab".chars() {
+            d.replace_text_in_range(None, &ch.to_string(), window, cx);
+        }
+    });
+    calm(cx, &doc);
+    let page = cx.read(|cx| typed(doc.read(cx), bi));
+    assert!(
+        page.contains("Some words hereab"),
+        "typed on the page: {page:?}"
+    );
+    doc.update(cx, |d, cx| d.save(cx));
+    let part = std::fs::read_to_string(dir.join("part.tex")).unwrap();
+    assert!(part.contains("words hereab"), "saved to the part: {part}");
+    assert!(
+        !std::fs::read_to_string(dir.join("main.tex"))
+            .unwrap()
+            .contains("ab.")
+    );
+}
+
+/// A main file that only \input's others names them: its own pages have nothing to edit.
+#[gpui_kit::test]
+#[ignore]
+fn a_main_of_inputs_names_them(cx: &mut TestAppContext) {
+    let main = "\\documentclass{article}\n\\begin{document}\n\\input{part}\n\\IfFileExists{gone.tex}{\\input{gone}}{}\n\\end{document}\n";
+    let dir = scratch("inputs", main);
+    std::fs::write(dir.join("part.tex"), "Some words here.\n").unwrap();
+    // nothing of its own typesets, so wait for the spans alone
+    cx.executor().allow_parking();
+    let (doc, cx) = {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::ui::settings::AppSettings::default());
+        });
+        engine::configure("", "/Library/TeX/texbin");
+        cx.add_window_view(|window, cx| {
+            Doc::new(
+                dir.clone(),
+                "main.tex".into(),
+                Default::default(),
+                window,
+                cx,
+            )
+        })
+    };
+    wait(cx, &doc, "the spans", |d| {
+        d.spans_pending == 0 && !d.blocks.is_empty()
+    });
+    let named = cx.read(|cx| doc.read(cx).text_elsewhere());
+    assert_eq!(named, ["part.tex"], "the missing gone.tex is not offered");
+}

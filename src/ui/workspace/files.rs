@@ -27,13 +27,19 @@ impl Workspace {
                 || std::fs::read(self.root.join(&path))
                     .map_or(true, |b| std::str::from_utf8(&b).is_err()))
         {
-            self.status = format!("Cannot open {path}: it is not a text file");
+            self.status = format!("Can’t open {path}: it isn’t a text file");
             cx.notify();
             return;
         }
         let (root, resources) = (self.root.clone(), self.resources.clone());
         let doc = cx.new(|cx| Doc::new(root, path, resources, window, cx));
-        self._subs.push(cx.observe(&doc, |_, _, cx| cx.notify()));
+        // what it has to tell (also from opening: rtex not found)
+        self.show_notices(&doc, window, cx);
+        self._subs
+            .push(cx.observe_in(&doc, window, |this, doc, window, cx| {
+                this.show_notices(&doc, window, cx);
+                cx.notify();
+            }));
         self.tabs.push(doc);
         self.activate(self.tabs.len() - 1, cx);
     }
@@ -112,7 +118,18 @@ impl Workspace {
         }
         self.refresh_tree(cx);
         match res {
-            Err(e) => self.status = format!("Could not create {}: {e}", path.display()),
+            Err(e) => {
+                self.status = format!("Couldn’t create {}: {e}", path.display());
+                let name = path
+                    .file_name()
+                    .map_or(String::new(), |n| n.to_string_lossy().to_string());
+                self.notify_failed(
+                    format!("Couldn’t create {name}"),
+                    crate::ui::plain_error(&e),
+                    window,
+                    cx,
+                );
+            }
             Ok(()) => {
                 if let Some(rel) = self.rel(&path) {
                     self.start_rename(rel, window, cx);
@@ -149,37 +166,60 @@ impl Workspace {
             s.set_selected_range(0..stem, cx);
             s.focus(window, cx);
         });
-        self._rename_sub =
-            Some(
-                cx.subscribe_in(&state, window, |this, _, ev: &InputEvent, window, cx| {
-                    if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                        this.commit_rename(window, cx);
-                    }
-                }),
-            );
+        self._rename_sub = Some(cx.subscribe_in(
+            &state,
+            window,
+            |this, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { .. } => this.commit_rename(true, window, cx),
+                InputEvent::Blur => this.commit_rename(false, window, cx),
+                // typing again: the error under the field goes
+                InputEvent::Change if this.rename_error.take().is_some() => cx.notify(),
+                _ => {}
+            },
+        ));
         self.rename = Some((rel, state));
+        self.rename_error = None;
         cx.notify();
     }
 
     pub(super) fn cancel_rename(&mut self, cx: &mut Context<Self>) {
         self.rename = None;
+        self.rename_error = None;
         self._rename_sub = None;
         cx.notify();
     }
 
-    pub(super) fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((rel, state)) = self.rename.take() else {
+    /// The name typed taken (Enter: `enter`; else the field was left). A name that cannot be
+    /// keeps the field open after Enter, with why under it and the name as typed; leaving the
+    /// field then gives the rename up.
+    pub(super) fn commit_rename(
+        &mut self,
+        enter: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((rel, state)) = self.rename.clone() else {
             return;
         };
-        self._rename_sub = None;
         let name = state.read(cx).value().trim().to_string();
         let old = self.root.join(&rel);
         let new = old.with_file_name(&name);
-        if name.is_empty() || new == old {
-        } else if name.contains('/') || name.starts_with('.') {
-            self.status = format!("“{name}” cannot be a name: no / and no dot at the start");
-        } else if new.exists() {
-            self.status = format!("{name} already exists here: choose another name");
+        let invalid = if name.contains('/') || name.starts_with('.') {
+            Some("A name can’t contain / or start with a dot".to_string())
+        } else if new != old && new.exists() {
+            Some(format!("{name} is already in this folder"))
+        } else {
+            None
+        };
+        if let Some(why) = invalid.clone().filter(|_| enter && !name.is_empty()) {
+            self.rename_error = Some(why);
+            cx.notify();
+            return;
+        }
+        self.rename = None;
+        self.rename_error = None;
+        self._rename_sub = None;
+        if name.is_empty() || new == old || invalid.is_some() {
         } else if let Some(new_rel) = self.rel(&new) {
             // open files under it are saved, closed, and reopened under the new name
             let moved = self.close_under(&rel, true, window, cx);
@@ -190,7 +230,13 @@ impl Workspace {
                     }
                 }
                 Err(e) => {
-                    self.status = format!("Could not rename {rel}: {e}");
+                    self.status = format!("Couldn’t rename {rel}: {e}");
+                    self.notify_failed(
+                        format!("Couldn’t rename {rel}"),
+                        crate::ui::plain_error(&e),
+                        window,
+                        cx,
+                    );
                     for p in moved {
                         self.open(p, window, cx);
                     }
@@ -232,17 +278,21 @@ impl Workspace {
     pub(super) fn trash(&mut self, rel: String, window: &mut Window, cx: &mut Context<Self>) {
         self.close_under(&rel, false, window, cx);
         let path = self.root.join(&rel);
-        self.status = match std::process::Command::new("/usr/bin/trash")
+        let failed = match std::process::Command::new("/usr/bin/trash")
             .arg(&path)
             .output()
         {
-            Ok(o) if o.status.success() => format!("Moved {rel} to the Trash"),
-            Ok(o) => format!(
-                "Could not move {rel} to the Trash: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            ),
-            Err(e) => format!("Could not move {rel} to the Trash: {e}"),
+            Ok(o) if o.status.success() => None,
+            Ok(o) => Some(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+            Err(e) => Some(e.to_string()),
         };
+        self.status = match &failed {
+            None => format!("Moved {rel} to the Trash"),
+            Some(why) => format!("Couldn’t move {rel} to the Trash: {why}"),
+        };
+        if let Some(why) = failed {
+            self.notify_failed(format!("Couldn’t move {rel} to the Trash"), why, window, cx);
+        }
         self.refresh_tree(cx);
         cx.notify();
     }
@@ -268,7 +318,13 @@ impl Workspace {
             .find(|p| !p.exists())
             .unwrap();
         if let Err(e) = std::fs::copy(&path, &copy) {
-            self.status = format!("Could not duplicate {rel}: {e}");
+            self.status = format!("Couldn’t duplicate {rel}: {e}");
+            self.notify_failed(
+                format!("Couldn’t duplicate {rel}"),
+                crate::ui::plain_error(&e),
+                window,
+                cx,
+            );
         }
         self.refresh_tree(cx);
         if let Some(r) = self.rel(&copy) {
@@ -380,23 +436,6 @@ impl Workspace {
     }
 }
 
-/// The folder's main file: main.tex, else the first .tex file with \documentclass.
-pub(super) fn find_main(root: &Path) -> Option<String> {
-    if root.join("main.tex").is_file() {
-        return Some("main.tex".into());
-    }
-    let mut names: Vec<String> = std::fs::read_dir(root)
-        .ok()?
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".tex"))
-        .collect();
-    names.sort();
-    names.into_iter().find(|n| {
-        std::fs::read_to_string(root.join(n)).is_ok_and(|t| t.contains("\\documentclass"))
-    })
-}
-
 /// The entries of `dir`, folders first. Only folders in `expanded` are read; the others get a
 /// stand-in child (so they show as folders) until they are opened.
 pub(super) fn list_dir(
@@ -482,5 +521,55 @@ mod tests {
         assert!(items[0].children[0].id.ends_with(PLACEHOLDER));
         assert!(!items[2].is_expanded());
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod e2e {
+    use super::super::Workspace;
+    use crate::ui::settings::AppSettings;
+    use gpui_kit::{AppContext, TestAppContext, WindowOptions};
+
+    /// A name that cannot be keeps the rename field open after Enter, with why under it; leaving
+    /// the field then gives the rename up, and nothing is renamed.
+    #[gpui_kit::test]
+    fn a_bad_name_is_said_at_the_field(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("rtd-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        std::fs::write(dir.join("b.txt"), "b").unwrap();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let (window, ws) = cx
+            .update(|cx| {
+                gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                    let d = dir.clone();
+                    cx.new(|cx| Workspace::new(d, Some("a.txt".into()), window, cx))
+                })
+            })
+            .unwrap();
+        cx.update_window(window, |_, window, cx| {
+            ws.update(cx, |this, cx| {
+                this.start_rename("a.txt".into(), window, cx);
+                let field = this.rename.clone().unwrap().1;
+                field.update(cx, |s, cx| s.set_value("b.txt", window, cx));
+                this.commit_rename(true, window, cx);
+                assert!(this.rename.is_some(), "the field stays open");
+                let why = this.rename_error.clone().unwrap_or_default();
+                assert!(why.contains("already"), "{why}");
+                this.commit_rename(false, window, cx);
+                assert!(
+                    this.rename.is_none() && this.rename_error.is_none(),
+                    "given up"
+                );
+            });
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "a");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "b");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

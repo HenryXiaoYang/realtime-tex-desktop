@@ -173,7 +173,7 @@ pub fn new_project(cx: &mut App) {
         if let Ok(Ok(Some(path))) = rx.await {
             cx.update(|cx| match create(&path) {
                 Ok(()) => open_in(path, Some("main.tex".into()), cx),
-                Err(e) => welcome::report(format!("Could not create the project: {e}"), cx),
+                Err(e) => welcome::report(format!("Couldn’t create the project: {e}"), cx),
             });
         }
     })
@@ -258,7 +258,7 @@ fn open_in(root: PathBuf, file: Option<String>, cx: &mut App) {
         ws
     });
     let Ok((handle, ws)) = opened else {
-        return welcome::report("Could not open a window".into(), cx);
+        return welcome::report("Couldn’t open a window".into(), cx);
     };
     let p = cx.global_mut::<Projects>();
     p.windows.push((root.clone(), handle, ws.downgrade()));

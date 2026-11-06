@@ -31,23 +31,28 @@ fn kill_group(pgid: u32) {
 pub struct Rtex {
     child: Child,
     stdin: ChildStdin,
-    pub main: String,
+    /// The file edited (relative to the root): the main file, or one it \input's.
+    file: String,
 }
 
 impl Rtex {
-    /// Start `rtex serve` on `main` (relative to `root`); messages go to `tx` from a reader thread.
+    /// Start `rtex serve` for editing `file` (relative to `root`): on `file` itself when it is a
+    /// document, else on the project's main file, which \input's it. Messages go to `tx` from a
+    /// reader thread.
     pub fn start(
         root: &Path,
-        main: &str,
+        file: &str,
         tx: futures::channel::mpsc::UnboundedSender<Msg>,
     ) -> Result<Self, String> {
-        let bin = find_binary().ok_or("rtex not found: install it from the Realtime TeX VS Code extension, put it on PATH, or set RTEX_BIN")?;
+        let main = main_for(root, file);
+        let bin = find_binary().ok_or("rtex isn’t installed where the app looks. Install the Realtime TeX extension in VS Code, or choose the rtex binary in Settings › Engine")?;
         let mut child = Command::new(&bin)
             .args(["serve", "--project"])
             .arg(root)
-            .args(["--main", main])
+            .args(["--main", &main])
             .arg("--build")
-            .arg(build_dir(root, main))
+            .arg(build_dir(root, file))
+            .args(SERVE_ARGS.read().unwrap().iter())
             .current_dir(root)
             .env("PATH", tex_path())
             // its own process group, so that rtex and its LaTeX runs end together
@@ -56,7 +61,12 @@ impl Rtex {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("cannot start {}: {e}", bin.display()))?;
+            .map_err(|e| {
+                format!(
+                    "{} didn’t run ({e}). Choose another rtex binary in Settings › Engine",
+                    bin.display()
+                )
+            })?;
         RUNNING.lock().unwrap().push(child.id());
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -91,7 +101,7 @@ impl Rtex {
         Ok(Self {
             child,
             stdin,
-            main: main.to_string(),
+            file: file.to_string(),
         })
     }
 
@@ -104,7 +114,7 @@ impl Rtex {
 
     /// Replace bytes [start, end) of the main file.
     pub fn edit(&mut self, start: usize, end: usize, text: &str) {
-        let path = self.main.clone();
+        let path = self.file.clone();
         self.send(json!({"cmd": "edit", "path": path, "start": start, "end": end, "text": text}));
     }
 
@@ -119,7 +129,7 @@ impl Rtex {
     }
 
     pub fn request_spans(&mut self) {
-        let path = self.main.clone();
+        let path = self.file.clone();
         self.send(json!({"cmd": "spans", "path": path}));
     }
 }
@@ -147,6 +157,13 @@ static CONFIG: std::sync::RwLock<(String, String)> =
 
 pub fn configure(rtex_path: &str, tex_bin: &str) {
     *CONFIG.write().unwrap() = (rtex_path.to_string(), tex_bin.to_string());
+}
+
+/// More options for `rtex serve` (its fast-path budget, picture cache, diagnostics folder).
+static SERVE_ARGS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(vec![]);
+
+pub fn configure_serve(args: Vec<String>) {
+    *SERVE_ARGS.write().unwrap() = args;
 }
 
 /// The binary from the settings, else $RTEX_BIN, else `rtex` on PATH, else the newest copy the
@@ -185,6 +202,34 @@ fn find_binary() -> Option<PathBuf> {
     // shortcut: string order of tags (v0.0.6 < v0.0.10 sorts wrong), fine while there are few releases
     versions.sort();
     versions.pop()
+}
+
+/// The project's main file: main.tex, else the first .tex at its top with \documentclass.
+pub fn find_main(root: &Path) -> Option<String> {
+    if root.join("main.tex").is_file() {
+        return Some("main.tex".into());
+    }
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".tex"))
+        .collect();
+    names.sort();
+    names.into_iter().find(|n| is_document(&root.join(n)))
+}
+
+fn is_document(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|t| t.contains("\\documentclass"))
+}
+
+/// The file LaTeX runs to typeset `file`: itself when it is a document, else the main file.
+/// shortcut: assumes the main file \input's it; check the \input tree if projects have several
+fn main_for(root: &Path, file: &str) -> String {
+    if is_document(&root.join(file)) {
+        return file.to_string();
+    }
+    find_main(root).unwrap_or_else(|| file.to_string())
 }
 
 /// rtex's build files for one main file, kept out of the user's folder:

@@ -452,10 +452,12 @@ impl Doc {
         }
         self.outline = document::outline(&self.source);
         self.dirty = true;
-        if AppSettings::get(cx).autosave {
-            // restarted by each edit: saves once typing pauses for a second
+        let s = AppSettings::get(cx);
+        if s.autosave {
+            // restarted by each edit: saves once typing pauses for the delay
+            let delay = Duration::from_secs_f64(s.autosave_delay.max(0.5));
             self.autosave = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                cx.background_executor().timer(delay).await;
                 let _ = this.update(cx, |this, cx| this.save(cx));
             }));
         }

@@ -224,7 +224,13 @@ impl Doc {
                 .map_or("image.png".into(), |n| n.to_string_lossy().to_string());
             match self.picture_path(f, &name) {
                 Ok(rel) => self.insert_figure(&rel, cx),
-                Err(e) => self.status = format!("Could not insert {name}: {e}"),
+                Err(e) => {
+                    self.status = format!("Couldn’t insert {name}: {e}");
+                    self.notices.push(Notice::Failed {
+                        what: format!("Couldn’t insert {name}"),
+                        why: e.to_string(),
+                    });
+                }
             }
             cx.notify();
         }
@@ -239,7 +245,13 @@ impl Doc {
         let _ = std::fs::remove_file(&tmp);
         match res {
             Ok(rel) => self.insert_figure(&rel, cx),
-            Err(e) => self.status = format!("Could not paste the picture: {e}"),
+            Err(e) => {
+                self.status = format!("Couldn’t paste the picture: {e}");
+                self.notices.push(Notice::Failed {
+                    what: "Couldn’t paste the picture".into(),
+                    why: e.to_string(),
+                });
+            }
         }
         cx.notify();
     }

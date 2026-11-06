@@ -5,7 +5,9 @@ mod files;
 mod insert_tab;
 mod inspector;
 mod layout;
+mod notices;
 pub use layout::MIN_WINDOW;
+pub use notices::place_notifications;
 mod project_panel;
 mod ribbon;
 mod widgets;
@@ -87,16 +89,20 @@ pub struct Workspace {
     table_rows: Entity<InputState>,
     table_cols: Entity<InputState>,
     status: String,
-    /// The rtex log shown under the pages, its scroll, and how long it was when last drawn
-    /// (it follows new lines to the bottom).
-    logs: bool,
+    /// What shows under the pages (the problems or the rtex log); the log's scroll, and how
+    /// long it was when last drawn (it follows new lines to the bottom).
+    bottom: Option<chrome::Bottom>,
     log_scroll: ScrollHandle,
     log_seen: usize,
     /// Folders open in the project panel (paths): only they are read from disk, so a large
     /// folder (node_modules) costs nothing until it is opened.
     expanded: std::collections::HashSet<String>,
-    /// The tree entry being renamed in place (its path) and its name field.
+    /// The tree entry being renamed in place (its path) and its name field, and why the name
+    /// typed cannot be (shown under the field, which stays open).
     rename: Option<(String, Entity<InputState>)>,
+    rename_error: Option<String>,
+    /// Files whose failed save was asked about already (later failures only notify).
+    save_alerted: std::collections::HashSet<String>,
     _subs: Vec<Subscription>,
     _rename_sub: Option<Subscription>,
     _dialog_subs: Vec<Subscription>,
@@ -126,10 +132,12 @@ impl Workspace {
             table_rows: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             table_cols: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             status: String::new(),
-            logs: false,
+            bottom: None,
             log_scroll: ScrollHandle::new(),
             log_seen: 0,
             rename: None,
+            rename_error: None,
+            save_alerted: Default::default(),
             expanded: Default::default(),
             _subs: vec![],
             _rename_sub: None,
@@ -169,7 +177,7 @@ impl Workspace {
         });
         this._subs.push(sub);
         this.refresh_tree(cx);
-        match main.or_else(|| find_main(&this.root)) {
+        match main.or_else(|| crate::engine::find_main(&this.root)) {
             Some(m) => this.open(m, window, cx),
             None => {
                 this.status =
@@ -207,15 +215,41 @@ impl Render for Workspace {
         // the window's width decides which panels have room
         self.fit_panels(window, cx);
         let inspector = if self.fit.right {
-            self.render_inspector(window, cx)
+            div()
+                .relative()
+                .size_full()
+                .child(self.render_inspector(window, cx))
+                .child(layout::measure(self.fit.right_w.clone()))
+                .into_any_element()
         } else {
             div().into_any_element()
         };
-        let logs = if self.logs {
-            self.render_logs(cx).into_any_element()
-        } else {
-            div().into_any_element()
+        let bottom = match self.bottom {
+            Some(chrome::Bottom::Logs) => self.render_logs(cx).into_any_element(),
+            Some(chrome::Bottom::Problems) => self.render_problems(cx).into_any_element(),
+            None => div().into_any_element(),
         };
+        let bottom = div()
+            .relative()
+            .size_full()
+            .child(bottom)
+            .child(layout::measure_height(self.fit.bottom_h.clone()));
+        // the notifications in the pages' corner, clear of the panel under them and the sidebar
+        // (the window in front sets it: the setting is the app's, not each window's)
+        if window.is_window_active() {
+            let below = if self.bottom.is_some() {
+                self.fit.bottom_h.get()
+            } else {
+                0.0
+            };
+            let beside = if self.fit.right {
+                self.fit.right_w.get()
+            } else {
+                0.0
+            };
+            let width = f32::from(window.viewport_size().width);
+            notices::fit_notifications(below, beside, width, cx);
+        }
         let pages =
             div()
                 .size_full()
@@ -353,8 +387,8 @@ impl Render for Workspace {
                             resizable_panel()
                                 .size(px(200.0))
                                 .size_range(px(80.0)..px(800.0))
-                                .visible(self.logs)
-                                .child(logs),
+                                .visible(self.bottom.is_some())
+                                .child(bottom),
                         ),
                 ),
             )

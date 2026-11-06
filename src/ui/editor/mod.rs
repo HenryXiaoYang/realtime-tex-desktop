@@ -52,6 +52,33 @@ const PAGES_TOP: f32 = 32.0 + FRAME_H + 8.0;
 const FRAME_H: f32 = 26.0;
 pub const MONO: &str = "Menlo";
 
+/// Something not to miss (the status bar shows it too, where it is easily missed): the
+/// workspace shows each as a notification in the window's corner.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Notice {
+    /// Saving failed (why): the edits are only in the window; later, a save that worked again.
+    SaveFailed(String),
+    Saved,
+    /// rtex could not start (why: not found, not runnable), or ended (its last words); later,
+    /// running again.
+    EngineMissing(String),
+    EngineStopped(String),
+    EngineRunning,
+    /// The full run failed on the last change; later, one that worked again.
+    TypesetFailed,
+    Typeset,
+    /// A PDF export ended: where (None: no PDF made) and whether LaTeX ran clean.
+    Exported {
+        path: Option<String>,
+        ok: bool,
+    },
+    /// Anything else that failed: what, and why.
+    Failed {
+        what: String,
+        why: String,
+    },
+}
+
 struct PageImage {
     img: Arc<RenderImage>,
     key: (u64, u32),
@@ -270,6 +297,17 @@ pub struct Doc {
     pub compiling: bool,
     /// rtex's events and stderr, oldest first.
     pub log: String,
+    /// The last full run's errors and warnings.
+    pub problems: Vec<engine::Diagnostic>,
+    /// What the workspace is to show as notifications (it takes them).
+    pub notices: Vec<Notice>,
+    /// The last full run failed (a later good one says so), and the wait before saying it.
+    typeset_failed: bool,
+    /// A save failed, rtex is not running: told, so the next save that works, the next rtex
+    /// that starts, takes the notification back (it would say what is no longer so).
+    save_failed: bool,
+    engine_failed: bool,
+    typeset_notice: Option<Task<()>>,
     rtex: Option<engine::Rtex>,
     spans: Vec<engine::Span>,
     spans_pending: usize,
@@ -413,6 +451,12 @@ impl Doc {
             status: String::new(),
             compiling: false,
             log: String::new(),
+            problems: vec![],
+            notices: vec![],
+            typeset_failed: false,
+            save_failed: false,
+            engine_failed: false,
+            typeset_notice: None,
             rtex: None,
             spans: vec![],
             spans_pending: 0,
@@ -463,14 +507,24 @@ impl Doc {
         if viewer::can_view(&this.path) {
             match viewer::open(&this.root.join(&this.path)) {
                 Ok(v) => this.view = Some(v),
-                Err(e) => this.status = format!("Cannot show {}: {e}", this.path),
+                Err(e) => {
+                    this.status = format!("Couldn’t show {}: {e}", this.path);
+                    this.notices.push(Notice::Failed {
+                        what: format!("Couldn’t show {}", this.path),
+                        why: e.to_string(),
+                    });
+                }
             }
             return this;
         }
         match source {
             Ok(s) => this.source = s,
             Err(e) => {
-                this.status = format!("Cannot read {}: {e}", this.path);
+                this.status = format!("Couldn’t open {}: {e}", this.path);
+                this.notices.push(Notice::Failed {
+                    what: format!("Couldn’t open {}", this.path),
+                    why: crate::ui::plain_error(&e),
+                });
                 return this;
             }
         }
@@ -493,8 +547,15 @@ impl Doc {
                 self.spans_pending = 1;
                 self.rtex = Some(r);
                 self.status = "Typesetting…".into();
+                if std::mem::take(&mut self.engine_failed) {
+                    self.notices.push(Notice::EngineRunning);
+                }
             }
-            Err(e) => self.status = e,
+            Err(e) => {
+                self.status = e.clone();
+                self.engine_failed = true;
+                self.notices.push(Notice::EngineMissing(e));
+            }
         }
         self._tasks.push(cx.spawn_in(window, async move |this, cx| {
             while let Some(msg) = rx.next().await {
@@ -530,8 +591,18 @@ impl Doc {
             return;
         }
         match std::fs::write(self.root.join(&self.path), &self.source) {
-            Ok(()) => self.dirty = false,
-            Err(e) => self.status = format!("Could not save {}: {e}", self.path),
+            Ok(()) => {
+                self.dirty = false;
+                if std::mem::take(&mut self.save_failed) {
+                    self.notices.push(Notice::Saved);
+                }
+            }
+            Err(e) => {
+                self.status = format!("Couldn’t save {}: {e}", self.path);
+                self.save_failed = true;
+                self.notices
+                    .push(Notice::SaveFailed(crate::ui::plain_error(&e)));
+            }
         }
         cx.notify();
     }
@@ -670,7 +741,7 @@ impl Render for Doc {
                 )
             } else {
                 (
-                    "The typesetter is not running".to_string(),
+                    "rtex isn’t running".to_string(),
                     "See the status bar for why. Recompile (⌘⇧R) tries again.",
                 )
             };

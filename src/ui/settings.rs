@@ -32,8 +32,17 @@ pub struct AppSettings {
     pub live_preview: bool,
     pub line_numbers: bool,
     pub soft_wrap: bool,
-    /// Save a file a second after the last edit.
+    /// Save a file `autosave_delay` seconds after the last edit.
     pub autosave: bool,
+    pub autosave_delay: f64,
+    /// Open an exported PDF in the default viewer.
+    pub open_after_export: bool,
+    /// rtex's fast-path budget per paragraph, in ms (`--fast-budget-ms`).
+    pub fast_budget_ms: f64,
+    /// Reuse pictures (TikZ) a full run drew before, rather than drawing each again.
+    pub picture_cache: bool,
+    /// Where rtex writes a bundle per engine failure (`--debug-dir`); empty: none.
+    pub debug_dir: String,
     /// The rtex binary; empty finds it ($RTEX_BIN, PATH, the VS Code extension's copy).
     pub rtex_path: String,
     /// Folders with lualatex and kpsewhich, added to PATH.
@@ -59,6 +68,11 @@ impl Default for AppSettings {
             line_numbers: true,
             soft_wrap: true,
             autosave: false,
+            autosave_delay: 1.0,
+            open_after_export: false,
+            fast_budget_ms: 50.0,
+            picture_cache: true,
+            debug_dir: String::new(),
             rtex_path: String::new(),
             tex_bin: "/Library/TeX/texbin".into(),
             ribbon_collapsed: false,
@@ -89,6 +103,7 @@ impl AppSettings {
             .unwrap_or_default();
         cx.set_global::<AppSettings>(s);
         install_theme(cx);
+        crate::ui::workspace::place_notifications(cx);
         Self::apply(cx);
     }
 
@@ -121,6 +136,22 @@ impl AppSettings {
         }
         Theme::update(cx, |t| t.font_size = px(s.ui_font_size as f32));
         crate::engine::configure(&s.rtex_path, &s.tex_bin);
+        crate::engine::configure_serve(s.serve_args());
+    }
+
+    /// The options `rtex serve` gets from these settings.
+    fn serve_args(&self) -> Vec<String> {
+        let mut a = vec![
+            "--fast-budget-ms".into(),
+            (self.fast_budget_ms.round() as u64).to_string(),
+        ];
+        if !self.picture_cache {
+            a.push("--no-picture-cache".into());
+        }
+        if !self.debug_dir.is_empty() {
+            a.extend(["--debug-dir".into(), self.debug_dir.clone()]);
+        }
+        a
     }
 }
 
@@ -322,6 +353,28 @@ impl Render for SettingsView {
                 )
                 .description("In the dark theme, show pages as light text on dark paper. Figures keep their colours; exported PDFs are unchanged."),
             ]),
+        )
+        .group(
+            SettingGroup::new().title("Workspace").items([
+                SettingItem::new(
+                    "Fold the ribbon",
+                    SettingField::switch(
+                        |cx| AppSettings::get(cx).ribbon_collapsed,
+                        |v, cx| AppSettings::set(cx, |s| s.ribbon_collapsed = v),
+                    )
+                    .default_value(d.ribbon_collapsed),
+                )
+                .description("Show only the ribbon's tabs; click one to open it again. Double-clicking a tab does the same."),
+                SettingItem::new(
+                    "Show the sidebar",
+                    SettingField::switch(
+                        |cx| !AppSettings::get(cx).inspector_closed,
+                        |v, cx| AppSettings::set(cx, |s| s.inspector_closed = !v),
+                    )
+                    .default_value(!d.inspector_closed),
+                )
+                .description("The panel on the right with the settings of the element at the caret. A narrow window hides it until it widens."),
+            ]),
         );
         let editor = SettingPage::new("Editor")
             .group(
@@ -388,7 +441,7 @@ impl Render for SettingsView {
                 ]),
             )
             .group(
-                SettingGroup::new().title("Files").item(
+                SettingGroup::new().title("Files").items([
                     SettingItem::new(
                         "Auto-save",
                         SettingField::switch(
@@ -397,8 +450,27 @@ impl Render for SettingsView {
                         )
                         .default_value(d.autosave),
                     )
-                    .description("Save a file a second after you stop typing. Edits are always saved when a tab or the window closes."),
-                ),
+                    .description("Save a file once you stop typing. Edits are always saved when a tab or the window closes."),
+                    SettingItem::new(
+                        "Auto-save delay (seconds)",
+                        SettingField::number_input(
+                            number(0.5, 60.0, 0.5),
+                            |cx| AppSettings::get(cx).autosave_delay,
+                            |v, cx| AppSettings::set(cx, |s| s.autosave_delay = v),
+                        )
+                        .default_value(d.autosave_delay),
+                    )
+                    .description("How long typing pauses before an auto-save."),
+                    SettingItem::new(
+                        "Open the PDF after export",
+                        SettingField::switch(
+                            |cx| AppSettings::get(cx).open_after_export,
+                            |v, cx| AppSettings::set(cx, |s| s.open_after_export = v),
+                        )
+                        .default_value(d.open_after_export),
+                    )
+                    .description("Show an exported PDF in your PDF viewer (Preview, unless you chose another)."),
+                ]),
             );
         let engine = SettingPage::new("Engine").group(
             SettingGroup::new()
@@ -424,6 +496,42 @@ impl Render for SettingsView {
                         .default_value(d.tex_bin.clone()),
                     )
                     .description("Where lualatex and kpsewhich are (MacTeX: /Library/TeX/texbin). Several folders: separate them with ':'.")
+                    .layout(Axis::Vertical),
+                ]),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Typesetting")
+                .description("Used by files opened after a change.")
+                .items([
+                    SettingItem::new(
+                        "Live paragraph budget (ms)",
+                        SettingField::number_input(
+                            number(10.0, 1000.0, 10.0),
+                            |cx| AppSettings::get(cx).fast_budget_ms,
+                            |v, cx| AppSettings::set(cx, |s| s.fast_budget_ms = v),
+                        )
+                        .default_value(d.fast_budget_ms),
+                    )
+                    .description("A paragraph that takes longer than this to typeset three times in a row waits for the full LaTeX run instead, until the next layout. Higher keeps more paragraphs live on a slow Mac."),
+                    SettingItem::new(
+                        "Reuse drawn pictures",
+                        SettingField::switch(
+                            |cx| AppSettings::get(cx).picture_cache,
+                            |v, cx| AppSettings::set(cx, |s| s.picture_cache = v),
+                        )
+                        .default_value(d.picture_cache),
+                    )
+                    .description("A full run keeps TikZ pictures it drew before when they did not change. Turn off if a picture shows an old version."),
+                    SettingItem::new(
+                        "Diagnostics folder",
+                        SettingField::input(
+                            |cx| AppSettings::get(cx).debug_dir.clone().into(),
+                            |v, cx| AppSettings::set(cx, |s| s.debug_dir = v.trim().to_string()),
+                        )
+                        .default_value(d.debug_dir.clone()),
+                    )
+                    .description("Empty: none. A folder where rtex writes what it was given each time its engine fails, and a line per live paragraph: attach it to an rtex bug report.")
                     .layout(Axis::Vertical),
                 ]),
         );
@@ -469,5 +577,36 @@ impl Render for SettingsView {
                         shortcuts_page(),
                     ])),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn rtex_gets_the_engine_settings() {
+        let d = AppSettings::default();
+        assert_eq!(d.serve_args(), ["--fast-budget-ms", "50"]);
+        let s = AppSettings {
+            fast_budget_ms: 120.4,
+            picture_cache: false,
+            debug_dir: "/tmp/rtex debug".into(),
+            ..d
+        };
+        assert_eq!(
+            s.serve_args(),
+            [
+                "--fast-budget-ms",
+                "120",
+                "--no-picture-cache",
+                "--debug-dir",
+                "/tmp/rtex debug"
+            ]
+        );
+        // a settings file from before these settings reads with their defaults
+        let old: AppSettings = serde_json::from_str(r#"{"autosave":true}"#).unwrap();
+        assert_eq!(old.autosave_delay, 1.0);
+        assert!(old.picture_cache);
     }
 }

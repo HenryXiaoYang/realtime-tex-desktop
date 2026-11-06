@@ -144,3 +144,29 @@ fn sidebar_everywhere(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// A LaTeX error comes into the problems list, pointing at its line; fixed, it goes.
+#[gpui_kit::test]
+#[ignore]
+fn problems_list_the_errors(cx: &mut TestAppContext) {
+    let tex = "\\documentclass{article}\n\\begin{document}\nFirst.\n\nOops \\nosuchmacro here.\n\nLast.\n\\end{document}\n";
+    let dir = scratch("problems", tex);
+    let (doc, cx) = open(cx, dir, "main.tex", 1);
+    super::wait(cx, &doc, "the error listed", |d| !d.problems.is_empty());
+    let (p, off, line) = cx.read(|cx| {
+        let d = doc.read(cx);
+        let p = d.problems[0].clone();
+        let off = d.problem_offset(&p);
+        let line = d.source.find("Oops").unwrap();
+        (p, off, line)
+    });
+    assert_eq!(p.severity, "error", "{p:?}");
+    assert_eq!(off, Some(line), "the start of its line: {p:?}");
+    // fixed: the next full run has none
+    doc.update_in(cx, |d, window, cx| {
+        let at = d.source.find("\\nosuchmacro").unwrap();
+        d.replace(at..at + "\\nosuchmacro".len(), "", cx);
+        d.recompile(window, cx);
+    });
+    super::wait(cx, &doc, "the list emptied", |d| d.problems.is_empty());
+}

@@ -143,6 +143,52 @@ impl Doc {
         self.activate(bi, caret.unwrap_or(0), window, cx);
     }
 
+    /// Where in this file a problem is: the start of its line, when it names this file (LaTeX
+    /// says `./main.tex`) or none.
+    pub fn problem_offset(&self, p: &engine::Diagnostic) -> Option<usize> {
+        let line = p.line?.checked_sub(1)?;
+        if p.file
+            .as_deref()
+            .is_some_and(|f| f.trim_start_matches("./") != self.path)
+        {
+            return None;
+        }
+        let off = self
+            .source
+            .split_inclusive('\n')
+            .take(line)
+            .map(str::len)
+            .sum();
+        (off <= self.source.len()).then_some(off)
+    }
+
+    /// The files this one \input's or \include's, when its own body typesets nothing (a main
+    /// file that only gathers others): its text is edited there.
+    pub fn text_elsewhere(&self) -> Vec<String> {
+        if !self.tex
+            || self.blocks.is_empty()
+            || (0..self.blocks.len()).any(|b| self.is_text_block(b))
+        {
+            return vec![];
+        }
+        let mut files = vec![];
+        for cmd in ["\\input{", "\\include{"] {
+            for (at, _) in self.source.match_indices(cmd) {
+                let rest = &self.source[at + cmd.len()..];
+                let name = rest[..rest.find('}').unwrap_or(0)].trim();
+                let file = if name.ends_with(".tex") {
+                    name.to_string()
+                } else {
+                    format!("{name}.tex")
+                };
+                if !name.is_empty() && self.root.join(&file).is_file() && !files.contains(&file) {
+                    files.push(file);
+                }
+            }
+        }
+        files
+    }
+
     pub fn jump_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.scroll_to(offset, false, cx);
     }

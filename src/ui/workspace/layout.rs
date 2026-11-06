@@ -28,6 +28,10 @@ pub(super) struct Fit {
     /// they made it then.
     insert_compact: Rc<Cell<bool>>,
     insert_full_w: Rc<Cell<f32>>,
+    /// The panel under the pages (height) and the sidebar (width) last frame: the
+    /// notifications sit clear of both, in the pages' corner.
+    pub(super) bottom_h: Rc<Cell<f32>>,
+    pub(super) right_w: Rc<Cell<f32>>,
 }
 
 impl Workspace {
@@ -113,11 +117,20 @@ impl Workspace {
 /// A canvas over an element (absolute, its size) that keeps the element's width in `w` for
 /// the next frame, redrawing when it changed.
 pub(super) fn measure(w: Rc<Cell<f32>>) -> impl IntoElement {
+    measure_by(w, |s| s.width)
+}
+
+/// The same for the element's height.
+pub(super) fn measure_height(h: Rc<Cell<f32>>) -> impl IntoElement {
+    measure_by(h, |s| s.height)
+}
+
+fn measure_by(v: Rc<Cell<f32>>, of: fn(Size<Pixels>) -> Pixels) -> impl IntoElement {
     canvas(
         move |b, window, _| {
-            let now = f32::from(b.size.width);
-            if (now - w.get()).abs() > 1.0 {
-                w.set(now);
+            let now = f32::from(of(b.size));
+            if (now - v.get()).abs() > 1.0 {
+                v.set(now);
                 window.refresh();
             }
         },

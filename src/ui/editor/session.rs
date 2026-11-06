@@ -2,6 +2,9 @@
 // the formula preview out.
 use super::*;
 
+/// How long a failed full run stays failed before the notification says so.
+const TYPESET_NOTICE_AFTER: Duration = Duration::from_secs(2);
+
 /// The most of rtex's log a Doc keeps (bytes); past it the older half goes.
 const LOG_MAX: usize = 256 * 1024;
 
@@ -18,13 +21,19 @@ fn push_log(log: &mut String, line: &str, max: usize) {
 
 impl Doc {
     pub(super) fn on_msg(&mut self, msg: engine::Msg, window: &mut Window, cx: &mut Context<Self>) {
-        // a log line changes nothing on the pages: kept, without redoing the blocks below
-        if let engine::Msg::Log(l) = msg {
-            push_log(&mut self.log, &l, LOG_MAX);
-            cx.notify();
-            return;
-        }
         match msg {
+            // these change nothing on the pages: kept, without redoing the blocks below
+            engine::Msg::Log(l) => {
+                push_log(&mut self.log, &l, LOG_MAX);
+                cx.notify();
+                return;
+            }
+            // underfull boxes and the like (info) would drown the errors
+            engine::Msg::Diagnostics(d) => {
+                self.problems = d.into_iter().filter(|d| d.severity != "info").collect();
+                cx.notify();
+                return;
+            }
             engine::Msg::Layout {
                 pages,
                 pages_total,
@@ -39,6 +48,10 @@ impl Doc {
                 self.bump(dirty);
                 self.status.clear();
                 self.compiling = stale_since.is_some();
+                if std::mem::take(&mut self.typeset_failed) {
+                    self.typeset_notice = None;
+                    self.notices.push(Notice::Typeset);
+                }
                 self.overlay_seen();
             }
             engine::Msg::Paragraph {
@@ -67,7 +80,19 @@ impl Doc {
             }
             engine::Msg::Status(s) => self.status = s,
             engine::Msg::Failed => {
-                self.status = "LaTeX could not typeset the last change: the pages show the version before it. Undo (⌘Z) or fix the TeX".into();
+                self.status = "LaTeX couldn’t typeset your last change: the pages still show the document from before it. Undo (⌘Z) or fix the TeX".into();
+                self.typeset_failed = true;
+                // told once typing pauses: a run that fails mid-edit and works a moment later
+                // (each failure restarts the wait) never flashes a warning beside the text
+                self.typeset_notice = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TYPESET_NOTICE_AFTER).await;
+                    let _ = this.update(cx, |d, cx| {
+                        if d.typeset_failed {
+                            d.notices.push(Notice::TypesetFailed);
+                            cx.notify();
+                        }
+                    });
+                }));
                 self.compiling = false;
             }
             engine::Msg::Compiling => self.compiling = true,
@@ -77,21 +102,38 @@ impl Doc {
                         .file_name()
                         .map_or(p.to_string(), |n| n.to_string_lossy().to_string())
                 };
+                if let Some(p) = path
+                    .as_ref()
+                    .filter(|_| AppSettings::get(cx).open_after_export)
+                {
+                    let _ = std::process::Command::new("/usr/bin/open").arg(p).spawn();
+                }
+                self.notices.push(Notice::Exported {
+                    path: path.clone(),
+                    ok,
+                });
                 self.status = match (path, ok) {
                     (Some(p), true) => format!("Exported {}", name(&p)),
                     (Some(p), false) => format!(
-                        "Exported {}, but LaTeX reported errors: some of it may be wrong",
+                        "Exported {}, with LaTeX errors: parts may be wrong (see Problems)",
                         name(&p)
                     ),
                     (None, _) => {
-                        "Export failed: LaTeX made no PDF. Fix the errors shown on the pages and export again".into()
+                        "Couldn’t export the PDF: LaTeX made none. Fix the errors in Problems, then export again".into()
                     }
                 }
             }
-            engine::Msg::Log(_) => {}
             engine::Msg::Exited(tail) => {
-                self.status =
-                    format!("The typesetter stopped ({tail}). Recompile (⌘⇧R) starts it again");
+                // rtex rarely says why (its stderr is usually empty)
+                let why = match tail.trim() {
+                    "" => String::new(),
+                    t => format!(" ({t})"),
+                };
+                self.status = format!(
+                    "rtex stopped{why}: the pages won’t update until it restarts (Recompile, ⌘⇧R)"
+                );
+                self.engine_failed = true;
+                self.notices.push(Notice::EngineStopped(tail));
                 self.rtex = None;
                 self.compiling = false;
             }

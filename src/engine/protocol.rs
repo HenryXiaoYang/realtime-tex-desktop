@@ -93,6 +93,17 @@ pub struct ByteRange {
     pub end: usize,
 }
 
+/// A LaTeX error or warning from the full run: where (the file as LaTeX names it, `./main.tex`)
+/// and what.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Diagnostic {
+    pub severity: String,
+    pub file: Option<String>,
+    pub line: Option<usize>,
+    pub message: String,
+    pub context: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum Msg {
     Layout {
@@ -123,6 +134,8 @@ pub enum Msg {
         ok: bool,
     },
     Exited(String),
+    /// The full run's errors and warnings (each run sends all of them).
+    Diagnostics(Vec<Diagnostic>),
     /// A line of rtex's output for the log: an event it sent (cut short) or a line of its stderr.
     Log(String),
 }
@@ -168,6 +181,9 @@ pub(super) fn parse(line: &str) -> Option<Msg> {
                 source_revision: rev(&v),
             }),
             "BackgroundScheduled" => Some(Msg::Compiling),
+            "Diagnostics" => Some(Msg::Diagnostics(
+                serde_json::from_value(v["items"].clone()).ok()?,
+            )),
             "PdfExported" => Some(Msg::Exported {
                 path: v["path"].as_str().map(String::from),
                 ok: v["status"]["state"] == "Ok",
@@ -183,7 +199,7 @@ pub(super) fn parse(line: &str) -> Option<Msg> {
         "spans" => Some(Msg::Spans(serde_json::from_value(v["spans"].clone()).ok()?)),
         "edit" if v["result"]["routed"] != "fast" => Some(Msg::Compiling),
         "error" => Some(Msg::Status(format!(
-            "Typesetter: {}",
+            "rtex: {}",
             v["message"].as_str().unwrap_or("")
         ))),
         _ => None,
@@ -193,6 +209,20 @@ pub(super) fn parse(line: &str) -> Option<Msg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_are_read() {
+        let d = r#"{"event":"Diagnostics","source":"background","items":[{"severity":"error","file":"./main.tex","line":342,"message":"Undefined control sequence.","context":"l.342 \\ssssss"},{"severity":"warning","file":null,"line":null,"message":"inputenc package ignored","context":null}]}"#;
+        let Some(Msg::Diagnostics(v)) = parse(d) else {
+            panic!("not read")
+        };
+        assert_eq!(v.len(), 2);
+        assert_eq!(
+            (v[0].line, v[0].file.as_deref()),
+            (Some(342), Some("./main.tex"))
+        );
+        assert_eq!(v[1].line, None);
+    }
 
     #[test]
     fn keeps_last_result_on_errors() {

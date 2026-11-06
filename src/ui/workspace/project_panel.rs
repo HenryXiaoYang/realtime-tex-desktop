@@ -14,6 +14,7 @@ impl Workspace {
         };
         let weak = cx.entity().downgrade();
         let renaming = self.rename.clone();
+        let rename_error = self.rename_error.clone();
         let menu_weak = weak.clone();
         let root = self.root.clone();
         let file_tree = tree(&self.tree, move |ix, entry, _selected, _, cx| {
@@ -34,6 +35,8 @@ impl Workspace {
                 .as_ref()
                 .filter(|(r, _)| *r == id)
                 .map(|(_, state)| state.clone());
+            // why the name typed cannot be, under the field (which stays open with it)
+            let field_error = field.as_ref().and_then(|_| rename_error.clone());
             // as VS Code: a folder's arrow in the column a file's icon is in, no folder icon
             let icon = if entry.is_folder() {
                 if entry.is_expanded() {
@@ -72,7 +75,16 @@ impl Workspace {
                                             cx.stop_propagation();
                                         }
                                     })
+                                    .flex()
+                                    .flex_col()
                                     .child(Input::new(state).xsmall())
+                                    .children(field_error.clone().map(|e| {
+                                        div()
+                                            .pt_0p5()
+                                            .text_xs()
+                                            .text_color(cx.theme().danger)
+                                            .child(e)
+                                    }))
                             }),
                             None => row.child(item.label.clone()),
                         }),

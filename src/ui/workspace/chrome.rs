@@ -259,7 +259,7 @@ impl Workspace {
             .flex_none()
             .items_center()
             .justify_between()
-            .h(px(26.0))
+            .h(px(30.0))
             .p_1()
             .gap_2()
             .text_xs()
@@ -282,14 +282,9 @@ impl Workspace {
                             .tip("Show or Hide Project Panel (⌘\\)")
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_left(cx))),
                     )
-                    .child(
-                        Button::new("settings")
-                            .icon(Icon::default().path("icons/settings.svg"))
-                            .ghost()
-                            .xsmall()
-                            .tip("Settings (⌘,)")
-                            .on_click(|_, _, cx| open_settings(cx)),
-                    )
+                    .children(pages.map(|p| div().flex_none().child(p)))
+                    .child(self.problems_button(cx))
+                    .children(self.text_elsewhere(cx))
                     // a long message (a LaTeX error) cut short, whole in its tooltip
                     .child({
                         let text = if status.is_empty() {
@@ -312,23 +307,192 @@ impl Workspace {
                 div()
                     .flex()
                     .items_center()
-                    .gap_3()
-                    .pr_2()
-                    .children(pages)
-                    .child("LuaLaTeX · rtex")
+                    .flex_none()
+                    .gap_2()
+                    .pr_1()
                     .child(
                         Button::new("toggle-logs")
                             .icon(Icon::default().path("icons/logs.svg"))
                             .ghost()
                             .xsmall()
-                            .selected(self.logs)
+                            .selected(self.bottom == Some(Bottom::Logs))
                             .tip("Show or Hide the rtex Log")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.logs = !this.logs;
-                                cx.notify();
-                            })),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.toggle_bottom(Bottom::Logs, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("settings")
+                            .icon(Icon::default().path("icons/settings.svg"))
+                            .ghost()
+                            .xsmall()
+                            .tip("Settings (⌘,)")
+                            .on_click(|_, _, cx| open_settings(cx)),
+                    )
+                    .child(
+                        Button::new("toggle-inspector")
+                            .icon(Icon::default().path("icons/panel-right.svg"))
+                            .ghost()
+                            .xsmall()
+                            .selected(self.fit.right)
+                            .tip("Show or Hide Sidebar (⌥⌘\\)")
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_right(cx))),
                     ),
             )
+    }
+
+    /// For a main file that only \input's others: they are named, each a link that opens it,
+    /// since its own pages have nothing to edit.
+    fn text_elsewhere(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let files = self.doc()?.read(cx).text_elsewhere();
+        (!files.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_1()
+                .child("To edit, open")
+                .children(files.into_iter().enumerate().map(|(i, f)| {
+                    Button::new(("text-elsewhere", i))
+                        .label(f.clone())
+                        .link()
+                        .xsmall()
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.open(f.clone(), window, cx)
+                            }),
+                        )
+                }))
+        })
+    }
+
+    /// The problems or the log under the pages, or neither: a second click closes it.
+    fn toggle_bottom(&mut self, b: Bottom, cx: &mut Context<Self>) {
+        self.bottom = (self.bottom != Some(b)).then_some(b);
+        cx.notify();
+    }
+
+    /// The count of the open file's errors and warnings, in red while there are errors; a click
+    /// lists them under the pages.
+    fn problems_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let problems = self
+            .doc()
+            .map(|d| d.read(cx).problems.clone())
+            .unwrap_or_default();
+        let errors = problems.iter().filter(|p| p.severity == "error").count();
+        let warnings = problems.len() - errors;
+        let plural = |n: usize, w: &str| format!("{n} {w}{}", if n == 1 { "" } else { "s" });
+        let (icon, color) = if errors > 0 {
+            ("icons/circle-x.svg", theme.danger)
+        } else if warnings > 0 {
+            ("icons/triangle-alert.svg", theme.warning)
+        } else {
+            ("icons/circle-check.svg", theme.muted_foreground)
+        };
+        Button::new("toggle-problems")
+            .icon(Icon::default().path(icon).text_color(color))
+            .label(problems.len().to_string())
+            .ghost()
+            .xsmall()
+            .selected(self.bottom == Some(Bottom::Problems))
+            .tip(format!(
+                "Problems: {}, {}",
+                plural(errors, "error"),
+                plural(warnings, "warning")
+            ))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_bottom(Bottom::Problems, cx)))
+    }
+
+    /// The open file's errors and warnings from its last full run; a click on one in this file
+    /// brings its line into view.
+    pub(super) fn render_problems(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let (problems, offsets) = match self.doc() {
+            Some(d) => {
+                let d = d.read(cx);
+                let offs: Vec<_> = d.problems.iter().map(|p| d.problem_offset(p)).collect();
+                (d.problems.clone(), offs)
+            }
+            None => (vec![], vec![]),
+        };
+        let rows = problems
+            .into_iter()
+            .zip(offsets)
+            .enumerate()
+            .map(|(i, (p, off))| {
+                let (icon, color) = if p.severity == "error" {
+                    ("icons/circle-x.svg", theme.danger)
+                } else {
+                    ("icons/triangle-alert.svg", theme.warning)
+                };
+                let place = match (&p.file, p.line) {
+                    (Some(f), Some(l)) => format!("{}:{l}", f.trim_start_matches("./")),
+                    (None, Some(l)) => format!("line {l}"),
+                    (Some(f), None) => f.trim_start_matches("./").to_string(),
+                    (None, None) => String::new(),
+                };
+                div()
+                    .id(("problem", i))
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .when(off.is_some(), |d| {
+                        d.cursor_pointer()
+                            .hover(|s| s.bg(theme.list_hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(off) = off {
+                                    this.with_doc(cx, |d, cx| d.jump_to(off, cx));
+                                }
+                            }))
+                    })
+                    .child(
+                        Icon::default()
+                            .path(icon)
+                            .text_color(color)
+                            .xsmall()
+                            .mt(px(2.0)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .child(div().text_color(theme.foreground).child(p.message))
+                                    .child(div().text_color(theme.muted_foreground).child(place)),
+                            )
+                            .children(p.context.filter(|c| !c.is_empty()).map(|c| {
+                                div()
+                                    .font_family(crate::ui::editor::MONO)
+                                    .text_color(theme.muted_foreground)
+                                    .truncate()
+                                    .child(c)
+                            })),
+                    )
+            });
+        let rows: Vec<_> = rows.collect();
+        div()
+            .id("problems")
+            .size_full()
+            .overflow_y_scroll()
+            .p_1()
+            .bg(crate::ui::palette::panel(&theme))
+            .border_t_1()
+            .border_color(theme.border)
+            .text_xs()
+            .when(rows.is_empty(), |d| {
+                d.p_2()
+                    .text_color(theme.muted_foreground)
+                    .child("No problems in the last LaTeX run")
+            })
+            .children(rows)
     }
 
     /// The open file's rtex log (its events and stderr), kept scrolled to its end as lines come in.
@@ -360,4 +524,11 @@ impl Workspace {
                 log
             })
     }
+}
+
+/// What the panel under the pages shows.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Bottom {
+    Problems,
+    Logs,
 }
