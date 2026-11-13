@@ -31,6 +31,10 @@ impl Workspace {
         let (path, notices) =
             doc.update(cx, |d, _| (d.path.clone(), std::mem::take(&mut d.notices)));
         for n in notices {
+            // the tour's last step waits for a PDF made
+            if let (Some(t), Notice::Exported { path: Some(_), .. }) = (&mut self.tour, &n) {
+                t.since.exported = true;
+            }
             self.show_notice(doc.downgrade(), &path, n, window, cx);
         }
     }

@@ -744,19 +744,21 @@ impl Doc {
         }
     }
 
-    /// Ask where, then have rtex typeset the whole document into a PDF there.
-    pub fn export(&mut self, cx: &mut Context<Self>) {
+    /// Ask where (from `into`, else the file's folder), then have rtex typeset the whole
+    /// document into a PDF there.
+    pub fn export(&mut self, into: Option<PathBuf>, cx: &mut Context<Self>) {
         if self.rtex.is_none() {
             return;
         }
         let stem = Path::new(&self.path)
             .file_stem()
             .map_or("document".into(), |s| s.to_string_lossy().to_string());
-        let dir = self
-            .root
-            .join(&self.path)
-            .parent()
-            .map_or(self.root.clone(), Path::to_path_buf);
+        let dir = into.unwrap_or_else(|| {
+            self.root
+                .join(&self.path)
+                .parent()
+                .map_or(self.root.clone(), Path::to_path_buf)
+        });
         let rx = cx.prompt_for_new_path(&dir, Some(&format!("{stem}.pdf")));
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(out))) = rx.await {
