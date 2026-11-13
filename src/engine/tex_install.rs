@@ -755,12 +755,21 @@ tlpdbopt_w32_multi_user 0
 
 /// An install a crash or a quit cut short, removed (not one another copy of the app is making).
 pub(super) fn clean_leftovers() {
-    let dir = tex_dir();
-    if let Some(_lock) = try_lock(&lock_path(&dir))
-        && installed(&dir).is_none()
+    clean_leftovers_in(&tex_dir());
+}
+
+fn clean_leftovers_in(dir: &Path) {
+    if let Some(_lock) = try_lock(&lock_path(dir))
+        && dir.is_dir()
+        && installed(dir).is_none()
     {
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(work_dir(&dir));
+        // a finished install from before the marker existed is kept, not downloaded again
+        if usable(dir) {
+            let _ = std::fs::write(dir.join(MARKER), "");
+        } else {
+            let _ = std::fs::remove_dir_all(dir);
+            let _ = std::fs::remove_dir_all(work_dir(dir));
+        }
     }
 }
 
@@ -907,6 +916,34 @@ mod tests {
         );
         std::fs::write(dir.join(super::MARKER), "").unwrap();
         assert_eq!(super::installed(&dir), Some(dir.join("bin/x")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_working_tree_without_its_marker_is_kept_a_broken_one_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let tree = |name: &str, works: bool| {
+            let dir = scratch(name).join("texlive");
+            let bin = dir.join("bin/x");
+            std::fs::create_dir_all(&bin).unwrap();
+            let body = if works { "echo ok" } else { "exit 1" };
+            for p in ["lualatex", "kpsewhich"] {
+                let f = bin.join(p);
+                std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            dir
+        };
+        let old = tree("old-install", true);
+        super::clean_leftovers_in(&old);
+        assert_eq!(
+            super::installed(&old),
+            Some(old.join("bin/x")),
+            "kept and marked"
+        );
+        let broken = tree("cut-short", false);
+        super::clean_leftovers_in(&broken);
+        assert!(!broken.exists(), "a tree whose LuaLaTeX fails is removed");
     }
 
     fn scratch(name: &str) -> PathBuf {
