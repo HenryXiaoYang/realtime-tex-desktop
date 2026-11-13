@@ -2,7 +2,7 @@
 // the way to one differs by system. The window offers TeX Live installed by the app (with how far
 // it is, how fast and how long is left) or the system's own way; it may close while the install
 // goes on, and comes back when it is done.
-use crate::engine::{self, Stage, TexProgress};
+use crate::engine::{self, Stage, TexCandidate, TexProgress, TexSource};
 use crate::ui::projects;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
@@ -10,15 +10,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable, TitleBar};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-/// TeX Live being installed by the app, or how that went.
-#[derive(Default, Clone, PartialEq)]
-pub enum TexInstall {
-    #[default]
-    Idle,
-    Running(TexProgress),
-    Failed(String),
-    Done,
-}
+pub use crate::engine::TexInstall;
 
 impl Global for TexInstall {}
 
@@ -56,40 +48,36 @@ pub fn open_tex_setup(cx: &mut App) {
 /// Install TeX Live on a thread of its own; when it is done, the documents' rtex restarted on it
 /// and the window back in front to say so.
 pub fn install(cx: &mut App) {
-    if matches!(cx.try_global::<TexInstall>(), Some(TexInstall::Running(_))) {
+    if matches!(
+        cx.try_global::<TexInstall>(),
+        Some(TexInstall::Running(_) | TexInstall::Cancelling)
+    ) {
         return;
     }
     cx.set_global(TexInstall::Running(TexProgress::default()));
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     std::thread::spawn(move || {
         let progress = tx.clone();
-        let got = engine::install_tex(|p| {
-            let _ = progress.unbounded_send(Ok(p));
+        let end = engine::install_tex(|p| {
+            let _ = progress.unbounded_send(TexInstall::Running(p));
         });
-        let _ = tx.unbounded_send(Err(got));
+        let _ = tx.unbounded_send(end);
     });
     cx.spawn(async move |cx| {
         use futures::StreamExt;
         while let Some(m) = rx.next().await {
-            cx.update(|cx| match m {
-                Ok(p) => {
-                    // Cancel set it back to Idle: what the installer says after that is late
-                    if matches!(cx.global::<TexInstall>(), TexInstall::Running(_)) {
-                        cx.set_global(TexInstall::Running(p));
-                    }
+            cx.update(|cx| {
+                // after Cancel, how far it was is late news; only how it ended counts
+                if matches!(m, TexInstall::Running(_))
+                    && !matches!(cx.global::<TexInstall>(), TexInstall::Running(_))
+                {
+                    return;
                 }
-                Err(got) => {
-                    if !matches!(cx.global::<TexInstall>(), TexInstall::Running(_)) {
-                        return;
-                    }
-                    cx.set_global(match got {
-                        Ok(_) => TexInstall::Done,
-                        Err(why) => TexInstall::Failed(why),
-                    });
-                    if cx.global::<TexInstall>() == &TexInstall::Done {
-                        projects::tex_installed(cx);
-                        open_tex_setup(cx);
-                    }
+                let done = matches!(m, TexInstall::Done(_));
+                cx.set_global(m);
+                if done {
+                    projects::tex_installed(cx);
+                    open_tex_setup(cx);
                 }
             });
         }
@@ -97,9 +85,9 @@ pub fn install(cx: &mut App) {
     .detach();
 }
 
-/// The install stopped, and what it put in removed.
+/// The install stopped, and what it put in removed: Install comes back once it has been.
 fn cancel(cx: &mut App) {
-    cx.set_global(TexInstall::Idle);
+    cx.set_global(TexInstall::Cancelling);
     engine::cancel_tex_install();
 }
 
@@ -131,19 +119,19 @@ const LINUX_COMMANDS: &[(&str, &str)] = &[
 ];
 
 pub struct TexSetup {
-    /// LuaLaTeX found, as of the last look.
-    found: bool,
+    /// The TeX found, as of the last look.
+    tex: Option<TexCandidate>,
     _subs: Vec<Subscription>,
 }
 
 impl TexSetup {
     fn new(cx: &mut Context<Self>) -> Self {
         let sub = cx.observe_global::<TexInstall>(|this, cx| {
-            this.found = engine::find_lualatex().is_some();
+            this.tex = engine::find_tex();
             cx.notify();
         });
         Self {
-            found: engine::find_lualatex().is_some(),
+            tex: engine::find_tex(),
             _subs: vec![sub],
         }
     }
@@ -159,6 +147,7 @@ impl TexSetup {
             Stage::Finishing => {
                 "Finishing: building the fonts’ lists and the formats (a few minutes)…".into()
             }
+            Stage::Verifying => "Checking that LuaLaTeX runs…".into(),
         };
         let mut facts = vec![];
         if p.stage == Stage::Packages {
@@ -172,10 +161,7 @@ impl TexSetup {
                 None => "working out the time left".into(),
             });
         }
-        let waiting = matches!(
-            p.stage,
-            Stage::Installer | Stage::PackageList | Stage::Finishing
-        );
+        let waiting = p.stage != Stage::Packages;
         div()
             .flex()
             .flex_col()
@@ -266,8 +252,8 @@ impl TexSetup {
                             .ghost()
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.found = engine::find_lualatex().is_some();
-                                if this.found {
+                                this.tex = engine::find_tex();
+                                if this.tex.is_some() {
                                     projects::tex_installed(cx);
                                 }
                                 cx.notify();
@@ -309,9 +295,22 @@ impl Render for TexSetup {
                 .border_1()
                 .border_color(theme.border)
         };
-        let body: AnyElement = match &state {
-            TexInstall::Running(p) => card().child(self.progress(p, cx)).into_any_element(),
-            _ if self.found => card()
+        let body: AnyElement = match (&state, &self.tex) {
+            (TexInstall::Running(p), _) => card().child(self.progress(p, cx)).into_any_element(),
+            (TexInstall::Cancelling, _) => card()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Cancelling: removing what was installed…"),
+                )
+                .child(
+                    Progress::new("tex-cancelling")
+                        .loading(true)
+                        .accessibility_label("Cancelling"),
+                )
+                .into_any_element(),
+            (_, Some(tex)) => card()
                 .child(
                     div()
                         .flex()
@@ -333,7 +332,26 @@ impl Render for TexSetup {
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("The pages typeset with it. Open a project, or take the tour."),
+                        .child(match tex.source {
+                            TexSource::App => "The pages typeset with the TeX Live this app installed. Open a project, or take the tour.".to_string(),
+                            _ => format!(
+                                "The pages typeset with the one in {}. Open a project, or take the tour.",
+                                tex.bin_dir.display()
+                            ),
+                        }),
+                )
+                .when_some(
+                    match &state {
+                        TexInstall::Done(problems) if !problems.is_empty() => {
+                            Some(problems.join("; "))
+                        }
+                        _ => None,
+                    },
+                    |d, problems| {
+                        d.child(div().text_sm().text_color(theme.warning).child(format!(
+                            "TeX Live’s installer reported problems, which spared LuaLaTeX: {problems}."
+                        )))
+                    },
                 )
                 .into_any_element(),
             _ => div()
@@ -411,9 +429,11 @@ impl Render for TexSetup {
                     .flex()
                     .flex_col()
                     .gap_4()
-                    .child(div().text_sm().child(
-                        "The pages are typeset by LuaLaTeX, which comes with a TeX distribution. This computer doesn’t have one yet.",
-                    ))
+                    .child(div().text_sm().child(if self.tex.is_some() {
+                        "The pages are typeset by LuaLaTeX, which comes with a TeX distribution."
+                    } else {
+                        "The pages are typeset by LuaLaTeX, which comes with a TeX distribution. This computer doesn’t have one yet."
+                    }))
                     .child(body),
             )
     }
