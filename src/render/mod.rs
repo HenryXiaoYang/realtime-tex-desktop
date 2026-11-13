@@ -63,18 +63,39 @@ pub struct Job {
     pub pdf: Option<(PathBuf, usize)>,
     pub clear: Vec<[f64; 4]>,
     /// Dark paper with light ink, for the dark theme; included graphics keep their colours.
-    pub dark: bool,
+    /// None: white paper, black ink.
+    pub dark: Option<DarkPaper>,
 }
 
-pub const DARK_PAPER: [u8; 3] = [0, 0, 0];
-const DARK_INK: [u8; 3] = [224, 224, 224];
+/// Dark pages' paper, and the ink black text turns into on it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct DarkPaper {
+    pub paper: [u8; 3],
+    pub ink: [u8; 3],
+}
+
+/// The dark pages unless the settings name others.
+pub const DARK: DarkPaper = DarkPaper {
+    paper: [0, 0, 0],
+    ink: [224, 224, 224],
+};
 
 /// The ink for a colour on dark paper: black and near-black text turn light, colours stay.
-fn on_paper(c: [u8; 3], dark: bool) -> [u8; 3] {
-    if dark && c.iter().all(|&v| v < 40) {
-        DARK_INK
-    } else {
-        c
+fn on_paper(c: [u8; 3], dark: Option<DarkPaper>) -> [u8; 3] {
+    match dark {
+        Some(d) if c.iter().all(|&v| v < 40) => d.ink,
+        _ => c,
+    }
+}
+
+/// RGBA pixels of a white page turned onto dark paper: white to the paper, black to the ink,
+/// each channel in between on the line from one to the other.
+fn onto_dark(px: &mut [u8], d: DarkPaper) {
+    for px in px.as_chunks_mut::<4>().0 {
+        for (c, (p, i)) in px[..3].iter_mut().zip(d.paper.into_iter().zip(d.ink)) {
+            let (p, i) = (i32::from(p), i32::from(i));
+            *c = (p + (i - p) * (255 - i32::from(*c)) / 255) as u8;
+        }
     }
 }
 
@@ -86,11 +107,7 @@ pub fn render(fonts: &mut Resources, job: &Job) -> (u32, u32, Vec<u8>) {
         ((h * job.scale).ceil() as u32).max(1),
     );
     let mut pix = Pixmap::new(pw, ph).unwrap();
-    let paper = if job.dark {
-        DARK_PAPER
-    } else {
-        [255, 255, 255]
-    };
+    let paper = job.dark.map_or([255, 255, 255], |d| d.paper);
     pix.fill(tiny_skia::Color::from_rgba8(
         paper[0], paper[1], paper[2], 255,
     ));
@@ -118,14 +135,10 @@ pub fn render(fonts: &mut Resources, job: &Job) -> (u32, u32, Vec<u8>) {
             Transform::identity(),
             None,
         );
-        if job.dark {
+        if let Some(d) = job.dark {
             // shortcut: a PDF-drawn page (TikZ) is inverted onto dark paper, so its colours flip
             // hue too; draw such pages from their display list when that can render pictures
-            for px in pix.data_mut().as_chunks_mut::<4>().0 {
-                for c in &mut px[..3] {
-                    *c = ((255 - *c as u32) * 224 / 255) as u8;
-                }
-            }
+            onto_dark(pix.data_mut(), d);
         }
         let mut white = Paint::default();
         white.set_color_rgba8(paper[0], paper[1], paper[2], 255);
@@ -173,7 +186,7 @@ struct Painter<'a> {
     mstack: Vec<Mat>,
     stacks: HashMap<i64, Vec<String>>,
     color: [u8; 3],
-    dark: bool,
+    dark: Option<DarkPaper>,
 }
 
 fn num(v: &Value) -> f64 {
@@ -421,11 +434,40 @@ mod tests {
             clear: vec![],
             dark,
         };
-        let (w, _, px) = render(&mut Resources::default(), &job(true));
-        let at = |x: u32, y: u32| px[((y * w + x) * 4) as usize];
-        assert_eq!(at(15, 15), DARK_PAPER[0]);
-        assert_eq!(at(5, 5), DARK_INK[0]);
-        let (_, _, px) = render(&mut Resources::default(), &job(false));
-        assert_eq!((px[(15 * 20 + 15) * 4], px[(5 * 20 + 5) * 4]), (255, 0));
+        // BGRA
+        let at = |dark, x: usize, y: usize| {
+            let (w, _, px) = render(&mut Resources::default(), &job(dark));
+            let i = (y * w as usize + x) * 4;
+            [px[i + 2], px[i + 1], px[i]]
+        };
+        assert_eq!(at(Some(DARK), 15, 15), [0, 0, 0]);
+        assert_eq!(at(Some(DARK), 5, 5), [224, 224, 224]);
+        assert_eq!(at(None, 15, 15), [255, 255, 255]);
+        assert_eq!(at(None, 5, 5), [0, 0, 0]);
+        // paper and ink of one's own
+        let navy = DarkPaper {
+            paper: [16, 24, 48],
+            ink: [250, 240, 200],
+        };
+        assert_eq!(at(Some(navy), 15, 15), navy.paper);
+        assert_eq!(at(Some(navy), 5, 5), navy.ink);
+    }
+
+    #[test]
+    fn a_pdf_drawn_page_turns_onto_the_dark_paper() {
+        let navy = DarkPaper {
+            paper: [16, 24, 48],
+            ink: [250, 240, 200],
+        };
+        // white, black, mid gray, as RGBA
+        let mut px = [255, 255, 255, 255, 0, 0, 0, 255, 128, 128, 128, 255];
+        onto_dark(&mut px, navy);
+        assert_eq!(px[..3], navy.paper);
+        assert_eq!(px[4..7], navy.ink);
+        assert_eq!(px[8..11], [132, 131, 123]);
+        // the default dark paper as before: black paper, ink 224
+        let mut px = [255, 255, 255, 255, 0, 0, 0, 255, 128, 128, 128, 255];
+        onto_dark(&mut px, DARK);
+        assert_eq!(px[..11], [0, 0, 0, 255, 224, 224, 224, 255, 111, 111, 111]);
     }
 }

@@ -1,17 +1,18 @@
 // The themes: the app's own (theme.json and themes/), those in the themes folder, and over the one
 // chosen for each mode the accent and the colours changed in Settings › Colors, kept per theme as
 // VS Code keeps its colour customizations. Every colour a theme can name is read off the kit's
-// theme schema, so the colours a newer kit adds are listed without a change here.
+// theme schema, so the colours a newer kit adds are listed without a change here; with them the
+// app's own, those the editor draws on the pages, which a theme file names among its colours too.
 use crate::ui::palette;
 use crate::ui::settings::{AppSettings, support_dir};
 use gpui_kit::component::highlighter::{HighlightTheme, HighlightThemeStyle, SyntaxColors};
 use gpui_kit::component::{
     ActiveTheme, Theme, ThemeConfig, ThemeConfigColors, ThemeMode, ThemeRegistry, ThemeSet,
 };
-use gpui_kit::{App, Hsla, SharedString};
+use gpui_kit::{App, Global, Hsla, SharedString};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -62,6 +63,8 @@ pub fn init(cx: &mut App) {
         {
             add_built_in(cx);
         }
+        // the kit drops the colours it does not know: the pages' are read here
+        cx.set_global(PageColors(page_colors_in(&dir())));
         install(cx);
         Theme::change(cx.theme().mode, None, cx);
     })
@@ -130,6 +133,66 @@ pub fn effective(
     t
 }
 
+/// The colours the editor draws on the pages, the app's own: each key and its name in Settings.
+/// Unchanged, the editor makes them from the theme's (palette::marks).
+pub const PAGES: [(&str, &str); 8] = [
+    ("pages.selection", "Selected text"),
+    ("pages.find.current", "Find match"),
+    ("pages.find.other", "Other find matches"),
+    ("pages.accent", "Selected block and insert line"),
+    ("pages.source_box.background", "Source box background"),
+    ("pages.source_box.foreground", "Source box text"),
+    ("pages.paper", "Dark page paper"),
+    ("pages.ink", "Dark page text"),
+];
+
+/// The page colours each theme file in the themes folder names (theme name to key to colour).
+struct PageColors(HashMap<String, BTreeMap<String, String>>);
+
+impl Global for PageColors {}
+
+/// The page colours the theme files in `dir` name; a theme named twice, the first one read.
+fn page_colors_in(dir: &Path) -> HashMap<String, BTreeMap<String, String>> {
+    let mut found = HashMap::new();
+    let files = std::fs::read_dir(dir).into_iter().flatten().flatten();
+    for path in files.map(|e| e.path()) {
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let Some(set) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        else {
+            continue;
+        };
+        for t in set["themes"].as_array().into_iter().flatten() {
+            let (Some(name), Some(colors)) = (t["name"].as_str(), t["colors"].as_object()) else {
+                continue;
+            };
+            let pages: BTreeMap<String, String> = (colors.iter())
+                .filter(|(k, _)| matches!(Place::of(k), Place::Pages))
+                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                .collect();
+            found.entry(name.to_string()).or_insert(pages);
+        }
+    }
+    found
+}
+
+/// The page colour `key` of the theme on screen: as changed in Settings, else as its theme file
+/// names it; None: the editor makes it.
+pub fn page_color(key: &str, cx: &App) -> Option<Hsla> {
+    let name = active(cx)?;
+    let changed = AppSettings::get(cx).colors.get(name.as_ref());
+    let own = cx
+        .try_global::<PageColors>()
+        .and_then(|p| p.0.get(name.as_ref()));
+    [changed, own]
+        .into_iter()
+        .flatten()
+        .find_map(|c| palette::hex_rgba(c.get(key)?))
+}
+
 /// Where in a theme a colour key's colour is.
 enum Place<'a> {
     /// The interface's colours: `colors`.
@@ -138,11 +201,15 @@ enum Place<'a> {
     Highlight(&'a str),
     /// A syntax style's colour: `highlight.syntax`.
     Syntax(&'a str),
+    /// The pages': the app's own, in the theme file's `colors` but not the kit's theme.
+    Pages,
 }
 
 impl<'a> Place<'a> {
     fn of(key: &'a str) -> Self {
-        if let Some(k) = key.strip_prefix("syntax.") {
+        if key.starts_with("pages.") {
+            Place::Pages
+        } else if let Some(k) = key.strip_prefix("syntax.") {
             Place::Syntax(k)
         } else if let Some(k) = key.strip_prefix("highlight.") {
             Place::Highlight(k)
@@ -175,6 +242,7 @@ fn change(t: &mut ThemeConfig, changed: &BTreeMap<String, String>) {
                 }
                 &mut s["color"]
             }),
+            Place::Pages => None,
         };
         if let Some(slot) = slot {
             *slot = Value::String(value.clone());
@@ -222,12 +290,16 @@ pub fn export(cx: &App) -> std::io::Result<PathBuf> {
     let dir = dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.json", name.replace(['/', '\\', ':'], "-")));
-    std::fs::write(&path, theme_file(&theme, &name))?;
+    let pages = (PAGES.iter())
+        .filter_map(|(k, _)| Some((k.to_string(), palette::hex(page_color(k, cx)?))))
+        .collect();
+    std::fs::write(&path, theme_file(&theme, &name, &pages))?;
     Ok(path)
 }
 
-/// `theme` as a theme file, named `name`, without the settings it leaves unset.
-fn theme_file(theme: &ThemeConfig, name: &str) -> String {
+/// `theme` as a theme file, named `name`, with the page colours `pages` among its colours, without
+/// the settings it leaves unset.
+fn theme_file(theme: &ThemeConfig, name: &str, pages: &BTreeMap<String, String>) -> String {
     let mut t = theme.clone();
     t.name = name.to_string().into();
     t.is_default = false;
@@ -236,6 +308,13 @@ fn theme_file(theme: &ThemeConfig, name: &str) -> String {
     set.themes = vec![t];
     let mut json = serde_json::to_value(set).unwrap_or_default();
     strip_nulls(&mut json);
+    if let Some(colors) = (json.pointer_mut("/themes/0/colors")).and_then(Value::as_object_mut) {
+        colors.extend(
+            pages
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone()))),
+        );
+    }
     serde_json::to_string_pretty(&json).unwrap_or_default()
 }
 
@@ -263,7 +342,7 @@ pub struct ColorGroup {
 }
 
 /// Settings › Colors' groups, each by the starts of its keys; a key has exactly one start.
-const GROUPS: [(&str, &[&str]); 14] = [
+const GROUPS: [(&str, &[&str]); 15] = [
     (
         "Window",
         &[
@@ -277,6 +356,7 @@ const GROUPS: [(&str, &[&str]); 14] = [
             "overlay",
         ],
     ),
+    ("Pages", &["pages."]),
     ("Title & status bars", &["title_bar.", "status_bar."]),
     ("Tabs", &["tab.", "tab_bar."]),
     ("Sidebar", &["sidebar."]),
@@ -328,7 +408,7 @@ fn keys_of(v: serde_json::Result<Value>) -> Vec<String> {
 }
 
 /// Every colour key a theme can name: the interface's (those the kit applies), the source
-/// editor's, the syntax's.
+/// editor's, the syntax's, the pages'.
 fn all_keys() -> Vec<String> {
     let ui = keys_of(serde_json::to_value(ThemeConfigColors::default()))
         .into_iter()
@@ -340,11 +420,19 @@ fn all_keys() -> Vec<String> {
     let syntax = keys_of(serde_json::to_value(SyntaxColors::default()))
         .into_iter()
         .map(|k| format!("syntax.{k}"));
-    ui.into_iter().chain(editor).chain(syntax).collect()
+    let pages = PAGES.iter().map(|(k, _)| k.to_string());
+    ui.into_iter()
+        .chain(editor)
+        .chain(syntax)
+        .chain(pages)
+        .collect()
 }
 
 /// A key's name in Settings: its words, the group's own prefix left out, "foreground" as "text".
 fn label(key: &str) -> String {
+    if let Some((_, named)) = PAGES.iter().find(|(k, _)| *k == key) {
+        return named.to_string();
+    }
     let named = match key {
         "ring" => "Focus ring",
         "overlay" => "Behind dialogs",
@@ -437,12 +525,28 @@ pub fn shown(cx: &App) -> HashMap<String, Option<Hsla>> {
     let colors = serde_json::to_value(theme.colors).unwrap_or_default();
     let highlight = serde_json::to_value(&theme.highlight_theme.style).unwrap_or_default();
     let syntax = &highlight["syntax"];
+    // as the editor draws them now; the dark pages' paper and ink while pages are white too
+    let dark = palette::dark_pages(cx);
+    let marks = palette::marks(dark, cx);
+    let (box_bg, box_fg) = palette::source_box(dark, cx);
+    let page = |key: &str| match key {
+        "pages.selection" => Some(marks.text_selection),
+        "pages.find.current" => Some(marks.match_current),
+        "pages.find.other" => Some(marks.match_other),
+        "pages.accent" => Some(marks.accent),
+        "pages.source_box.background" => Some(box_bg),
+        "pages.source_box.foreground" => Some(box_fg),
+        "pages.paper" => Some(palette::paper(true, cx)),
+        "pages.ink" => Some(palette::ink(true, cx)),
+        _ => None,
+    };
     (groups().iter().flat_map(|g| &g.keys))
         .map(|k| {
             let v = match Place::of(&k.key) {
                 Place::Ui(key) => FIELD.get(key).map(|f| &colors[f]),
                 Place::Highlight(key) => highlight.get(key),
                 Place::Syntax(key) => syntax.get(key).map(|s| &s["color"]),
+                Place::Pages => return (k.key.clone(), page(&k.key)),
             };
             let color = v.and_then(|v| serde_json::from_value(v.clone()).ok());
             (k.key.clone(), color)
@@ -552,7 +656,7 @@ mod tests {
     }
 
     /// A theme file written by Export reads back as the same colours, the accent's and the
-    /// changed ones in it, its syntax colours too.
+    /// changed ones in it, its syntax colours and page colours too.
     #[test]
     fn an_exported_theme_reads_back_the_same() {
         let base = theme_json(DEFAULT_DARK);
@@ -565,7 +669,11 @@ mod tests {
             ),
         ]);
         let made = effective(&base, palette::hex_color("#C93A85"), Some(&changed));
-        let file = theme_file(&made, "Mine");
+        let pages = BTreeMap::from([
+            ("pages.selection".to_string(), "#FFCC0066".to_string()),
+            ("pages.paper".to_string(), "#101830".to_string()),
+        ]);
+        let file = theme_file(&made, "Mine", &pages);
         assert!(!file.contains("null"), "{file}");
         let set: ThemeSet = serde_json::from_str(&file).unwrap();
         assert_eq!(set.themes[0].name, "Mine");
@@ -573,6 +681,27 @@ mod tests {
         assert_eq!(applied(&read).colors, applied(&made).colors);
         assert_eq!(read.highlight, made.highlight);
         assert_eq!(palette::hex(applied(&read).tab_active), "#112233");
+        // the kit reads the file and leaves the page colours out; the themes folder's reading
+        // keeps them
+        let dir = std::env::temp_dir().join(format!("rtex-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mine.json"), &file).unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a theme").unwrap();
+        let found = page_colors_in(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(found.get("Mine"), Some(&pages));
+        assert_eq!(found.len(), 1);
+    }
+
+    /// A page colour changed in Settings is no colour of the kit's theme: the theme as before.
+    #[test]
+    fn page_colours_leave_the_kits_theme_alone() {
+        let base = theme_json(DEFAULT_DARK);
+        let changed = BTreeMap::from([("pages.paper".to_string(), "#FF0000".to_string())]);
+        let made = effective(&base, None, Some(&changed));
+        assert_eq!(applied(&made).colors, applied(&base).colors);
+        assert_eq!(label("pages.paper"), "Dark page paper");
+        assert!(groups()[1].title == "Pages" && groups()[1].keys.len() == PAGES.len());
     }
 
     /// A colour no one can read, or a key no theme has, changes nothing.

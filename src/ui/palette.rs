@@ -1,8 +1,13 @@
 // The editor's colours. The marks it draws on the typeset pages (the selected block, the insert
-// line, the text selection, find matches, the source box) take their hue from the theme's roles,
-// made to stand out from the paper they sit on, white or dark; and the surfaces the pages lie in.
+// line, the text selection, find matches, the source box) and the dark pages' paper and ink are
+// the theme's, as Settings › Colors › Pages changes them; unchanged, the marks take their hue
+// from the theme's roles, made to stand out from the paper they sit on, white or dark. And the
+// surfaces the pages lie in.
+use crate::render::{DARK, DarkPaper};
+use crate::ui::settings::AppSettings;
+use crate::ui::themes;
 use gpui_kit::component::{ActiveTheme, Colorize, Theme, ThemeConfig};
-use gpui_kit::{App, Hsla, Rgba, SharedString, rgb, rgba};
+use gpui_kit::{App, Hsla, SharedString, rgb, rgba};
 
 /// The desk the pages lie on, from the theme: its muted surface; in a dark theme, a third of
 /// the way from its background to that (near-black, between the panel and a black page).
@@ -70,14 +75,37 @@ pub fn icon_tint(icon: &str, cx: &App) -> Option<Hsla> {
     )
 }
 
-/// Paper, as the renderer draws it (render::DARK_PAPER when dark).
-pub fn paper(dark: bool) -> Rgba {
-    rgb(if dark { 0x000000 } else { 0xffffff })
+/// Pages on dark paper: the dark theme, unless the settings keep pages white.
+pub fn dark_pages(cx: &App) -> bool {
+    cx.theme().mode.is_dark() && AppSettings::get(cx).dark_pages
+}
+
+/// The dark pages' paper and ink, as the renderer draws them: the theme's own, else its default.
+pub fn dark_paper(cx: &App) -> DarkPaper {
+    let color = |key, or| themes::page_color(key, cx).map_or(or, rgb8);
+    DarkPaper {
+        paper: color("pages.paper", DARK.paper),
+        ink: color("pages.ink", DARK.ink),
+    }
+}
+
+/// Paper, as the renderer draws it.
+pub fn paper(dark: bool, cx: &App) -> Hsla {
+    from_rgb8(if dark { dark_paper(cx).paper } else { [255; 3] })
 }
 
 /// Ink on that paper, as the renderer draws text.
-pub fn ink(dark: bool) -> Rgba {
-    rgb(if dark { 0xe0e0e0 } else { 0x000000 })
+pub fn ink(dark: bool, cx: &App) -> Hsla {
+    from_rgb8(if dark { dark_paper(cx).ink } else { [0; 3] })
+}
+
+fn rgb8(c: Hsla) -> [u8; 3] {
+    let c = c.to_rgb();
+    [c.r, c.g, c.b].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+fn from_rgb8([r, g, b]: [u8; 3]) -> Hsla {
+    rgb(u32::from_be_bytes([0, r, g, b])).into()
 }
 
 /// What the editor draws over the pages.
@@ -93,13 +121,15 @@ pub struct Marks {
     pub match_other: Hsla,
 }
 
-/// The marks for pages on `dark` paper, from the theme: its selection hue, at a lightness that
-/// stands 3:1 from the paper (WCAG's floor for marks and controls), and its warning hue for
-/// find, as a highlighter's.
+/// The marks for pages on `dark` paper: those the theme names in Settings › Colors › Pages, and
+/// for the rest, from the theme: its selection hue, at a lightness that stands 3:1 from the paper
+/// (WCAG's floor for marks and controls), and its warning hue for find, as a highlighter's.
 pub fn marks(dark: bool, cx: &App) -> Marks {
     let theme = cx.theme();
-    let paper: Hsla = paper(dark).into();
-    let accent = readable_on(theme.selection.opacity(1.0), paper, 3.0);
+    let own = |key| themes::page_color(key, cx);
+    let paper = paper(dark, cx);
+    let accent = own("pages.accent")
+        .unwrap_or_else(|| readable_on(theme.selection.opacity(1.0), paper, 3.0));
     let white: Hsla = rgb(0xffffff).into();
     let black: Hsla = rgb(0x000000).into();
     Marks {
@@ -110,9 +140,10 @@ pub fn marks(dark: bool, cx: &App) -> Marks {
             black
         },
         // the accent, strong enough to stand out from the paper (dark paper needs more of it)
-        text_selection: accent.opacity(selection_alpha(dark)),
-        match_current: theme.warning.opacity(0.6),
-        match_other: theme.warning.opacity(0.28),
+        text_selection: own("pages.selection")
+            .unwrap_or_else(|| accent.opacity(selection_alpha(dark))),
+        match_current: own("pages.find.current").unwrap_or_else(|| theme.warning.opacity(0.6)),
+        match_other: own("pages.find.other").unwrap_or_else(|| theme.warning.opacity(0.28)),
     }
 }
 
@@ -122,13 +153,19 @@ fn selection_alpha(dark: bool) -> f32 {
     if dark { 0.6 } else { 0.4 }
 }
 
-/// The source box's background and text over `dark` paper: a step off the paper.
-pub fn source_box(dark: bool) -> (Rgba, Rgba) {
-    if dark {
-        (rgb(0x262626), rgb(0xe6e6e6))
+/// The source box's background and text over `dark` paper: the theme's own, else a step off the
+/// paper.
+pub fn source_box(dark: bool, cx: &App) -> (Hsla, Hsla) {
+    let (bg, fg) = if dark {
+        (0x262626, 0xe6e6e6)
     } else {
-        (rgb(0xebebeb), rgb(0x1f1f1f))
-    }
+        (0xebebeb, 0x1f1f1f)
+    };
+    let own = |key, or| themes::page_color(key, cx).unwrap_or_else(|| rgb(or).into());
+    (
+        own("pages.source_box.background", bg),
+        own("pages.source_box.foreground", fg),
+    )
 }
 
 /// WCAG relative luminance.
@@ -200,7 +237,7 @@ pub fn accented(base: &ThemeConfig, accent: Hsla) -> ThemeConfig {
     let dark = base.mode.is_dark();
     let bg = (base.colors.background.as_deref())
         .and_then(hex_color)
-        .unwrap_or_else(|| paper(dark).into());
+        .unwrap_or_else(|| rgb(if dark { 0x000000 } else { 0xffffff }).into());
     let shade = |c: Hsla, by: f32| Hsla {
         l: (c.l + by).clamp(0.0, 1.0),
         ..c

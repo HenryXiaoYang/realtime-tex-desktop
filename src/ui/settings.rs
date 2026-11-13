@@ -1732,6 +1732,137 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The pages' colours, each changed in Settings, are what the editor draws, for the theme on
+    /// screen alone; unchanged, they are what it drew before they could be changed, and the
+    /// Colors page shows what is drawn.
+    #[gpui_kit::test]
+    fn page_colours_reach_the_pages(cx: &mut TestAppContext) {
+        started(
+            AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            },
+            cx,
+        );
+        let hex = |c| palette::hex(c);
+        let drawn = |cx: &App| {
+            let dark = palette::dark_pages(cx);
+            let m = palette::marks(dark, cx);
+            let (bg, fg) = palette::source_box(dark, cx);
+            let d = palette::dark_paper(cx);
+            [
+                hex(m.text_selection),
+                hex(m.match_current),
+                hex(m.match_other),
+                hex(m.accent),
+                hex(bg),
+                hex(fg),
+                format!("{:?}", d.paper),
+                format!("{:?}", d.ink),
+                hex(m.on_accent),
+            ]
+        };
+        // what Settings shows is what is drawn, key by key in themes::PAGES' order
+        let shown = |cx: &App| {
+            let s = themes::shown(cx);
+            (themes::PAGES.iter())
+                .map(|(k, _)| s[*k].map(palette::hex).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let as_hex = |d: [String; 9], cx: &App| {
+            let mut v = d[..6].to_vec();
+            v.push(hex(palette::paper(true, cx)));
+            v.push(hex(palette::ink(true, cx)));
+            v
+        };
+        let strings = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // as the editor drew them before: the theme's selection blue and warning amber, the
+        // source box a step off the paper, black paper with light gray ink
+        let dark_before = strings(&[
+            "#4A68E82E",
+            "#FACC1599",
+            "#FACC1547",
+            "#4A68E84D",
+            "#262626",
+            "#E6E6E6",
+            "[0, 0, 0]",
+            "[224, 224, 224]",
+            "#FFFFFF",
+        ]);
+        let light_before = strings(&[
+            "#3557D41F",
+            "#CA8A0499",
+            "#CA8A0447",
+            "#3557D44D",
+            "#EBEBEB",
+            "#1F1F1F",
+            "[0, 0, 0]",
+            "[224, 224, 224]",
+            "#FFFFFF",
+        ]);
+        cx.update(|cx| {
+            assert_eq!(drawn(cx).to_vec(), dark_before);
+            assert_eq!(shown(cx), as_hex(drawn(cx), cx));
+            // the selection follows a changed accent, and the icon on it reads
+            set("pages.accent", "#FFE066", cx);
+            let d = drawn(cx);
+            assert_eq!(
+                (&*d[0], &*d[3], &*d[8]),
+                ("#FFE06699", "#FFE066", "#000000")
+            );
+            let mine = [
+                ("pages.selection", "#00FF0040"),
+                ("pages.find.current", "#FF000080"),
+                ("pages.find.other", "#FF000030"),
+                ("pages.accent", "#123456"),
+                ("pages.source_box.background", "#202040"),
+                ("pages.source_box.foreground", "#FFEEDD"),
+                ("pages.paper", "#101830"),
+                ("pages.ink", "#FAF0C8"),
+            ];
+            for (k, v) in mine {
+                set(k, v, cx);
+            }
+            let want = strings(&[
+                "#00FF0040",
+                "#FF000080",
+                "#FF000030",
+                "#123456",
+                "#202040",
+                "#FFEEDD",
+                "[16, 24, 48]",
+                "[250, 240, 200]",
+                "#FFFFFF",
+            ]);
+            assert_eq!(drawn(cx).to_vec(), want);
+            assert_eq!(shown(cx), as_hex(drawn(cx), cx));
+            assert_eq!(shown(cx), mine.map(|(_, v)| v.to_string()));
+            assert_eq!(
+                palette::paper(true, cx),
+                palette::hex_color("#101830").unwrap()
+            );
+            // the light theme's are its own; back in the dark one, the changed ones are back
+            AppSettings::set(cx, |s| s.theme = "light".into());
+            assert_eq!(drawn(cx).to_vec(), light_before);
+            assert_eq!(shown(cx), as_hex(drawn(cx), cx));
+            AppSettings::set(cx, |s| s.theme = "dark".into());
+            Theme::change(ThemeMode::Light, None, cx);
+            Theme::change(ThemeMode::Dark, None, cx);
+            assert_eq!(drawn(cx).to_vec(), want);
+            // another dark theme has none of them
+            AppSettings::set(cx, |s| s.dark_theme = "Nord".into());
+            assert_eq!(drawn(cx)[4..8], dark_before[4..8]);
+            AppSettings::set(cx, |s| s.dark_theme = themes::DEFAULT_DARK.into());
+            assert_eq!(drawn(cx).to_vec(), want);
+            // back to the theme's
+            for (k, _) in mine {
+                themes::set_color(k, None, cx);
+            }
+            assert_eq!(drawn(cx).to_vec(), dark_before);
+            assert!(AppSettings::get(cx).colors.is_empty());
+        });
+    }
+
     /// The Colors page draws a row for every colour of the theme schema.
     #[gpui_kit::test]
     fn the_colors_page_has_a_row_per_colour(cx: &mut TestAppContext) {

@@ -81,7 +81,7 @@ pub enum Notice {
 
 struct PageImage {
     img: Arc<RenderImage>,
-    key: (u64, u32),
+    key: (u64, (u32, Option<render::DarkPaper>)),
 }
 
 actions!(
@@ -414,8 +414,9 @@ pub struct Doc {
     layout_version: u64,
     images: HashMap<u32, PageImage>,
     versions: HashMap<u32, u64>,
-    inflight: HashSet<(u32, u64, u32)>,
-    live: Option<(Arc<RenderImage>, [f64; 4])>,
+    inflight: HashSet<(u32, u64, (u32, Option<render::DarkPaper>))>,
+    /// With the region it shows and the paper it is on.
+    live: Option<(Arc<RenderImage>, [f64; 4], Option<render::DarkPaper>)>,
     pub zoom: f32,
     /// Rasterizing waits until a pinch has paused; the stretched old images show meanwhile.
     zoomed_at: Instant,
@@ -678,7 +679,7 @@ impl Doc {
         for (_, (_, img)) in self.view_images.drain() {
             let _ = window.drop_image(img);
         }
-        if let Some((img, _)) = self.live.take() {
+        if let Some((img, ..)) = self.live.take() {
             let _ = window.drop_image(img);
         }
     }

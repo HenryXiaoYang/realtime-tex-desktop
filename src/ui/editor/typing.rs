@@ -1111,8 +1111,8 @@ impl Doc {
         let left = page_px(x, self.zoom);
         let top = page_px(y, self.zoom) - baseline;
         // the renderer's ink on its paper
-        let fg = palette::ink(self.dark_pages(cx));
-        let paper = palette::paper(self.dark_pages(cx));
+        let fg = palette::ink(self.dark_pages(cx), cx);
+        let paper = palette::paper(self.dark_pages(cx), cx);
         let bounds = self.caret_bounds.clone();
         let text = (!typed.is_empty() || !marked.is_empty()).then(|| {
             div()

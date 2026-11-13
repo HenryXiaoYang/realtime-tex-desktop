@@ -19,7 +19,7 @@ impl Doc {
         let settled = self.zoomed_at.elapsed() > Duration::from_millis(150);
         for (ix, &(w, h)) in pages.iter().enumerate() {
             let stale = self.view_images.get(&ix).is_none_or(|(k, _)| *k != key);
-            let id = (u32::MAX, key, ix as u32);
+            let id = (u32::MAX, key, (ix as u32, None));
             if !stale || !settled || self.inflight.contains(&id) {
                 continue;
             }
@@ -61,7 +61,7 @@ impl Doc {
                 .flex_none()
                 .w(px(w))
                 .h(px(h))
-                .bg(palette::paper(false))
+                .bg(palette::paper(false, cx))
                 .shadow_md()
                 .children(
                     self.view_images

@@ -169,7 +169,7 @@ fn inspect() {
             scale: 1.5 / 65781.76,
             pdf: None,
             clear: vec![],
-            dark: false,
+            dark: None,
         };
         let (w, h, mut px) = render::render(&mut res, &job);
         px.chunks_mut(4).for_each(|c| c.swap(0, 2));

@@ -81,7 +81,7 @@ impl Doc {
             .flex_none()
             .w(px(w))
             // the paper, under the page image while it loads
-            .bg(palette::paper(self.dark_pages(cx)))
+            .bg(palette::paper(self.dark_pages(cx), cx))
             .shadow_md()
             .cursor_text()
             .child(spoken)
@@ -211,11 +211,7 @@ impl Doc {
             .map(|(_, y, spot)| self.render_insert_line(dl, y, spot, cx));
         // text being edited that went on over a page break: its source is all in the box on the
         // first page, so its typeset rest is blanked here
-        let paper = rgb(if self.dark_pages(cx) {
-            0x000000
-        } else {
-            0xffffff
-        });
+        let paper = palette::paper(self.dark_pages(cx), cx);
         let blank = self.edited_rows_after(at.map(|a| a.page), n).map(|r| {
             let pad = 2.0 * self.zoom;
             // from the text column's left edge: list labels hang left of their line's box

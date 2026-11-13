@@ -305,7 +305,7 @@ impl Doc {
             s.set_selected_range(c..c, cx);
             s.focus(window, cx);
         });
-        if let Some((old, _)) = self.live.take() {
+        if let Some((old, ..)) = self.live.take() {
             let _ = window.drop_image(old);
         }
         self.render_live(window, cx);
@@ -324,7 +324,7 @@ impl Doc {
         if self.input.focus_handle(cx).is_focused(window) {
             self.focus.focus(window, cx);
         }
-        if let Some((old, _)) = self.live.take() {
+        if let Some((old, ..)) = self.live.take() {
             let _ = window.drop_image(old);
         }
         cx.notify();

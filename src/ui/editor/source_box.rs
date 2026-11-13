@@ -21,7 +21,7 @@ impl Doc {
             self.zoom,
         );
         let family = self.box_family(at.font.as_ref(), cx);
-        let (_, box_fg) = source_box_colors(self.dark_pages(cx));
+        let (_, box_fg) = palette::source_box(self.dark_pages(cx), cx);
         let pw = dl.page_width.unwrap_or(40258437.0);
         let w = page_px(pw, self.zoom);
         let pad = 4.0 * self.zoom;
@@ -87,7 +87,7 @@ impl Doc {
                         .active_block()
                         .is_some_and(|b| b.rows.iter().all(|r| r.display))
             })
-            .map(|(i, r)| {
+            .map(|(i, r, _)| {
                 (
                     i.clone(),
                     page_px(r[2], self.zoom),
@@ -103,6 +103,11 @@ impl Doc {
             .relative()
             .ml(px(box_x))
             .w(px(box_w))
+            // on the paper unless the theme names the box a background of its own
+            .when_some(
+                crate::ui::themes::page_color("pages.source_box.background", cx),
+                |d, c| d.bg(c),
+            )
             .text_color(box_fg)
             .flex()
             .flex_col()
@@ -244,7 +249,7 @@ impl Doc {
         w: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (box_bg, box_fg) = source_box_colors(self.dark_pages(cx));
+        let (box_bg, box_fg) = palette::source_box(self.dark_pages(cx), cx);
         let theme = cx.theme().clone();
         let range = self.spans.iter().find(|s| s.kind == kind).map(|s| {
             document::trim(
@@ -397,10 +402,6 @@ fn sized_editor(
         .line_height(px(fit.asked))
         .with_size(Size::XSmall)
         .h(px(fit.height(min_h)))
-}
-
-pub(super) fn source_box_colors(dark: bool) -> (Rgba, Rgba) {
-    palette::source_box(dark)
 }
 
 /// The font in file `path` (face `index`) as GPUI selects it: its family, registered unless it

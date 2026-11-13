@@ -190,6 +190,33 @@ fn fit_width_waits_for_the_first_pages(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The pages' paper changed in Settings redraws every page on it: the page images are keyed by
+/// paper and ink. `cargo test --release a_page_colour_redraws_the_pages -- --ignored`.
+#[gpui_kit::test]
+#[ignore]
+fn a_page_colour_redraws_the_pages(cx: &mut TestAppContext) {
+    use crate::render::{DARK, DarkPaper};
+    use crate::ui::themes;
+    let tex = "\\documentclass{article}\n\\begin{document}\nOne.\n\\end{document}\n";
+    let dir = scratch("paper", tex);
+    let (doc, cx) = open(cx, dir.clone(), "main.tex", 0);
+    cx.update(|_, cx| {
+        themes::init(cx);
+        AppSettings::set(cx, |s| s.theme = "dark".into());
+    });
+    let on = |paper: DarkPaper| {
+        move |d: &Doc| !d.images.is_empty() && d.images.values().all(|im| im.key.1.1 == Some(paper))
+    };
+    wait(cx, &doc, "the pages on the dark paper", on(DARK));
+    cx.update(|_, cx| themes::set_color("pages.paper", Some("#101830".into()), cx));
+    let navy = DarkPaper {
+        paper: [16, 24, 48],
+        ..DARK
+    };
+    wait(cx, &doc, "the pages on the navy paper", on(navy));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A 1×1 PNG.
 pub(super) const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,

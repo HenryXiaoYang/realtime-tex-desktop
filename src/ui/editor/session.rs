@@ -181,9 +181,15 @@ impl Doc {
             return;
         }
         let scale = self.zoom as f64 * window.scale_factor() as f64 / SP_PER_BP;
-        let dark = self.dark_pages(cx);
-        // the key holds the paper too, so a theme switch redraws every page
-        let zkey = (scale * 1e6) as u32 * 2 + dark as u32;
+        let dark = self.dark_pages(cx).then(|| palette::dark_paper(cx));
+        // the key holds the paper too, so a theme switch or a colour changed redraws every page
+        let zkey = ((scale * 1e6) as u32, dark);
+        if self.live.as_ref().is_some_and(|l| l.2 != dark) {
+            if let Some((old, ..)) = self.live.take() {
+                let _ = window.drop_image(old);
+            }
+            self.render_live(window, cx);
+        }
         let view_h = f32::from(self.scroll.bounds().size.height).max(1000.0);
         let view_top = -f32::from(self.scroll.offset().y);
         let mut y = PAGES_TOP;
@@ -268,6 +274,7 @@ impl Doc {
             bbox[2] - bbox[0] + 2.0 * pad,
             bbox[3] - bbox[1] + 2.0 * pad,
         ];
+        let dark = self.dark_pages(cx).then(|| palette::dark_paper(cx));
         let job = render::Job {
             rows,
             other: None,
@@ -275,7 +282,7 @@ impl Doc {
             scale: self.zoom as f64 * window.scale_factor() as f64 / SP_PER_BP,
             pdf: None,
             clear: vec![],
-            dark: self.dark_pages(cx),
+            dark,
         };
         let fonts = self.resources.clone();
         let task = cx.background_executor().spawn(async move {
@@ -284,7 +291,7 @@ impl Doc {
         cx.spawn_in(window, async move |this, cx| {
             let (w, h, data) = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                if let Some((old, _)) = this.live.replace((to_image(w, h, data), region)) {
+                if let Some((old, ..)) = this.live.replace((to_image(w, h, data), region, dark)) {
                     let _ = window.drop_image(old);
                 }
                 cx.notify();
@@ -295,7 +302,7 @@ impl Doc {
 
     /// Pages on dark paper: the dark theme, unless the settings keep pages white.
     pub(super) fn dark_pages(&self, cx: &App) -> bool {
-        cx.theme().mode.is_dark() && AppSettings::get(cx).dark_pages
+        palette::dark_pages(cx)
     }
 
     /// The page at the top third of the view, and how many there are.
