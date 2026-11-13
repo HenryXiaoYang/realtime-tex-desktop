@@ -57,7 +57,8 @@ enum Show {
 #[derive(Clone, Copy, PartialEq)]
 enum Done {
     TypedInMain,
-    BoxOpened,
+    /// A source box opened, and closed again: the reader saw it.
+    BoxSeen,
     MadeBold,
     TypedInChapter,
     BrokeAndFixed,
@@ -126,9 +127,9 @@ const STEPS: &[Step] = &[
     act(
         &["pages"],
         Show::Nothing,
-        Done::BoxOpened,
+        Done::BoxSeen,
         "Open the source box",
-        "Double-click the formula in section 2. Its TeX opens in a box on the page, with the result under it as you type.",
+        "Double-click the formula in section 2. Its TeX opens in a box on the page, with the result under it as you type. Click outside the box or press Escape when you are done.",
     ),
     see(
         &["ribbon"],
@@ -230,6 +231,8 @@ pub(super) struct Since {
     chapter: Option<String>,
     /// Where a source box was open then, until it closes.
     boxed: Option<usize>,
+    /// A source box opened since.
+    opened: bool,
     /// The fraction was broken.
     broke: bool,
     pub(super) recompiled: bool,
@@ -346,6 +349,8 @@ impl Workspace {
         }
         if boxed.is_none() {
             s.boxed = None;
+        } else if boxed != s.boxed {
+            s.opened = true;
         }
         if main.as_ref().is_some_and(|m| !m.contains(FRACTION)) {
             s.broke = true;
@@ -353,7 +358,7 @@ impl Workspace {
         let bold = |s: &str| s.matches("\\textbf").count();
         let is_done = match done {
             Done::TypedInMain => main != s.main,
-            Done::BoxOpened => boxed.is_some() && boxed != s.boxed,
+            Done::BoxSeen => s.opened && boxed.is_none(),
             Done::MadeBold => main
                 .zip(s.main.as_deref())
                 .is_some_and(|(now, then)| bold(&now) > bold(then)),
@@ -961,8 +966,8 @@ mod e2e {
             });
             frame(cx);
         };
-        // the formula's box, from a double-click on it as the card says: on to the Home tab,
-        // the ribbon unfolded
+        // the formula's box, from a double-click on it as the card says; once read and closed,
+        // on to the Home tab, the ribbon unfolded
         press(cx, "escape");
         assert_eq!(step(cx), Some(2), "the typing box closed, not the tour");
         let formula = source(cx).find("\\[ e^{i\\pi}").expect("a display formula");
@@ -971,13 +976,21 @@ mod e2e {
             let at = point(pages.center().x, pages.top() + px(10.0 * i as f32));
             double_click(cx, at);
             let on = cx.read(|cx| main.read(cx).box_at());
+            // another block's box, seen and closed, would do the step: the step again
             if on.is_some() && on != Some(formula) {
                 press(cx, "escape");
+                in_window(cx, &mut |window, cx| {
+                    ws.update(cx, |ws, cx| ws.tour_go(2, window, cx))
+                });
             }
             on == Some(formula)
         });
         assert!(opened, "a double-click on the formula opens its box");
-        assert_eq!(step(cx), Some(3));
+        calm(cx);
+        assert_eq!(step(cx), Some(2), "the box stays open to be read");
+        press(cx, "escape");
+        assert!(!cx.read(|cx| main.read(cx).box_open()));
+        assert_eq!(step(cx), Some(3), "closed: on to the Home tab");
         cx.read(|cx| {
             assert!(!AppSettings::get(cx).ribbon_collapsed, "unfolded");
             assert!(ws.read(cx).ribbon_tab == RibbonTab::Home);
@@ -1067,8 +1080,6 @@ mod e2e {
             click(cx, "rb-bold");
             assert_eq!(bold(cx), before + 1, "{word} bold");
         };
-        press(cx, "escape");
-        assert_eq!(step(cx), Some(3), "the formula's box closed, not the tour");
         make_bold(cx);
         click(cx, "tour-next");
         assert_eq!(step(cx), Some(4));
