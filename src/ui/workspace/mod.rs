@@ -97,6 +97,9 @@ pub struct Workspace {
     /// Folders open in the project panel (paths): only they are read from disk, so a large
     /// folder (node_modules) costs nothing until it is opened.
     expanded: std::collections::HashSet<String>,
+    /// The project panel's file tree and outline, scrolled sideways to names too long for it.
+    files_scroll: ScrollHandle,
+    outline_scroll: ScrollHandle,
     /// The tree entry being renamed in place (its path) and its name field, and why the name
     /// typed cannot be (shown under the field, which stays open).
     rename: Option<(String, Entity<InputState>)>,
@@ -139,6 +142,8 @@ impl Workspace {
             rename_error: None,
             save_alerted: Default::default(),
             expanded: Default::default(),
+            files_scroll: ScrollHandle::new(),
+            outline_scroll: ScrollHandle::new(),
             _subs: vec![],
             _rename_sub: None,
             _dialog_subs: vec![],

@@ -1,6 +1,7 @@
 // The project panel: the file tree and the section outline, one above the other.
 use super::*;
 use crate::ui::Tip;
+use gpui_kit::component::scroll::{ScrollableElement, ScrollbarAxis};
 
 impl Workspace {
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -25,6 +26,7 @@ impl Workspace {
                 return ListItem::new(ix).children(guides).child(
                     div()
                         .text_sm()
+                        .whitespace_nowrap()
                         .italic()
                         .text_color(cx.theme().muted_foreground)
                         .pl(px(entry.depth() as f32 * TREE_INDENT + TREE_INDENT))
@@ -60,6 +62,7 @@ impl Workspace {
                         .items_center()
                         .gap_1()
                         .text_sm()
+                        .whitespace_nowrap()
                         .pl(px(entry.depth() as f32 * TREE_INDENT))
                         .child(widgets::tool_icon(icon, true, cx).xsmall().flex_shrink_0())
                         .map(|row| match &field {
@@ -104,6 +107,20 @@ impl Workspace {
             let rel = entry.item().id.to_string();
             Self::tree_menu(&menu_weak, &root, &rel, entry.is_folder(), menu)
         });
+        // the tree's list cannot measure its rows, so a hidden copy of their names, each
+        // indented as its row is (12 px of padding a side, its depth, an icon and a gap), sets
+        // how wide the rows are
+        // shortcut: lays out every row's name each frame, fine for a LaTeX project's tree;
+        // measure only the longest if trees get large
+        let tree_state = self.tree.read(cx);
+        let row_widths: Vec<Div> = (0..)
+            .map_while(|ix| tree_state.entry(ix))
+            .map(|e| {
+                div()
+                    .pl(px(24.0 + (e.depth() + 1) as f32 * TREE_INDENT))
+                    .child(e.item().label.clone())
+            })
+            .collect();
         let outline: Vec<_> = self
             .doc()
             .map(|d| {
@@ -133,6 +150,7 @@ impl Workspace {
                     .relative()
                     .children(guides)
                     .flex()
+                    .whitespace_nowrap()
                     .gap_2()
                     .text_sm()
                     .pl(px(12.0 + level as f32 * OUTLINE_INDENT))
@@ -206,7 +224,41 @@ impl Workspace {
                         ),
                 ),
             )
-            .child(div().flex_1().min_h_0().px_1().child(file_tree));
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("files-scroll")
+                            .size_full()
+                            .flex()
+                            .overflow_x_scroll()
+                            // a wheel's vertical turn scrolls the list in it, not this sideways
+                            .restrict_scroll_to_axis()
+                            .track_scroll(&self.files_scroll)
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .min_w_full()
+                                    .h_full()
+                                    .px_1()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .h_0()
+                                            .overflow_hidden()
+                                            .text_sm()
+                                            .whitespace_nowrap()
+                                            .children(row_widths),
+                                    )
+                                    .child(file_tree),
+                            ),
+                    )
+                    .horizontal_scrollbar(&self.files_scroll),
+            );
         let outline = div()
             .size_full()
             .flex()
@@ -214,11 +266,30 @@ impl Workspace {
             .child(header("OUTLINE"))
             .child(
                 div()
-                    .id("outline")
+                    .relative()
                     .flex_1()
-                    .overflow_y_scroll()
-                    .px_1()
-                    .children(outline),
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("outline")
+                            .size_full()
+                            .flex()
+                            .items_start()
+                            .overflow_scroll()
+                            .track_scroll(&self.outline_scroll)
+                            // one column as wide as the longest heading, so each row's hover
+                            // spans it
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .min_w_full()
+                                    .px_1()
+                                    .flex()
+                                    .flex_col()
+                                    .children(outline),
+                            ),
+                    )
+                    .scrollbar(&self.outline_scroll, ScrollbarAxis::Both),
             );
         // files above, outline below, with a divider to drag between them
         div()
@@ -276,4 +347,104 @@ fn guide_line(left: f32, cx: &App) -> Div {
         .left(px(left))
         .w(px(1.0))
         .bg(cx.theme().sidebar_foreground.opacity(0.2))
+}
+
+#[cfg(test)]
+mod e2e {
+    use super::super::Workspace;
+    use crate::engine;
+    use crate::ui::settings::AppSettings;
+    use gpui_kit::{Pixels, TestAppContext, Window, px, size};
+
+    /// How far the file tree and the outline scroll sideways, how wide the tree's list is
+    /// against the panel, and how far the list and the outline scroll down, for a folder of `files`.
+    fn panel_scroll(cx: &mut TestAppContext, name: &str, files: &[(&str, &str)]) -> [Pixels; 6] {
+        let dir = std::env::temp_dir().join(format!("rtd-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (f, text) in files {
+            std::fs::write(dir.join(f), text).unwrap();
+        }
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        engine::configure("", "/Library/TeX/texbin");
+        let (ws, cx) = cx.add_window_view(|window: &mut Window, cx| {
+            Workspace::new(dir.clone(), Some("main.tex".into()), window, cx)
+        });
+        cx.simulate_resize(size(px(1460.0), px(900.0)));
+        for _ in 0..3 {
+            cx.run_until_parked();
+        }
+        let r = cx.read(|cx| {
+            let ws = ws.read(cx);
+            let list = ws
+                .tree
+                .read(cx)
+                .scroll_handle()
+                .0
+                .borrow()
+                .base_handle
+                .clone();
+            [
+                ws.files_scroll.max_offset().x,
+                ws.outline_scroll.max_offset().x,
+                list.bounds().size.width,
+                ws.files_scroll.bounds().size.width,
+                list.max_offset().y,
+                ws.outline_scroll.max_offset().y,
+            ]
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        r
+    }
+
+    /// A long file name and a long section title scroll their lists sideways, the tree's rows
+    /// as wide as the longest, and both still scroll down. `cargo test --release
+    /// long_names_scroll_sideways -- --ignored --nocapture`.
+    #[gpui_kit::test]
+    #[ignore]
+    fn long_names_scroll_sideways(cx: &mut TestAppContext) {
+        let long_title = "A section title far too long for the project panel to show in full";
+        let main = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\\section{{{long_title}}}\nText.\n{}\\end{{document}}\n",
+            "\\section{Short}\n".repeat(60)
+        );
+        let many: Vec<String> = (0..60).map(|i| format!("f{i:02}.tex")).collect();
+        let mut files = vec![
+            ("main.tex", main.as_str()),
+            (
+                "a_file_name_far_too_long_for_the_project_panel_to_show.tex",
+                "",
+            ),
+        ];
+        files.extend(many.iter().map(|f| (f.as_str(), "")));
+        let [tree_x, outline_x, list_w, panel_w, list_y, outline_y] =
+            panel_scroll(cx, "long", &files);
+        println!(
+            "long: tree x {tree_x:?}, outline x {outline_x:?}, list w {list_w:?}, panel w {panel_w:?}, list y {list_y:?}, outline y {outline_y:?}"
+        );
+        assert!(tree_x > px(0.0), "the tree scrolls sideways");
+        assert!(outline_x > px(0.0), "the outline scrolls sideways");
+        assert!(
+            list_w > panel_w,
+            "the tree's rows run as wide as the longest"
+        );
+        assert!(list_y > px(0.0), "the tree still scrolls down");
+        assert!(outline_y > px(0.0), "the outline still scrolls down");
+    }
+
+    /// Short names: the tree fits, nothing to scroll sideways.
+    #[gpui_kit::test]
+    #[ignore]
+    fn short_names_do_not_scroll(cx: &mut TestAppContext) {
+        let main = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\nText.\n\\end{document}\n";
+        let [tree_x, outline_x, ..] =
+            panel_scroll(cx, "short", &[("main.tex", main), ("a.tex", "")]);
+        println!("short: tree x {tree_x:?}, outline x {outline_x:?}");
+        assert_eq!(tree_x, px(0.0));
+        assert_eq!(outline_x, px(0.0));
+    }
 }
