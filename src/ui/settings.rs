@@ -3,8 +3,10 @@
 // window (⌘,), built from gpui-kit's settings components.
 use crate::ui::Tip;
 use crate::ui::keymap;
+use crate::ui::palette;
 use gpui_kit::base::Scrollbar;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{CursorBlink, Input, InputEvent, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::setting::{
@@ -25,6 +27,8 @@ use std::rc::Rc;
 pub struct AppSettings {
     /// "system", "light" or "dark".
     pub theme: String,
+    /// The accent colour, "#RRGGBB"; empty: the theme's own blue.
+    pub accent: String,
     pub ui_font_size: f64,
     /// Pages on dark paper in the dark theme.
     pub dark_pages: bool,
@@ -136,6 +140,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: "system".into(),
+            accent: String::new(),
             ui_font_size: 16.0,
             dark_pages: true,
             cursor_blink: true,
@@ -239,6 +244,7 @@ impl AppSettings {
 
     fn apply(cx: &mut App) {
         let s = Self::get(cx).clone();
+        install_accent(&s.accent, cx);
         match s.theme.as_str() {
             "light" => Theme::change(ThemeMode::Light, None, cx),
             "dark" => Theme::change(ThemeMode::Dark, None, cx),
@@ -290,23 +296,126 @@ impl AppSettings {
 }
 
 /// The app's own colours (theme.json), light and dark: an accent for what acts and what is
-/// picked, softer grays than black on white. Every switch of mode, the system's too, takes them.
+/// picked, softer grays than black on white.
 fn install_theme(cx: &mut App) {
     let registry = ThemeRegistry::global_mut(cx);
     if let Err(e) = registry.load_themes_from_str(include_str!("theme.json")) {
         eprintln!("the app's theme: {e}");
-        return;
     }
-    let get = |name: &str| registry.themes().get(name).cloned();
-    let (light, dark) = (get("Realtime Tex Light"), get("Realtime Tex Dark"));
+}
+
+/// theme.json's light and dark themes in the accent colour `accent` names (as they are, when it
+/// names none) for the theme's modes: every switch of mode, the system's too, takes them.
+fn install_accent(accent: &str, cx: &mut App) {
+    let themes = ThemeRegistry::global(cx).themes();
+    let get = |name: &str| themes.get(name).cloned();
+    let (Some(light), Some(dark)) = (get("Realtime Tex Light"), get("Realtime Tex Dark")) else {
+        return;
+    };
+    let (light, dark) = match palette::hex_color(accent) {
+        Some(a) => (
+            Rc::new(palette::accented(&light, a)),
+            Rc::new(palette::accented(&dark, a)),
+        ),
+        None => (light, dark),
+    };
     Theme::update(cx, |t| {
-        if let Some(l) = light {
-            t.light_theme = l;
-        }
-        if let Some(d) = dark {
-            t.dark_theme = d;
-        }
+        t.light_theme = light;
+        t.dark_theme = dark;
     });
+}
+
+/// The accents offered beside a colour of one's own: each named, and its setting ("" is the
+/// theme's own blue, theme.json's).
+pub(crate) const ACCENTS: [(&str, &str); 8] = [
+    ("Blue", ""),
+    ("Purple", "#7C4DDB"),
+    ("Pink", "#C93A85"),
+    ("Red", "#CF3A3A"),
+    ("Orange", "#C2570C"),
+    ("Green", "#1E7F47"),
+    ("Teal", "#0E7C86"),
+    ("Graphite", "#5B6472"),
+];
+pub(crate) const THEME_BLUE: &str = "#3557D4";
+
+/// A ring around a swatch, in its colour when `on`.
+fn ring(color: Hsla, on: bool) -> Div {
+    div()
+        .size(px(22.0))
+        .rounded_full()
+        .border_2()
+        .border_color(if on { color } else { transparent_black() })
+        .flex()
+        .items_center()
+        .justify_center()
+}
+
+struct AccentField {
+    picker: Entity<ColorPickerState>,
+    _sub: Subscription,
+}
+
+/// The accent: a round swatch for each of ACCENTS, the one in use ringed, then the color picker
+/// for any other colour, which shows that colour while it is the accent.
+fn accent_field(options: &RenderOptions, window: &mut Window, cx: &mut App) -> Div {
+    let current = palette::hex_color(&AppSettings::get(cx).accent)
+        .map(palette::hex)
+        .unwrap_or_default();
+    let custom = !ACCENTS.iter().any(|(_, v)| *v == current);
+    let state = window.use_keyed_state(field_key("accent", options), cx, |window, cx| {
+        let picker = cx.new(|cx| ColorPickerState::new(window, cx));
+        let _sub = cx.subscribe(&picker, |_, _, ev: &ColorPickerEvent, cx| {
+            if let ColorPickerEvent::Change(Some(c)) = ev {
+                let v = palette::hex(Hsla { a: 1.0, ..*c });
+                if AppSettings::get(cx).accent != v {
+                    AppSettings::set(cx, |s| s.accent = v);
+                }
+            }
+        });
+        AccentField { picker, _sub }
+    });
+    // the picker opens at the accent in use
+    let shown = palette::hex_color(if current.is_empty() {
+        THEME_BLUE
+    } else {
+        &current
+    })
+    .unwrap_or_default();
+    let picker = state.read(cx).picker.clone();
+    if picker.read(cx).value().map(palette::hex) != Some(palette::hex(shown)) {
+        picker.update(cx, |p, cx| p.set_value(shown, window, cx));
+    }
+    h_flex()
+        .gap_0p5()
+        .children(ACCENTS.map(|(name, value)| {
+            let color = palette::hex_color(if value.is_empty() { THEME_BLUE } else { value })
+                .unwrap_or_default();
+            Button::new(SharedString::from(format!("accent-{name}")))
+                .ghost()
+                .p_0()
+                .size(px(26.0))
+                .rounded_full()
+                .disabled(options.is_disabled())
+                .accessibility_label(name)
+                .tooltip(name)
+                .child(
+                    ring(color, !custom && current == value)
+                        .child(div().size(px(14.0)).rounded_full().bg(color)),
+                )
+                .on_click(move |_, _, cx| AppSettings::set(cx, |s| s.accent = value.into()))
+        }))
+        .child(
+            ring(shown, custom).child(
+                ColorPicker::new(&picker)
+                    .with_size(px(14.0))
+                    .anchor(Anchor::TopRight)
+                    .accessibility_label("Custom color")
+                    .when(!custom, |p| {
+                        p.icon(Icon::default().path("icons/pipette.svg"))
+                    }),
+            ),
+        )
 }
 
 /// A group of settings. The page leaves 1 rem beside its list for focus rings, but the
@@ -868,6 +977,15 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                     .default_value(AppSettings::default().theme),
                 ),
                 SettingItem::new(
+                    "Accent color",
+                    resettable(
+                        SettingField::render(accent_field),
+                        |s| &s.accent,
+                        |s, v| s.accent = v,
+                    ),
+                )
+                .keywords(["colour", "highlight"]),
+                SettingItem::new(
                     "Interface font size",
                     number(
                         (10.0, 24.0, 1.0),
@@ -1123,14 +1241,16 @@ impl Render for SettingsView {
 mod tests {
     use super::{
         AppSettings, FontField, OnLaunch, OutlineDepth, SettingsView, TexView, Zoom, choice, font,
-        font_choices, group, pages,
+        font_choices, group, install_theme, pages,
     };
     use crate::ui::editor::MONO;
+    use crate::ui::palette;
     use gpui_kit::base::Scrollbar;
     use gpui_kit::component::select::SelectEvent;
     use gpui_kit::component::setting::{
         AnySettingField, SelectIndex, SettingField, SettingItem, SettingPage, Settings,
     };
+    use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
     use gpui_kit::{
         AppContext, Axis, Context, IntoElement, Pixels, Render, Styled, TestAppContext, Window,
         canvas, px,
@@ -1190,17 +1310,62 @@ mod tests {
         );
         assert!(s.cursor_blink && s.download_rtex && s.autocomplete && s.pinch_zoom);
         assert!(!s.show_hidden_files && s.hide_files.is_empty() && s.source_font.is_empty());
+        assert!(s.accent.is_empty());
         // and what this version writes reads back the same
         let new = AppSettings {
             default_zoom: Zoom::FitWidth,
             on_launch: OnLaunch::Welcome,
             outline_depth: OutlineDepth::Paragraphs,
+            accent: "#7C4DDB".into(),
             ..s
         };
         let json = serde_json::to_string(&new).unwrap();
         assert!(json.contains(r#""default_zoom":null"#), "{json}");
         assert!(json.contains(r#""on_launch":"welcome""#), "{json}");
         assert_eq!(serde_json::from_str::<AppSettings>(&json).unwrap(), new);
+    }
+
+    /// The accent colours the theme at launch and on each change, and a switch of mode, the
+    /// system's too, keeps it; empty, the theme is theme.json's own.
+    #[gpui_kit::test]
+    fn the_accent_survives_a_switch_of_mode(cx: &mut TestAppContext) {
+        let hex = |c| palette::hex(c);
+        // the theme registry's observer in place, which puts back a theme it holds by name
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            cx.set_global(AppSettings {
+                theme: "light".into(),
+                accent: "#C93A85".into(),
+                ..AppSettings::default()
+            });
+            // as AppSettings::init does
+            install_theme(cx);
+            AppSettings::apply(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(hex(cx.theme().primary), "#C93A85");
+            Theme::change(ThemeMode::Dark, None, cx);
+            assert!(cx.theme().mode.is_dark());
+            assert_eq!(hex(cx.theme().primary), "#C93A85");
+            assert_ne!(hex(cx.theme().ring), "#86A1FF");
+            AppSettings::set(cx, |s| s.accent = "#1E7F47".into());
+            assert_eq!(hex(cx.theme().primary), "#1E7F47");
+            Theme::change(ThemeMode::Dark, None, cx);
+            assert_eq!(hex(cx.theme().primary), "#1E7F47");
+            // the theme's own: theme.json's light and dark blues
+            AppSettings::set(cx, |s| s.accent = String::new());
+            assert_eq!(hex(cx.theme().primary), "#3557D4");
+            assert_eq!(hex(cx.theme().ring), "#3557D4");
+            Theme::change(ThemeMode::Dark, None, cx);
+            assert_eq!(hex(cx.theme().primary), "#4A68E8");
+            assert_eq!(hex(cx.theme().ring), "#86A1FF");
+            assert_eq!(hex(cx.theme().link), "#86A1FF");
+            // a colour no one can read is the theme's own
+            AppSettings::set(cx, |s| s.accent = "blue".into());
+            assert_eq!(hex(cx.theme().primary), "#3557D4");
+        });
+        cx.run_until_parked();
     }
 
     #[test]

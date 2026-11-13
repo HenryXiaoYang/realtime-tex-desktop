@@ -1,8 +1,8 @@
 // The editor's colours. The marks it draws on the typeset pages (the selected block, the insert
 // line, the text selection, find matches, the source box) take their hue from the theme's roles,
 // made to stand out from the paper they sit on, white or dark; and the surfaces the pages lie in.
-use gpui_kit::component::{ActiveTheme, Colorize, Theme};
-use gpui_kit::{App, Hsla, Rgba, rgb};
+use gpui_kit::component::{ActiveTheme, Colorize, Theme, ThemeConfig};
+use gpui_kit::{App, Hsla, Rgba, SharedString, rgb};
 
 /// The desk the pages lie on, from the theme: its muted surface; in a dark theme, a third of
 /// the way from its background to that (near-black, between the panel and a black page).
@@ -160,6 +160,91 @@ fn readable_on(c: Hsla, bg: Hsla, ratio: f32) -> Hsla {
     c
 }
 
+/// The colour "#RRGGBB" names; None for anything else (an empty accent setting among them).
+pub fn hex_color(s: &str) -> Option<Hsla> {
+    let digits = s.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok().map(|c| rgb(c).into())
+}
+
+/// `c` as theme.json writes it: #RRGGBB, or #RRGGBBAA when translucent.
+pub fn hex(c: Hsla) -> String {
+    let c = c.to_rgb();
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let (r, g, b, a) = (byte(c.r), byte(c.g), byte(c.b), byte(c.a));
+    if a == 255 {
+        format!("#{r:02X}{g:02X}{b:02X}")
+    } else {
+        format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
+}
+
+/// `base`, one of theme.json's themes, in `accent`, kept in the relations its own blue has: light
+/// buttons in the colour, darker on hover and press; dark buttons in the colour, lighter on hover,
+/// with marks and links in a lighter shade; the highlights, faint tints of the marks. Marks keep
+/// 3:1 on the background, and a button's text is white or ink, whichever reads better.
+pub fn accented(base: &ThemeConfig, accent: Hsla) -> ThemeConfig {
+    let accent = Hsla { a: 1.0, ..accent };
+    let dark = base.mode.is_dark();
+    let bg = (base.colors.background.as_deref())
+        .and_then(hex_color)
+        .unwrap_or_else(|| paper(dark).into());
+    let shade = |c: Hsla, by: f32| Hsla {
+        l: (c.l + by).clamp(0.0, 1.0),
+        ..c
+    };
+    let mark = readable_on(
+        if dark {
+            Hsla {
+                l: accent.l.max(0.76),
+                ..accent
+            }
+        } else {
+            accent
+        },
+        bg,
+        3.0,
+    );
+    let (hover, active, link_hover) = if dark {
+        (shade(accent, 0.05), shade(accent, -0.05), shade(mark, 0.06))
+    } else {
+        (shade(accent, -0.05), shade(accent, -0.1), shade(mark, -0.1))
+    };
+    let (tint, list_tint) = if dark { (0x1F, 0x26) } else { (0x14, 0x1F) };
+    let (white, ink): (Hsla, Hsla) = (rgb(0xFFFFFF).into(), rgb(0x1F2328).into());
+    let on_accent = if contrast(white, accent) >= contrast(ink, accent) {
+        white
+    } else {
+        ink
+    };
+    let mut config = base.clone();
+    // the registry's observer puts a theme it holds back by its name: this one keeps a name of its own
+    config.name = format!("{} (accent)", base.name).into();
+    let c = &mut config.colors;
+    let set = |v: Hsla| Some(SharedString::from(hex(v)));
+    let tinted = |a: u8| set(mark.opacity(f32::from(a) / 255.0));
+    c.primary = set(accent);
+    c.primary_hover = set(hover);
+    c.primary_active = set(active);
+    c.primary_foreground = set(on_accent);
+    c.selection = set(accent);
+    c.ring = set(mark);
+    c.caret = set(mark);
+    c.link = set(mark);
+    c.list_active_border = set(mark);
+    c.link_hover = set(link_hover);
+    c.link_active = set(link_hover);
+    c.accent = tinted(tint);
+    c.list_active = tinted(list_tint);
+    // the light sidebar's picked row is a tint of the accent (the dark one's is a plain gray)
+    if !dark {
+        c.sidebar_accent = tinted(0x1A);
+    }
+    config
+}
+
 #[cfg(test)]
 mod surface_tests {
     use super::*;
@@ -204,8 +289,9 @@ mod surface_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{contrast, readable_on};
-    use gpui_kit::{Hsla, rgb};
+    use super::{accented, contrast, hex, hex_color, readable_on};
+    use gpui_kit::component::{ThemeConfig, ThemeSet};
+    use gpui_kit::{Hsla, SharedString, rgb};
 
     #[test]
     fn marks_read_on_either_paper() {
@@ -241,5 +327,95 @@ mod tests {
         // a colour that already reads stays as it is
         let ok: Hsla = rgb(0x1d4ed8).into();
         assert_eq!(readable_on(ok, white, 3.0), ok);
+    }
+
+    /// theme.json's two themes, as the registry reads them.
+    fn themes() -> (ThemeConfig, ThemeConfig) {
+        let set: ThemeSet = serde_json::from_str(include_str!("theme.json")).unwrap();
+        let mut t = set.themes.into_iter();
+        (t.next().unwrap(), t.next().unwrap())
+    }
+
+    fn color(c: &Option<SharedString>) -> Hsla {
+        hex_color(c.as_deref().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_accent_setting_reads_as_a_colour_or_none() {
+        assert_eq!(hex_color("#3557d4").map(hex).as_deref(), Some("#3557D4"));
+        for bad in [
+            "",
+            "3557D4",
+            "#3557D",
+            "#3557D4FF",
+            "#zzzzzz",
+            "#aébbb",
+            " #3557D4",
+        ] {
+            assert_eq!(hex_color(bad), None, "{bad:?}");
+        }
+        assert_eq!(hex(rgb(0x3557D4).into()), "#3557D4");
+        let tint = Hsla::from(rgb(0x3557D4)).opacity(20.0 / 255.0);
+        assert_eq!(hex(tint), "#3557D414");
+    }
+
+    #[test]
+    fn an_accent_keeps_the_themes_relations() {
+        let (light, dark) = themes();
+        assert!(!light.mode.is_dark() && dark.mode.is_dark());
+        let pink = hex_color("#C93A85").unwrap();
+        let l = accented(&light, pink).colors;
+        assert_eq!(hex(color(&l.primary)), "#C93A85");
+        assert_eq!(hex(color(&l.ring)), "#C93A85");
+        assert_eq!(hex(color(&l.caret)), "#C93A85");
+        assert_eq!(hex(color(&l.primary_foreground)), "#FFFFFF");
+        assert!(
+            color(&l.primary_hover).l < pink.l
+                && color(&l.primary_active).l < color(&l.primary_hover).l
+        );
+        assert_eq!(l.accent.as_deref(), Some("#C93A8514"));
+        assert_eq!(l.list_active.as_deref(), Some("#C93A851F"));
+        let d = accented(&dark, pink).colors;
+        assert_eq!(hex(color(&d.primary)), "#C93A85");
+        assert!(color(&d.primary_hover).l > pink.l);
+        // marks and links in a lighter shade of the same hue
+        let mark = color(&d.ring);
+        assert!(mark.l > pink.l + 0.15 && (mark.h - pink.h).abs() < 0.01);
+        assert_eq!(color(&d.link), mark);
+        assert!(color(&d.link_hover).l > mark.l);
+        // what the theme does not tint stays as theme.json has it
+        assert_eq!(d.background, dark.colors.background);
+        assert_eq!(d.foreground, dark.colors.foreground);
+    }
+
+    #[test]
+    fn a_light_accent_gets_dark_button_text_and_readable_marks() {
+        let (light, dark) = themes();
+        let yellow = hex_color("#FFE066").unwrap();
+        let bg = |t: &ThemeConfig| color(&t.colors.background);
+        for t in [&light, &dark] {
+            let c = accented(t, yellow).colors;
+            assert_eq!(hex(color(&c.primary_foreground)), "#1F2328");
+            assert!(contrast(color(&c.ring), bg(t)) >= 3.0, "{}", t.name);
+        }
+    }
+
+    #[test]
+    fn every_offered_accent_keeps_white_text_on_its_buttons() {
+        let (light, dark) = themes();
+        for (_, v) in crate::ui::settings::ACCENTS {
+            let a = hex_color(v)
+                .or(hex_color(crate::ui::settings::THEME_BLUE))
+                .unwrap();
+            assert!(contrast(a, rgb(0xFFFFFF).into()) >= 4.5, "{v}");
+            for t in [&light, &dark] {
+                let c = accented(t, a).colors;
+                assert_eq!(hex(color(&c.primary_foreground)), "#FFFFFF", "{v}");
+                assert!(
+                    contrast(color(&c.ring), color(&t.colors.background)) >= 3.0,
+                    "{v}"
+                );
+            }
+        }
     }
 }
