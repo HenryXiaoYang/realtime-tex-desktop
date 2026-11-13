@@ -4,6 +4,7 @@
 use crate::ui::Tip;
 use crate::ui::keymap;
 use crate::ui::palette;
+use crate::ui::themes;
 use gpui_kit::base::Scrollbar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
@@ -19,6 +20,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -29,6 +31,12 @@ pub struct AppSettings {
     pub theme: String,
     /// The accent colour, "#RRGGBB"; empty: the theme's own blue.
     pub accent: String,
+    /// The theme in light mode and in dark mode, by name.
+    pub light_theme: String,
+    pub dark_theme: String,
+    /// Colours changed from a theme's own: theme name to colour key (as theme files write it) to
+    /// "#RRGGBB" or "#RRGGBBAA". They win over the accent.
+    pub colors: BTreeMap<String, BTreeMap<String, String>>,
     pub ui_font_size: f64,
     /// Pages on dark paper in the dark theme.
     pub dark_pages: bool,
@@ -90,7 +98,7 @@ pub struct AppSettings {
     /// The tour was started once (the first launch starts it no more).
     pub tour_seen: bool,
     /// Shortcuts changed from their defaults: command to key (empty: none).
-    pub shortcuts: std::collections::BTreeMap<String, String>,
+    pub shortcuts: BTreeMap<String, String>,
 }
 
 /// The zoom a file opens at: saved as a number, or null for fit width (a number is what
@@ -141,6 +149,9 @@ impl Default for AppSettings {
         Self {
             theme: "system".into(),
             accent: String::new(),
+            light_theme: themes::DEFAULT_LIGHT.into(),
+            dark_theme: themes::DEFAULT_DARK.into(),
+            colors: BTreeMap::new(),
             ui_font_size: 16.0,
             dark_pages: true,
             cursor_blink: true,
@@ -205,7 +216,10 @@ impl AppSettings {
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         cx.set_global::<AppSettings>(s);
-        install_theme(cx);
+        themes::init(cx);
+        if let Err(e) = ThemeRegistry::watch_dir(themes::dir(), cx, |_| {}) {
+            eprintln!("the themes folder: {e}");
+        }
         crate::ui::workspace::place_notifications(cx);
         Self::apply(cx);
     }
@@ -244,7 +258,7 @@ impl AppSettings {
 
     fn apply(cx: &mut App) {
         let s = Self::get(cx).clone();
-        install_accent(&s.accent, cx);
+        themes::install(cx);
         match s.theme.as_str() {
             "light" => Theme::change(ThemeMode::Light, None, cx),
             "dark" => Theme::change(ThemeMode::Dark, None, cx),
@@ -293,36 +307,6 @@ impl AppSettings {
         }
         a
     }
-}
-
-/// The app's own colours (theme.json), light and dark: an accent for what acts and what is
-/// picked, softer grays than black on white.
-fn install_theme(cx: &mut App) {
-    let registry = ThemeRegistry::global_mut(cx);
-    if let Err(e) = registry.load_themes_from_str(include_str!("theme.json")) {
-        eprintln!("the app's theme: {e}");
-    }
-}
-
-/// theme.json's light and dark themes in the accent colour `accent` names (as they are, when it
-/// names none) for the theme's modes: every switch of mode, the system's too, takes them.
-fn install_accent(accent: &str, cx: &mut App) {
-    let themes = ThemeRegistry::global(cx).themes();
-    let get = |name: &str| themes.get(name).cloned();
-    let (Some(light), Some(dark)) = (get("Realtime Tex Light"), get("Realtime Tex Dark")) else {
-        return;
-    };
-    let (light, dark) = match palette::hex_color(accent) {
-        Some(a) => (
-            Rc::new(palette::accented(&light, a)),
-            Rc::new(palette::accented(&dark, a)),
-        ),
-        None => (light, dark),
-    };
-    Theme::update(cx, |t| {
-        t.light_theme = light;
-        t.dark_theme = dark;
-    });
 }
 
 /// The accents offered beside a colour of one's own: each named, and its setting ("" is the
@@ -894,6 +878,144 @@ fn font(
     resettable(field, get, set)
 }
 
+/// A theme list for `mode`: the themes of that mode, the one in use picked (the app's own when
+/// the chosen one is gone).
+fn theme_list(
+    mode: ThemeMode,
+    get: fn(&AppSettings) -> &String,
+    set: fn(&mut AppSettings, String),
+    cx: &App,
+) -> SettingField<SharedString> {
+    let names = themes::names(mode, cx);
+    SettingField::dropdown(
+        names.into_iter().map(|n| (n.clone(), n)).collect(),
+        move |cx| {
+            let s = AppSettings::get(cx);
+            themes::chosen(s, mode, cx).map_or_else(|| get(s).clone().into(), |t| t.name.clone())
+        },
+        move |v, cx| AppSettings::set(cx, |s| set(s, v.to_string())),
+    )
+    .default_value(get(&AppSettings::default()).clone())
+}
+
+/// Every colour of the theme on screen, by group, each changeable; the theme's name heads the
+/// page's first group, with Export and Reset all.
+fn colors_page(cx: &App) -> SettingPage {
+    let name = themes::active(cx).unwrap_or_default();
+    let shown = Rc::new(themes::shown(cx));
+    let changed = AppSettings::get(cx).colors.contains_key(name.as_ref());
+    let actions = SettingItem::render(move |_, _, _| {
+        h_flex()
+            .justify_end()
+            .gap_2()
+            .child(
+                Button::new("colors-export")
+                    .label("Export theme")
+                    .small()
+                    .outline()
+                    .on_click(|_, _, cx| match themes::export(cx) {
+                        Ok(path) => cx.reveal_path(&path),
+                        Err(e) => eprintln!("export theme: {e}"),
+                    }),
+            )
+            .child(
+                Button::new("colors-reset-all")
+                    .label("Reset all colors")
+                    .small()
+                    .outline()
+                    .disabled(!changed)
+                    .on_click(|_, _, cx| {
+                        if let Some(name) = themes::active(cx) {
+                            AppSettings::set(cx, |s| {
+                                s.colors.remove(name.as_ref());
+                            });
+                        }
+                    }),
+            )
+    })
+    .keywords(["export", "reset", "theme"]);
+    let mut page = SettingPage::new("Colors").group(group(cx).title(name).item(actions));
+    for g in themes::groups() {
+        let items = g.keys.iter().map(|k| {
+            let (key, color) = (k.key.clone(), shown.get(&k.key).copied().flatten());
+            SettingItem::new(
+                k.label.clone(),
+                SettingField::render(move |_: &RenderOptions, window, cx| {
+                    color_field(&key, color, window, cx)
+                }),
+            )
+            .keywords([k.key.clone()])
+        });
+        page = page.group(group(cx).title(g.title).items(items.collect::<Vec<_>>()));
+    }
+    page
+}
+
+struct ColorRow {
+    picker: Entity<ColorPickerState>,
+    _sub: Subscription,
+}
+
+/// A colour's field: its value, a swatch that opens the colour picker (transparency shows over a
+/// checkerboard), and, while it is changed, reset to the theme's own. "Auto": a source colour the
+/// theme leaves to the editor.
+fn color_field(key: &str, color: Option<Hsla>, window: &mut Window, cx: &mut App) -> Div {
+    #[cfg(test)]
+    tests::COLOR_ROWS.with(|r| r.borrow_mut().insert(key.to_string()));
+    // keyed by the colour, not the row's place: a search moves rows
+    let state = window.use_keyed_state(SharedString::from(format!("color-{key}")), cx, {
+        let key = key.to_string();
+        move |window, cx| {
+            let picker = cx.new(|cx| ColorPickerState::new(window, cx));
+            let _sub = cx.subscribe(&picker, move |_, _, ev: &ColorPickerEvent, cx| {
+                if let ColorPickerEvent::Change(Some(c)) = ev {
+                    themes::set_color(&key, Some(palette::hex(*c)), cx);
+                }
+            });
+            ColorRow { picker, _sub }
+        }
+    });
+    let picker = state.read(cx).picker.clone();
+    if picker.read(cx).value().map(palette::hex) != color.map(palette::hex) {
+        picker.update(cx, |p, cx| match color {
+            Some(c) => p.set_value(c, window, cx),
+            None => p.clear_value(window, cx),
+        });
+    }
+    let changed = themes::active(cx).is_some_and(|name| {
+        let colors = &AppSettings::get(cx).colors;
+        colors
+            .get(name.as_ref())
+            .is_some_and(|c| c.contains_key(key))
+    });
+    let theme = cx.theme();
+    h_flex()
+        .gap_2()
+        .when(changed, |row| {
+            let key = key.to_string();
+            row.child(
+                Button::new(SharedString::from(format!("color-reset-{key}")))
+                    .icon(Icon::default().path("icons/undo.svg"))
+                    .ghost()
+                    .xsmall()
+                    .tip("Back to the theme's color")
+                    .on_click(move |_, _, cx| themes::set_color(&key, None, cx)),
+            )
+        })
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(color.map_or("Auto".into(), palette::hex)),
+        )
+        .child(
+            div()
+                .rounded(theme.radius)
+                .bg(checkerboard(theme.muted_foreground.opacity(0.4), 4.0))
+                .child(ColorPicker::new(&picker).anchor(Anchor::TopRight)),
+        )
+}
+
 /// Clear: the build files of the documents not open now removed, in the background (an open
 /// document's rtex is using its own).
 fn clear_cache_button(options: &RenderOptions, window: &mut Window, cx: &mut App) -> Button {
@@ -975,6 +1097,38 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                         |v, cx| AppSettings::set(cx, |s| s.theme = v.to_string()),
                     )
                     .default_value(AppSettings::default().theme),
+                ),
+                SettingItem::new(
+                    "Light theme",
+                    theme_list(
+                        ThemeMode::Light,
+                        |s| &s.light_theme,
+                        |s, v| s.light_theme = v,
+                        cx,
+                    ),
+                ),
+                SettingItem::new(
+                    "Dark theme",
+                    theme_list(
+                        ThemeMode::Dark,
+                        |s| &s.dark_theme,
+                        |s, v| s.dark_theme = v,
+                        cx,
+                    ),
+                ),
+                SettingItem::new(
+                    "Themes folder",
+                    SettingField::render(|options: &RenderOptions, _, _| {
+                        Button::new("themes-folder")
+                            .label("Open")
+                            .outline()
+                            .with_size(options.size())
+                            .on_click(|_, _, cx| {
+                                let dir = themes::dir();
+                                let _ = std::fs::create_dir_all(&dir);
+                                cx.open_with_system(&dir);
+                            })
+                    }),
                 ),
                 SettingItem::new(
                     "Accent color",
@@ -1186,6 +1340,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
     vec![
         general,
         appearance,
+        colors_page(cx).icon(icon("swatch-book")),
         editor,
         files,
         typesetting,
@@ -1241,22 +1396,31 @@ impl Render for SettingsView {
 mod tests {
     use super::{
         AppSettings, FontField, OnLaunch, OutlineDepth, SettingsView, TexView, Zoom, choice, font,
-        font_choices, group, install_theme, pages,
+        font_choices, group, pages,
     };
     use crate::ui::editor::MONO;
     use crate::ui::palette;
+    use crate::ui::themes;
     use gpui_kit::base::Scrollbar;
     use gpui_kit::component::select::SelectEvent;
     use gpui_kit::component::setting::{
         AnySettingField, SelectIndex, SettingField, SettingItem, SettingPage, Settings,
     };
-    use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
-    use gpui_kit::{
-        AppContext, Axis, Context, IntoElement, Pixels, Render, Styled, TestAppContext, Window,
-        canvas, px,
+    use gpui_kit::component::{
+        ActiveTheme, Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet,
     };
-    use std::cell::Cell;
+    use gpui_kit::{
+        App, AppContext, Axis, Context, IntoElement, Pixels, Render, Styled, TestAppContext,
+        Window, canvas, px, size,
+    };
+    use std::cell::{Cell, RefCell};
+    use std::collections::{BTreeMap, HashSet};
     use std::rc::Rc;
+
+    thread_local! {
+        /// The colour rows drawn, by key.
+        pub(super) static COLOR_ROWS: RefCell<HashSet<String>> = RefCell::default();
+    }
 
     #[test]
     fn rtex_gets_the_engine_settings() {
@@ -1310,13 +1474,22 @@ mod tests {
         );
         assert!(s.cursor_blink && s.download_rtex && s.autocomplete && s.pinch_zoom);
         assert!(!s.show_hidden_files && s.hide_files.is_empty() && s.source_font.is_empty());
-        assert!(s.accent.is_empty());
+        assert!(s.accent.is_empty() && s.colors.is_empty());
+        assert_eq!(
+            (s.light_theme.as_str(), s.dark_theme.as_str()),
+            (themes::DEFAULT_LIGHT, themes::DEFAULT_DARK)
+        );
         // and what this version writes reads back the same
         let new = AppSettings {
             default_zoom: Zoom::FitWidth,
             on_launch: OnLaunch::Welcome,
             outline_depth: OutlineDepth::Paragraphs,
             accent: "#7C4DDB".into(),
+            dark_theme: "Nord".into(),
+            colors: BTreeMap::from([(
+                "Nord".to_string(),
+                BTreeMap::from([("syntax.keyword".to_string(), "#FF000080".to_string())]),
+            )]),
             ..s
         };
         let json = serde_json::to_string(&new).unwrap();
@@ -1339,7 +1512,7 @@ mod tests {
                 ..AppSettings::default()
             });
             // as AppSettings::init does
-            install_theme(cx);
+            themes::init(cx);
             AppSettings::apply(cx);
         });
         cx.run_until_parked();
@@ -1366,6 +1539,220 @@ mod tests {
             assert_eq!(hex(cx.theme().primary), "#3557D4");
         });
         cx.run_until_parked();
+    }
+
+    /// The app as AppSettings::init leaves it, with `s`.
+    fn started(s: AppSettings, cx: &mut TestAppContext) {
+        // the theme registry's observer in place, which puts back a theme it holds by name
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            cx.set_global(s);
+            themes::init(cx);
+            AppSettings::apply(cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// theme.json's theme `name`, as the registry reads it.
+    fn theme_json(name: &str) -> ThemeConfig {
+        let set: ThemeSet = serde_json::from_str(include_str!("theme.json")).unwrap();
+        set.themes.into_iter().find(|t| t.name == name).unwrap()
+    }
+
+    /// With nothing set, the colours on screen are theme.json's, in either mode.
+    #[gpui_kit::test]
+    fn no_colour_settings_is_theme_json(cx: &mut TestAppContext) {
+        started(AppSettings::default(), cx);
+        cx.update(|cx| {
+            for (mode, name) in [
+                (ThemeMode::Light, themes::DEFAULT_LIGHT),
+                (ThemeMode::Dark, themes::DEFAULT_DARK),
+            ] {
+                Theme::change(mode, None, cx);
+                let mut want = Theme::default();
+                want.apply_config(&Rc::new(theme_json(name)));
+                assert_eq!(cx.theme().colors, want.colors, "{name}");
+            }
+        });
+    }
+
+    fn set(key: &str, value: &str, cx: &mut App) {
+        themes::set_color(key, Some(value.into()), cx);
+    }
+
+    /// A colour changed in the dark theme is on screen at once, and stays through every switch of
+    /// mode and every change to the registry (a theme file added): the registry's observer puts
+    /// back a theme it holds by name, so a colour set on the theme on screen alone would be lost.
+    #[gpui_kit::test]
+    fn a_changed_colour_survives_a_switch_of_mode(cx: &mut TestAppContext) {
+        started(
+            AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            },
+            cx,
+        );
+        let hex = |c| palette::hex(c);
+        cx.update(|cx| {
+            set("tab.active.background", "#123456", cx);
+            assert_eq!(hex(cx.theme().tab_active), "#123456");
+            // the accent is under it
+            AppSettings::set(cx, |s| s.accent = "#C93A85".into());
+            assert_eq!(hex(cx.theme().tab_active), "#123456");
+            assert_eq!(hex(cx.theme().primary), "#C93A85");
+            set("primary.background", "#00FF0080", cx);
+            assert_eq!(hex(cx.theme().primary), "#00FF0080");
+            Theme::change(ThemeMode::Light, None, cx);
+            Theme::change(ThemeMode::Dark, None, cx);
+            assert_eq!(hex(cx.theme().tab_active), "#123456");
+            ThemeRegistry::global_mut(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(hex(cx.theme().tab_active), "#123456");
+            assert_eq!(hex(cx.theme().primary), "#00FF0080");
+            themes::set_color("tab.active.background", None, cx);
+            assert_eq!(hex(cx.theme().tab_active), "#1D1E22");
+        });
+    }
+
+    /// Colours are changed per theme: the dark theme's leave the light one as it is; another dark
+    /// theme shows its own, and the first one's come back with it.
+    #[gpui_kit::test]
+    fn changed_colours_belong_to_their_theme(cx: &mut TestAppContext) {
+        started(
+            AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            },
+            cx,
+        );
+        let hex = |c| palette::hex(c);
+        cx.update(|cx| {
+            set("background", "#FF0000", cx);
+            assert_eq!(hex(cx.theme().background), "#FF0000");
+            assert!(AppSettings::get(cx).colors[themes::DEFAULT_DARK].contains_key("background"));
+            AppSettings::set(cx, |s| s.theme = "light".into());
+            assert_eq!(hex(cx.theme().background), "#FFFFFF");
+            AppSettings::set(cx, |s| {
+                s.theme = "dark".into();
+                s.dark_theme = "Nord".into();
+            });
+            assert_eq!(hex(cx.theme().background), "#2E3440");
+            assert_eq!(themes::active(cx).as_deref(), Some("Nord"));
+            assert!(
+                AppSettings::get(cx)
+                    .colors
+                    .contains_key(themes::DEFAULT_DARK)
+            );
+            AppSettings::set(cx, |s| s.dark_theme = themes::DEFAULT_DARK.into());
+            assert_eq!(hex(cx.theme().background), "#FF0000");
+            // a theme no longer there: the app's own
+            AppSettings::set(cx, |s| s.dark_theme = "Gone".into());
+            assert_eq!(themes::active(cx).as_deref(), Some(themes::DEFAULT_DARK));
+        });
+    }
+
+    /// A syntax colour changed is the one the source editor's highlighter gives its tokens, the
+    /// theme's weight and style kept.
+    #[gpui_kit::test]
+    fn a_changed_syntax_colour_reaches_the_highlighter(cx: &mut TestAppContext) {
+        started(
+            AppSettings {
+                theme: "dark".into(),
+                dark_theme: "Gruvbox Dark".into(),
+                ..AppSettings::default()
+            },
+            cx,
+        );
+        cx.update(|cx| {
+            let style = |name: &str, cx: &App| cx.theme().highlight_theme.style(name).unwrap();
+            assert_eq!(palette::hex(style("keyword", cx).color.unwrap()), "#FB4934");
+            set("syntax.keyword", "#00FF00", cx);
+            set("syntax.function", "#0000FF", cx);
+            assert_eq!(palette::hex(style("keyword", cx).color.unwrap()), "#00FF00");
+            let function = style("function", cx);
+            assert_eq!(palette::hex(function.color.unwrap()), "#0000FF");
+            assert_eq!(function.font_weight, Some(gpui_kit::FontWeight::BOLD));
+            // and what Settings shows
+            assert_eq!(
+                themes::shown(cx)["syntax.keyword"]
+                    .map(palette::hex)
+                    .as_deref(),
+                Some("#00FF00")
+            );
+        });
+    }
+
+    /// A theme file in the themes folder is offered in its mode's list, after the app's own,
+    /// which the registry drops when it reads the folder (its own reading starts a file watcher
+    /// thread the test scheduler refuses, so the test reads the file as it does: a registry of
+    /// the folder's themes alone).
+    #[gpui_kit::test]
+    fn a_theme_in_the_themes_folder_is_offered(cx: &mut TestAppContext) {
+        started(AppSettings::default(), cx);
+        let dir = std::env::temp_dir().join(format!("rtex-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = r##"{"name": "Mine", "themes": [
+            {"name": "Midnight Mine", "mode": "dark", "colors": {"background": "#010203"}}
+        ]}"##;
+        std::fs::write(dir.join("mine.json"), file).unwrap();
+        cx.update(|cx| {
+            let mut read = ThemeRegistry::default();
+            let json = std::fs::read_to_string(dir.join("mine.json")).unwrap();
+            read.load_themes_from_str(&json).unwrap();
+            cx.set_global(read);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let dark = themes::names(ThemeMode::Dark, cx);
+            assert_eq!(dark[0], themes::DEFAULT_DARK, "{dark:?}");
+            assert_eq!(
+                dark.last().map(|n| n.as_ref()),
+                Some("Midnight Mine"),
+                "{dark:?}"
+            );
+            assert!(!dark.iter().any(|n| n == "Default Dark"), "{dark:?}");
+            let light = themes::names(ThemeMode::Light, cx);
+            assert_eq!(
+                light,
+                [
+                    themes::DEFAULT_LIGHT,
+                    "Solarized Light",
+                    "Gruvbox Light",
+                    "High Contrast Light"
+                ]
+            );
+            AppSettings::set(cx, |s| {
+                s.theme = "dark".into();
+                s.dark_theme = "Midnight Mine".into();
+            });
+            assert_eq!(palette::hex(cx.theme().background), "#010203");
+        });
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The Colors page draws a row for every colour of the theme schema.
+    #[gpui_kit::test]
+    fn the_colors_page_has_a_row_per_colour(cx: &mut TestAppContext) {
+        started(AppSettings::default(), cx);
+        // after General and Appearance
+        let colors = 2;
+        COLOR_ROWS.with(|r| r.borrow_mut().clear());
+        let t = std::time::Instant::now();
+        let (_, vcx) = cx.add_window_view(|_, _| OnPage(colors));
+        // tall enough that the page's list draws every group
+        vcx.simulate_resize(size(px(1000.0), px(200_000.0)));
+        vcx.run_until_parked();
+        eprintln!("the Colors page, every row, drew in {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        vcx.update(|window, _| window.refresh());
+        vcx.run_until_parked();
+        eprintln!("and again in {:?}", t.elapsed());
+        let keys: HashSet<String> = (themes::groups().iter())
+            .flat_map(|g| g.keys.iter().map(|k| k.key.clone()))
+            .collect();
+        COLOR_ROWS.with(|r| assert_eq!(*r.borrow(), keys));
     }
 
     #[test]
@@ -1409,7 +1796,7 @@ mod tests {
         });
         cx.add_window_view(|_, _| SettingsView).1.run_until_parked();
         let n = cx.update(|cx| pages(cx).len());
-        assert_eq!(n, 6);
+        assert_eq!(n, 7);
         for i in 0..n {
             cx.add_window_view(|_, _| OnPage(i)).1.run_until_parked();
         }

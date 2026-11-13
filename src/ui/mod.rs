@@ -5,6 +5,7 @@ pub mod palette;
 pub mod projects;
 pub mod settings;
 pub mod tex_setup;
+pub mod themes;
 pub mod welcome;
 pub mod workspace;
 

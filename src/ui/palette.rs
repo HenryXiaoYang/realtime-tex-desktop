@@ -2,7 +2,7 @@
 // line, the text selection, find matches, the source box) take their hue from the theme's roles,
 // made to stand out from the paper they sit on, white or dark; and the surfaces the pages lie in.
 use gpui_kit::component::{ActiveTheme, Colorize, Theme, ThemeConfig};
-use gpui_kit::{App, Hsla, Rgba, SharedString, rgb};
+use gpui_kit::{App, Hsla, Rgba, SharedString, rgb, rgba};
 
 /// The desk the pages lie on, from the theme: its muted surface; in a dark theme, a third of
 /// the way from its background to that (near-black, between the panel and a black page).
@@ -162,11 +162,21 @@ fn readable_on(c: Hsla, bg: Hsla, ratio: f32) -> Hsla {
 
 /// The colour "#RRGGBB" names; None for anything else (an empty accent setting among them).
 pub fn hex_color(s: &str) -> Option<Hsla> {
+    hex_rgba(s).filter(|_| s.len() == 7)
+}
+
+/// The colour "#RRGGBB" or "#RRGGBBAA" names; None for anything else.
+pub fn hex_rgba(s: &str) -> Option<Hsla> {
     let digits = s.strip_prefix('#')?;
-    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
-    u32::from_str_radix(digits, 16).ok().map(|c| rgb(c).into())
+    let v = u32::from_str_radix(digits, 16).ok()?;
+    match digits.len() {
+        6 => Some(rgb(v).into()),
+        8 => Some(rgba(v).into()),
+        _ => None,
+    }
 }
 
 /// `c` as theme.json writes it: #RRGGBB, or #RRGGBBAA when translucent.
@@ -181,7 +191,7 @@ pub fn hex(c: Hsla) -> String {
     }
 }
 
-/// `base`, one of theme.json's themes, in `accent`, kept in the relations its own blue has: light
+/// `base`, a theme, in `accent`, kept in the relations theme.json's own blue has: light
 /// buttons in the colour, darker on hover and press; dark buttons in the colour, lighter on hover,
 /// with marks and links in a lighter shade; the highlights, faint tints of the marks. Marks keep
 /// 3:1 on the background, and a button's text is white or ink, whichever reads better.
@@ -220,8 +230,6 @@ pub fn accented(base: &ThemeConfig, accent: Hsla) -> ThemeConfig {
         ink
     };
     let mut config = base.clone();
-    // the registry's observer puts a theme it holds back by its name: this one keeps a name of its own
-    config.name = format!("{} (accent)", base.name).into();
     let c = &mut config.colors;
     let set = |v: Hsla| Some(SharedString::from(hex(v)));
     let tinted = |a: u8| set(mark.opacity(f32::from(a) / 255.0));
@@ -289,7 +297,7 @@ mod surface_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{accented, contrast, hex, hex_color, readable_on};
+    use super::{accented, contrast, hex, hex_color, hex_rgba, readable_on};
     use gpui_kit::component::{ThemeConfig, ThemeSet};
     use gpui_kit::{Hsla, SharedString, rgb};
 
@@ -355,6 +363,12 @@ mod tests {
             assert_eq!(hex_color(bad), None, "{bad:?}");
         }
         assert_eq!(hex(rgb(0x3557D4).into()), "#3557D4");
+        // a theme colour may be translucent
+        assert_eq!(hex_rgba("#3557D414").map(hex).as_deref(), Some("#3557D414"));
+        assert_eq!(hex_rgba("#3557d4").map(hex).as_deref(), Some("#3557D4"));
+        for bad in ["", "#3557D", "#3557D41", "#+557D4", "3557D414"] {
+            assert_eq!(hex_rgba(bad), None, "{bad:?}");
+        }
         let tint = Hsla::from(rgb(0x3557D4)).opacity(20.0 / 255.0);
         assert_eq!(hex(tint), "#3557D414");
     }

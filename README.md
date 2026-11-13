@@ -146,15 +146,21 @@ shortcuts: click a key and press the new one (Escape cancels); a key another com
 whether to take it from that one; each row and the whole list reset to the defaults. Only the
 changes are saved, under `shortcuts` in the settings file.
 
-Settings (⌘, or the gear in the status bar) has six pages: General (what opens at launch, recent
-projects kept, auto-save, opening an exported PDF), Appearance (theme, font size, dark pages,
-blinking caret, ribbon and sidebar), Editor (the zoom files open at, Visual or Source, live
-formula preview, the `\` key, pinch to zoom, source fonts, line numbers, soft wrap,
-autocomplete, Find's match case), Files (hidden files, names to hide, outline depth),
+Settings (⌘, or the gear in the status bar) has seven pages: General (what opens at launch,
+recent projects kept, auto-save, opening an exported PDF), Appearance (light, dark or system,
+the theme for each mode, the themes folder, the accent color, font size, dark pages, blinking
+caret, ribbon and sidebar), Colors (every color of the theme on screen, the source editor's and
+its syntax colors too, each changeable and kept per theme; Export theme writes the theme with
+those changes as a file in the themes folder, ready to share), Editor (the zoom files open at,
+Visual or Source, live formula preview, the `\` key, pinch to zoom, source fonts, line numbers,
+soft wrap, autocomplete, Find's match case), Files (hidden files, names to hide, outline depth),
 Typesetting (the rtex binary and TeX folder, downloading rtex, the live paragraph time limit,
 picture reuse, a diagnostics folder, clearing the build cache) and Keyboard shortcuts. A change
 to the engine settings restarts the open documents' rtex. They are saved in
-`~/Library/Application Support/Realtime Tex Desktop/settings.json`.
+`~/Library/Application Support/Realtime Tex Desktop/settings.json`. Besides its own light and
+dark themes the app has Solarized, Nord, Gruvbox and High Contrast; a theme file
+(gpui-component's format) put in `themes` next to the settings file is in the theme lists at
+once.
 
 ## Requirements
 
