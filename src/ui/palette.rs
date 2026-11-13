@@ -140,10 +140,18 @@ pub fn marks(dark: bool, cx: &App) -> Marks {
             black
         },
         // the accent, strong enough to stand out from the paper (dark paper needs more of it)
-        text_selection: own("pages.selection")
-            .unwrap_or_else(|| accent.opacity(selection_alpha(dark))),
-        match_current: own("pages.find.current").unwrap_or_else(|| theme.warning.opacity(0.6)),
-        match_other: own("pages.find.other").unwrap_or_else(|| theme.warning.opacity(0.28)),
+        text_selection: over(own("pages.selection"), accent, selection_alpha(dark)),
+        match_current: over(own("pages.find.current"), theme.warning, 0.6),
+        match_other: over(own("pages.find.other"), theme.warning, 0.28),
+    }
+}
+
+/// A mark over text: the page's image lies under it, its text too, so a colour chosen opaque
+/// (else `base`) is drawn at the mark's `alpha`; one chosen with an alpha of its own, as chosen.
+fn over(own: Option<Hsla>, base: Hsla, alpha: f32) -> Hsla {
+    match own {
+        Some(c) if c.a < 1.0 => c,
+        c => c.unwrap_or(base).opacity(alpha),
     }
 }
 

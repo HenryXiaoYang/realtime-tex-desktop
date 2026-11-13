@@ -5,6 +5,7 @@ use crate::ui::Tip;
 use crate::ui::keymap;
 use crate::ui::palette;
 use crate::ui::themes;
+use crate::ui::workspace::CloseTab;
 use gpui_kit::base::Scrollbar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
@@ -14,8 +15,10 @@ use gpui_kit::component::setting::{
     NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
     Settings,
 };
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, ThemeRegistry, TitleBar, h_flex,
+    ActiveTheme, Colorize, Disableable, Icon, Sizable, Theme, ThemeMode, ThemeRegistry, TitleBar,
+    h_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -367,9 +370,7 @@ fn accent_field(options: &RenderOptions, window: &mut Window, cx: &mut App) -> D
     })
     .unwrap_or_default();
     let picker = state.read(cx).picker.clone();
-    if picker.read(cx).value().map(palette::hex) != Some(palette::hex(shown)) {
-        picker.update(cx, |p, cx| p.set_value(shown, window, cx));
-    }
+    show_in_picker(&picker, Some(shown), window, cx);
     h_flex()
         .gap_0p5()
         .children(ACCENTS.map(|(name, value)| {
@@ -389,17 +390,29 @@ fn accent_field(options: &RenderOptions, window: &mut Window, cx: &mut App) -> D
                 )
                 .on_click(move |_, _, cx| AppSettings::set(cx, |s| s.accent = value.into()))
         }))
-        .child(
-            ring(shown, custom).child(
-                ColorPicker::new(&picker)
-                    .with_size(px(14.0))
-                    .anchor(Anchor::TopRight)
-                    .accessibility_label("Custom color")
-                    .when(!custom, |p| {
-                        p.icon(Icon::default().path("icons/pipette.svg"))
-                    }),
-            ),
-        )
+        .child(picker_button(
+            &picker,
+            ring(shown, custom).id("accent-custom").child(if custom {
+                div()
+                    .size(px(14.0))
+                    .rounded_full()
+                    .bg(shown)
+                    .into_any_element()
+            } else {
+                Icon::default()
+                    .path("icons/pipette.svg")
+                    .size(px(14.0))
+                    .into_any_element()
+            }),
+            "Custom color".into(),
+            if custom {
+                palette::hex(shown).into()
+            } else {
+                "Custom color".into()
+            },
+            window,
+            cx,
+        ))
 }
 
 /// A group of settings. The page leaves 1 rem beside its list for focus rings, but the
@@ -937,11 +950,12 @@ fn colors_page(cx: &App) -> SettingPage {
     let mut page = SettingPage::new("Colors").group(group(cx).title(name).item(actions));
     for g in themes::groups() {
         let items = g.keys.iter().map(|k| {
-            let (key, color) = (k.key.clone(), shown.get(&k.key).copied().flatten());
+            let (key, label) = (k.key.clone(), SharedString::from(k.label.clone()));
+            let color = shown.get(&k.key).copied().flatten();
             SettingItem::new(
                 k.label.clone(),
                 SettingField::render(move |_: &RenderOptions, window, cx| {
-                    color_field(&key, color, window, cx)
+                    color_field(&key, &label, color, window, cx)
                 }),
             )
             .keywords([k.key.clone()])
@@ -959,9 +973,13 @@ struct ColorRow {
 /// A colour's field: its value, a swatch that opens the colour picker (transparency shows over a
 /// checkerboard), and, while it is changed, reset to the theme's own. "Auto": a source colour the
 /// theme leaves to the editor.
-fn color_field(key: &str, color: Option<Hsla>, window: &mut Window, cx: &mut App) -> Div {
-    #[cfg(test)]
-    tests::COLOR_ROWS.with(|r| r.borrow_mut().insert(key.to_string()));
+fn color_field(
+    key: &str,
+    label: &SharedString,
+    color: Option<Hsla>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
     // keyed by the colour, not the row's place: a search moves rows
     let state = window.use_keyed_state(SharedString::from(format!("color-{key}")), cx, {
         let key = key.to_string();
@@ -976,12 +994,9 @@ fn color_field(key: &str, color: Option<Hsla>, window: &mut Window, cx: &mut App
         }
     });
     let picker = state.read(cx).picker.clone();
-    if picker.read(cx).value().map(palette::hex) != color.map(palette::hex) {
-        picker.update(cx, |p, cx| match color {
-            Some(c) => p.set_value(c, window, cx),
-            None => p.clear_value(window, cx),
-        });
-    }
+    #[cfg(test)]
+    tests::COLOR_ROWS.with(|r| r.borrow_mut().insert(key.to_string(), picker.clone()));
+    show_in_picker(&picker, color, window, cx);
     let changed = themes::active(cx).is_some_and(|name| {
         let colors = &AppSettings::get(cx).colors;
         colors
@@ -989,6 +1004,7 @@ fn color_field(key: &str, color: Option<Hsla>, window: &mut Window, cx: &mut App
             .is_some_and(|c| c.contains_key(key))
     });
     let theme = cx.theme();
+    let name: SharedString = color.map_or("Auto".into(), palette::hex).into();
     h_flex()
         .gap_2()
         .when(changed, |row| {
@@ -1006,14 +1022,90 @@ fn color_field(key: &str, color: Option<Hsla>, window: &mut Window, cx: &mut App
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(color.map_or("Auto".into(), palette::hex)),
+                .child(name.clone()),
         )
         .child(
-            div()
-                .rounded(theme.radius)
-                .bg(checkerboard(theme.muted_foreground.opacity(0.4), 4.0))
-                .child(ColorPicker::new(&picker).anchor(Anchor::TopRight)),
+            picker_button(
+                &picker,
+                div()
+                    .id(SharedString::from(format!("swatch-{key}")))
+                    .size_8()
+                    .rounded(theme.radius)
+                    .bg(checkerboard(theme.muted_foreground.opacity(0.4), 4.0))
+                    .child(
+                        div()
+                            .size_full()
+                            .rounded(theme.radius)
+                            .border_1()
+                            .border_color(color.map_or(theme.input, |c| c.darken(0.3)))
+                            .bg(color.unwrap_or(theme.background)),
+                    ),
+                label.clone(),
+                name,
+                window,
+                cx,
+            )
+            .test_support(),
         )
+}
+
+/// `face`, a colour's button, opening `picker` on its left. The kit's own button opens it below,
+/// or, short of room there, pushes it back up over the button (the anchor asked of it is not
+/// passed on), the pointer that opened it already on a colour, which a second click picks. Here
+/// the kit's button is a bare line reaching the picker's width (18 rem) left of `face`, and the
+/// picker opens below that line, beside `face`.
+fn picker_button(
+    picker: &Entity<ColorPickerState>,
+    face: Stateful<Div>,
+    name: SharedString,
+    tip: SharedString,
+    window: &Window,
+    cx: &App,
+) -> Stateful<Div> {
+    // as this frame drew it: a click on `face` that closed it, being outside it, leaves it so
+    let open = picker.read(cx).is_open();
+    let toggle = picker.clone();
+    face.relative()
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            if !open {
+                toggle.update(cx, |p, cx| p.set_open(true, cx));
+            }
+        })
+        .child(
+            ColorPicker::new(picker)
+                .accessibility_label(name)
+                .icon(
+                    Icon::default()
+                        .path("icons/pipette.svg")
+                        .text_color(transparent_black())
+                        .w(window.rem_size() * 18.0 + px(4.0))
+                        .h(px(1.0)),
+                )
+                .absolute()
+                .top_0()
+                .right_full(),
+        )
+}
+
+/// `picker` at `color`, so it opens at it: the kit keeps the colour hovered last as its preview
+/// once closed. While it is open only a change from elsewhere (a reset) moves it, not its own
+/// slider being dragged.
+fn show_in_picker(
+    picker: &Entity<ColorPickerState>,
+    color: Option<Hsla>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let p = picker.read(cx);
+    let stale = p.value().map(palette::hex) != color.map(palette::hex)
+        || !p.is_open() && p.preview() != p.value();
+    if stale {
+        picker.update(cx, |p, cx| match color {
+            Some(c) => p.set_value(c, window, cx),
+            None => p.clear_value(window, cx),
+        });
+    }
 }
 
 /// Clear: the build files of the documents not open now removed, in the background (an open
@@ -1348,7 +1440,17 @@ fn pages(cx: &App) -> Vec<SettingPage> {
     ]
 }
 
-pub struct SettingsView;
+/// The Settings window; focused as it opens, so its keys (⌘W) reach it before anything is
+/// clicked.
+pub struct SettingsView(FocusHandle);
+
+impl SettingsView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        Self(focus)
+    }
+}
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1358,6 +1460,9 @@ impl Render for SettingsView {
             .flex()
             .flex_col()
             .bg(cx.theme().background)
+            .track_focus(&self.0)
+            // ⌘W closes this window as it closes any
+            .on_action(|_: &CloseTab, window, _| window.remove_window())
             .child(
                 TitleBar::new()
                     .child(
@@ -1402,6 +1507,7 @@ mod tests {
     use crate::ui::palette;
     use crate::ui::themes;
     use gpui_kit::base::Scrollbar;
+    use gpui_kit::component::color_picker::ColorPickerState;
     use gpui_kit::component::select::SelectEvent;
     use gpui_kit::component::setting::{
         AnySettingField, SelectIndex, SettingField, SettingItem, SettingPage, Settings,
@@ -1409,17 +1515,20 @@ mod tests {
     use gpui_kit::component::{
         ActiveTheme, Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet,
     };
+    use gpui_kit::test::TestWindowExt;
     use gpui_kit::{
-        App, AppContext, Axis, Context, IntoElement, Pixels, Render, Styled, TestAppContext,
-        Window, canvas, px, size,
+        App, AppContext, Axis, Context, Entity, IntoElement, Modifiers, Pixels, Point, Render,
+        ScrollDelta, ScrollEvent, SharedString, Styled, TestAppContext, VisualTestContext, Window,
+        canvas, point, px, size,
     };
     use std::cell::{Cell, RefCell};
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::rc::Rc;
 
     thread_local! {
         /// The colour rows drawn, by key.
-        pub(super) static COLOR_ROWS: RefCell<HashSet<String>> = RefCell::default();
+        pub(super) static COLOR_ROWS: RefCell<HashMap<String, Entity<ColorPickerState>>> =
+            RefCell::default();
     }
 
     #[test]
@@ -1883,7 +1992,7 @@ mod tests {
         let keys: HashSet<String> = (themes::groups().iter())
             .flat_map(|g| g.keys.iter().map(|k| k.key.clone()))
             .collect();
-        COLOR_ROWS.with(|r| assert_eq!(*r.borrow(), keys));
+        COLOR_ROWS.with(|r| assert_eq!(r.borrow().keys().cloned().collect::<HashSet<_>>(), keys));
     }
 
     #[test]
@@ -1925,7 +2034,7 @@ mod tests {
             gpui_kit::init(cx);
             cx.set_global(AppSettings::default());
         });
-        cx.add_window_view(|_, _| SettingsView).1.run_until_parked();
+        cx.add_window_view(SettingsView::new).1.run_until_parked();
         let n = cx.update(|cx| pages(cx).len());
         assert_eq!(n, 7);
         for i in 0..n {
@@ -1954,7 +2063,7 @@ mod tests {
             |s| &s.source_font,
             |s, v| s.source_font = v,
         );
-        let (_, cx) = cx.add_window_view(|_, _| SettingsView);
+        let (_, cx) = cx.add_window_view(SettingsView::new);
         cx.update(|window, cx| {
             assert!(!zoom.is_resettable(cx) && !font.is_resettable(cx));
             AppSettings::set(cx, |s| {
@@ -2007,7 +2116,7 @@ mod tests {
             gpui_kit::init(cx);
             cx.set_global(AppSettings::default());
         });
-        let (_, cx) = cx.add_window_view(|_, _| SettingsView);
+        let (_, cx) = cx.add_window_view(SettingsView::new);
         let field = cx.update(|window, cx| {
             cx.new(|cx| {
                 FontField::new(
@@ -2070,5 +2179,213 @@ mod tests {
                 edge.get() + px(3.0)
             );
         }
+    }
+
+    fn on_pages(cx: &mut TestAppContext) -> &mut VisualTestContext {
+        started(
+            AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            },
+            cx,
+        );
+        // the Settings window's size, less its title bar
+        let (_, vcx) = cx.add_window_view(|_, _| OnPage(2));
+        vcx.simulate_resize(size(px(860.0), px(586.0)));
+        vcx.run_until_parked();
+        // the Pages group at the top, as its entry in the sidebar shows it
+        while swatch("pages.selection", vcx).is_none_or(|at| at.y > px(140.0)) {
+            vcx.simulate_event(ScrollEvent {
+                position: point(px(600.0), px(300.0)),
+                delta: ScrollDelta::Pixels(point(px(0.0), px(-20.0))),
+                ..Default::default()
+            });
+            vcx.run_until_parked();
+        }
+        vcx
+    }
+
+    fn picker(key: &str) -> Entity<ColorPickerState> {
+        COLOR_ROWS.with(|r| r.borrow()[key].clone())
+    }
+
+    /// The middle of `key`'s swatch, when it is on screen.
+    fn swatch(key: &str, vcx: &mut VisualTestContext) -> Option<Point<Pixels>> {
+        let id = SharedString::from(format!("swatch-{key}"));
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            (window.try_find(id))
+                .filter(|s| s.visible())
+                .map(|s| s.bounds().center())
+        })
+    }
+
+    /// Where each palette colour of `key`'s open picker is, found by hovering, as a user would.
+    fn cells(key: &str, vcx: &mut VisualTestContext) -> Vec<(String, Point<Pixels>)> {
+        let p = picker(key);
+        let size = vcx.update(|window, _| window.viewport_size());
+        // what it shows before any hover
+        let at_first = vcx.update(|_, cx| p.read(cx).preview().map(palette::hex));
+        let mut found: Vec<(String, Point<Pixels>)> = at_first
+            .into_iter()
+            .map(|h| (h, point(px(-1.0), px(-1.0))))
+            .collect();
+        let (mut x, mut y) = (px(0.0), px(0.0));
+        while y < size.height {
+            while x < size.width {
+                vcx.simulate_mouse_move(point(x, y), None, Modifiers::default());
+                let shown = vcx.update(|_, cx| p.read(cx).preview().map(palette::hex));
+                if let Some(h) = shown.filter(|h| !found.iter().any(|(f, _)| f == h)) {
+                    // the middle of the cell: 20 px, 4 px apart
+                    found.push((h, point(x + px(8.0), y + px(8.0))));
+                }
+                x += px(4.0);
+            }
+            (x, y) = (px(0.0), y + px(4.0));
+        }
+        found.retain(|(_, at)| at.x >= px(0.0));
+        found
+    }
+
+    fn stored(key: &str, cx: &App) -> Option<String> {
+        let name = themes::active(cx)?;
+        AppSettings::get(cx)
+            .colors
+            .get(name.as_ref())?
+            .get(key)
+            .cloned()
+    }
+
+    /// A click on any colour of a row's palette, in any column, picks it for that row.
+    #[gpui_kit::test]
+    fn a_click_on_any_palette_cell_picks_it(cx: &mut TestAppContext) {
+        let vcx = on_pages(cx);
+        let key = "pages.selection";
+        let at = swatch(key, vcx).expect("the Selected text row is on screen");
+        vcx.simulate_click(at, Modifiers::default());
+        vcx.run_until_parked();
+        let cells = cells(key, vcx);
+        // the 12 featured colours and the palette's 9 rows of 11
+        assert!(cells.len() >= 100, "{} cells found", cells.len());
+        for (hex, cell) in &cells {
+            if !vcx.update(|_, cx| picker(key).read(cx).is_open()) {
+                vcx.simulate_click(at, Modifiers::default());
+                vcx.run_until_parked();
+            }
+            vcx.simulate_click(*cell, Modifiers::default());
+            vcx.run_until_parked();
+            let got = vcx.update(|_, cx| stored(key, cx));
+            assert_eq!(got.as_deref(), Some(hex.as_str()), "the cell at {cell:?}");
+        }
+    }
+
+    /// A row's picker opens at the row's colour: not at a colour under the pointer that opened
+    /// it, nor at one hovered the last time it was open.
+    #[gpui_kit::test]
+    fn a_picker_opens_at_its_rows_colour(cx: &mut TestAppContext) {
+        let vcx = on_pages(cx);
+        let keys: Vec<&str> = (themes::groups().iter())
+            .flat_map(|g| g.keys.iter().map(|k| k.key.as_str()))
+            .collect();
+        let shown = vcx.update(|_, cx| themes::shown(cx));
+        let opened = |key: &str, vcx: &mut VisualTestContext| {
+            vcx.update(|_, cx| picker(key).read(cx).preview().map(palette::hex))
+        };
+        let mut tried = 0;
+        for key in keys {
+            let Some(at) = swatch(key, vcx) else { continue };
+            vcx.simulate_click(at, Modifiers::default());
+            // the pointer that opened it, still over the swatch
+            vcx.simulate_mouse_move(at, None, Modifiers::default());
+            vcx.run_until_parked();
+            assert!(vcx.update(|_, cx| picker(key).read(cx).is_open()), "{key}");
+            assert_eq!(opened(key, vcx), shown[key].map(palette::hex), "{key}");
+            vcx.simulate_keystrokes("escape");
+            vcx.run_until_parked();
+            tried += 1;
+        }
+        assert!(tried >= 8, "{tried} rows on screen");
+        // a colour hovered, the picker closed without a pick, and opened again
+        let key = "pages.selection";
+        let at = swatch(key, vcx).unwrap();
+        vcx.simulate_click(at, Modifiers::default());
+        vcx.run_until_parked();
+        let (hex, cell) = cells(key, vcx).pop().unwrap();
+        vcx.simulate_mouse_move(cell, None, Modifiers::default());
+        assert_eq!(opened(key, vcx), Some(hex));
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(!vcx.update(|_, cx| picker(key).read(cx).is_open()));
+        vcx.simulate_click(at, Modifiers::default());
+        vcx.run_until_parked();
+        assert_eq!(opened(key, vcx), shown[key].map(palette::hex));
+        assert_eq!(vcx.update(|_, cx| stored(key, cx)), None);
+    }
+
+    /// A mark over text chosen opaque is drawn at the mark's own strength, so the text under it
+    /// still reads, and the row shows that; one chosen with an alpha is drawn as chosen. The
+    /// selected block's outline and insert line, over no text, are drawn as chosen.
+    #[gpui_kit::test]
+    fn an_opaque_mark_over_text_keeps_it_readable(cx: &mut TestAppContext) {
+        let drawn = |cx: &App| {
+            let m = palette::marks(palette::dark_pages(cx), cx);
+            [m.text_selection, m.match_current, m.match_other, m.accent].map(palette::hex)
+        };
+        let shown = |cx: &App| {
+            let s = themes::shown(cx);
+            [
+                "pages.selection",
+                "pages.find.current",
+                "pages.find.other",
+                "pages.accent",
+            ]
+            .map(|k| palette::hex(s[k].unwrap()))
+        };
+        for (theme, selection) in [("dark", "#EA580C99"), ("light", "#EA580C66")] {
+            started(
+                AppSettings {
+                    theme: theme.into(),
+                    ..AppSettings::default()
+                },
+                cx,
+            );
+            cx.update(|cx| {
+                for k in ["pages.selection", "pages.find.current", "pages.find.other"] {
+                    set(k, "#EA580C", cx);
+                }
+                set("pages.accent", "#123456", cx);
+                let want = [selection, "#EA580C99", "#EA580C47", "#123456"];
+                assert_eq!(drawn(cx), want, "{theme}");
+                assert_eq!(shown(cx), want, "{theme}");
+                set("pages.selection", "#EA580C40", cx);
+                assert_eq!(drawn(cx)[0], "#EA580C40", "{theme}");
+                for k in [
+                    "pages.selection",
+                    "pages.find.current",
+                    "pages.find.other",
+                    "pages.accent",
+                ] {
+                    themes::set_color(k, None, cx);
+                }
+            });
+        }
+    }
+
+    /// ⌘W closes the Settings window, as it closes any window, and no other.
+    #[gpui_kit::test]
+    fn cmd_w_closes_the_settings_window(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+            crate::ui::keymap::bind_all(cx);
+        });
+        let other = cx.add_window(|_, _| OnPage(0));
+        let (_, vcx) = cx.add_window_view(SettingsView::new);
+        vcx.run_until_parked();
+        assert_eq!(vcx.update(|_, cx| cx.windows().len()), 2);
+        vcx.update(|window, cx| window.press("cmd-w", cx));
+        vcx.run_until_parked();
+        let left = cx.update(|cx| cx.windows());
+        assert_eq!(left, [*other]);
     }
 }

@@ -476,5 +476,7 @@ pub fn open_settings(cx: &mut App) {
         window_bounds: Some(WindowBounds::centered(size(px(860.0), px(620.0)), cx)),
         ..TitleBar::window_options()
     };
-    let _ = gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| settings::SettingsView));
+    let _ = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| settings::SettingsView::new(window, cx))
+    });
 }
