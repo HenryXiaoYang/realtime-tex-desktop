@@ -33,7 +33,7 @@ pub(super) fn kill_group(pgid: u32) {
 /// Windows has no process groups to signal: rtex's process tree ended instead.
 #[cfg(windows)]
 pub(super) fn kill_group(pid: u32) {
-    let _ = Command::new("taskkill")
+    let _ = command("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -308,12 +308,261 @@ pub fn default_tex_bin() -> &'static str {
     }
 }
 
-/// lualatex, if this PATH has it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Os {
+    Mac,
+    Windows,
+    Linux,
+}
+
+impl Os {
+    pub(super) const THIS: Os = if cfg!(target_os = "macos") {
+        Os::Mac
+    } else if cfg!(windows) {
+        Os::Windows
+    } else {
+        Os::Linux
+    };
+}
+
+/// `name` as this system names a program: lualatex, lualatex.exe.
+pub(super) fn exe(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// `program`, without a console window of its own on Windows.
+pub(super) fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// `path` (created if need be) locked for this process alone while the file is kept; none while
+/// another holds it. The system frees it when the holder dies, so a crash leaves no stale lock.
+pub(super) fn try_lock(path: &Path) -> Option<std::fs::File> {
+    let file = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
+
+/// Where the TeX in use came from, in the order they are preferred.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TexSource {
+    /// A folder chosen in the settings.
+    Settings,
+    Path,
+    /// Where a distribution installs itself (MacTeX, TeX Live, MiKTeX, TinyTeX, Homebrew…).
+    Usual,
+    /// The TeX Live the app installed.
+    App,
+}
+
+/// A folder with both lualatex and kpsewhich: one TeX, whose programs agree on its files.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TexCandidate {
+    pub bin_dir: PathBuf,
+    pub source: TexSource,
+}
+
+/// The TeX the pages typeset with: the first folder of the settings, PATH, the usual places and
+/// the app's own TeX Live with both lualatex and kpsewhich.
+pub fn find_tex() -> Option<TexCandidate> {
+    let settings = CONFIG.read().unwrap().1.clone();
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    candidates([
+        (
+            TexSource::Settings,
+            std::env::split_paths(&settings).collect(),
+        ),
+        (
+            TexSource::Path,
+            std::env::split_paths(&search_path()).collect(),
+        ),
+        (
+            TexSource::Usual,
+            usual_bins(Os::THIS, Path::new("/"), &home(), env),
+        ),
+        (
+            TexSource::App,
+            super::tex_install::own_tex_bin().into_iter().collect(),
+        ),
+    ])
+    .into_iter()
+    .next()
+}
+
+/// The folders of `groups` with both lualatex and kpsewhich, in order, each once.
+fn candidates(groups: impl IntoIterator<Item = (TexSource, Vec<PathBuf>)>) -> Vec<TexCandidate> {
+    let mut seen = std::collections::HashSet::new();
+    groups
+        .into_iter()
+        .flat_map(|(source, dirs)| dirs.into_iter().map(move |d| (source, d)))
+        .filter(|(_, d)| {
+            !d.as_os_str().is_empty()
+                && d.join(exe("lualatex")).is_file()
+                && d.join(exe("kpsewhich")).is_file()
+                && seen.insert(d.clone())
+        })
+        .map(|(source, bin_dir)| TexCandidate { bin_dir, source })
+        .collect()
+}
+
+/// Where distributions put their programs when PATH does not say (an app started from the Finder
+/// or the Start menu has a PATH of its own), newest TeX Live first. Absolute paths are under
+/// `sys`, `/` but in tests.
+fn usual_bins(
+    os: Os,
+    sys: &Path,
+    home: &Path,
+    env: impl Fn(&str) -> Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let texlive = || expand(&sys.join("usr/local/texlive/*/bin/*"));
+    match os {
+        Os::Mac => [vec![sys.join("Library/TeX/texbin")], texlive()]
+            .concat()
+            .into_iter()
+            .chain(expand(&home.join("Library/TinyTeX/bin/*")))
+            .chain(["opt/homebrew/bin", "usr/local/bin", "opt/local/bin"].map(|d| sys.join(d)))
+            .collect(),
+        Os::Linux => [texlive(), expand(&home.join(".TinyTeX/bin/*"))].concat(),
+        Os::Windows => {
+            let miktex = |root: Option<PathBuf>| root.map(|r| r.join("MiKTeX/miktex/bin/x64"));
+            // C: names the drive's current folder, C:\ its top
+            let drive = env("SystemDrive").map(|d| {
+                let mut d = d.into_os_string();
+                d.push(std::path::MAIN_SEPARATOR_STR);
+                PathBuf::from(d)
+            });
+            [
+                miktex(env("LOCALAPPDATA").map(|d| d.join("Programs"))),
+                miktex(env("ProgramFiles")),
+            ]
+            .into_iter()
+            .flatten()
+            .chain(
+                drive
+                    .into_iter()
+                    .flat_map(|d| expand(&d.join("texlive/*/bin/*"))),
+            )
+            .chain(
+                env("APPDATA")
+                    .into_iter()
+                    .flat_map(|d| expand(&d.join("TinyTeX/bin/*"))),
+            )
+            .collect()
+        }
+    }
+}
+
+/// The folders `pattern` names, a `*` standing for any name there; a `*`'s names from the last
+/// (2026 before 2025).
+fn expand(pattern: &Path) -> Vec<PathBuf> {
+    pattern
+        .components()
+        .fold(vec![PathBuf::new()], |found, part| {
+            if part.as_os_str() != "*" {
+                return found.into_iter().map(|d| d.join(part)).collect();
+            }
+            found
+                .iter()
+                .flat_map(|d| {
+                    let mut names: Vec<PathBuf> = std::fs::read_dir(d)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| e.path())
+                        .collect();
+                    names.sort_by(|a, b| b.cmp(a));
+                    names
+                })
+                .collect()
+        })
+}
+
+/// PATH as the app got it, and on Windows as it is now: a TeX installed while the app runs puts
+/// itself on the PATH in the registry, which the app's own PATH, fixed at launch, never sees.
+fn search_path() -> std::ffi::OsString {
+    #[allow(unused_mut)]
+    let mut path = std::env::var_os("PATH").unwrap_or_default();
+    #[cfg(windows)]
+    for p in registry_paths() {
+        path.push(";");
+        path.push(p);
+    }
+    path
+}
+
+/// The system's PATH and the user's, from the registry, with their %VARIABLES% expanded.
+#[cfg(windows)]
+fn registry_paths() -> Vec<std::ffi::OsString> {
+    use std::os::windows::ffi::OsStringExt;
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn RegGetValueW(
+            key: isize,
+            sub_key: *const u16,
+            value: *const u16,
+            flags: u32,
+            kind: *mut u32,
+            data: *mut u16,
+            len: *mut u32,
+        ) -> i32;
+    }
+    // HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER: sign-extended, as the system's headers make them
+    const MACHINE: isize = 0x8000_0002u32 as i32 as isize;
+    const USER: isize = 0x8000_0001u32 as i32 as isize;
+    // any type; REG_EXPAND_SZ comes back expanded
+    const RRF_RT_ANY: u32 = 0xffff;
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    [
+        (
+            MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+        (USER, "Environment"),
+    ]
+    .into_iter()
+    .filter_map(|(key, sub)| {
+        let (sub, name) = (wide(sub), wide("Path"));
+        // an environment variable's longest
+        let mut buf = vec![0u16; 32768];
+        let mut len = (buf.len() * 2) as u32;
+        let read = unsafe {
+            RegGetValueW(
+                key,
+                sub.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_ANY,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                &mut len,
+            )
+        };
+        (read == 0).then(|| {
+            buf.truncate(len as usize / 2);
+            while buf.last() == Some(&0) {
+                buf.pop();
+            }
+            std::ffi::OsString::from_wide(&buf)
+        })
+    })
+    .collect()
+}
+
+/// lualatex of the TeX in use.
 pub fn find_lualatex() -> Option<PathBuf> {
-    let exe = format!("lualatex{}", std::env::consts::EXE_SUFFIX);
-    std::env::split_paths(&tex_path())
-        .map(|d| d.join(&exe))
-        .find(|p| p.is_file())
+    find_tex().map(|t| t.bin_dir.join(exe("lualatex")))
 }
 
 /// Whether rtex is where the app looks.
@@ -323,9 +572,9 @@ pub fn rtex_found() -> bool {
 
 /// `kpsewhich <name>`: where TeX finds a file.
 pub fn kpsewhich(name: &str) -> Option<PathBuf> {
-    let out = Command::new("kpsewhich")
+    let out = command(find_tex()?.bin_dir.join(exe("kpsewhich")))
         .arg(name)
-        .env("PATH", tex_path())
+        .stdin(Stdio::null())
         .output()
         .ok()?;
     let s = String::from_utf8(out.stdout).ok()?;
@@ -333,28 +582,158 @@ pub fn kpsewhich(name: &str) -> Option<PathBuf> {
     (!s.is_empty()).then(|| PathBuf::from(s))
 }
 
-/// PATH with the TeX folders from the settings (several: separated as PATH separates them), and
-/// on the Mac MacTeX's and Homebrew's, which an app launched from the Finder does not inherit.
+/// PATH for rtex and its LaTeX runs: the TeX in use first, so that every TeX program is its
+/// own, then the settings' folders (several: separated as PATH separates them), PATH, and on the
+/// Mac MacTeX's and Homebrew's, which an app launched from the Finder does not inherit.
 pub fn tex_path() -> std::ffi::OsString {
     let extra = CONFIG.read().unwrap().1.clone();
-    let mut dirs: Vec<PathBuf> = std::env::split_paths(&extra).collect();
-    dirs.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
+    let mut dirs: Vec<PathBuf> = find_tex().map(|t| t.bin_dir).into_iter().collect();
+    dirs.extend(std::env::split_paths(&extra));
+    dirs.extend(std::env::split_paths(&search_path()));
     if cfg!(target_os = "macos") {
         dirs.extend(
             ["/Library/TeX/texbin", "/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from),
         );
     }
-    // the TeX Live the app installed, last: one of the system's own comes first
-    dirs.extend(super::tex_install::own_tex_bin());
-    dirs.retain(|d| !d.as_os_str().is_empty());
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|d| !d.as_os_str().is_empty() && seen.insert(d.clone()));
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::clear_builds;
+    use super::{Os, TexCandidate, TexSource, candidates, clear_builds, try_lock, usual_bins};
+    use std::path::{Path, PathBuf};
+
+    /// A TeX's bin folder under `root`: lualatex, and kpsewhich unless `half`.
+    fn tex_at(root: &Path, dir: &str, half: bool) -> PathBuf {
+        let d = root.join(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(super::exe("lualatex")), "").unwrap();
+        if !half {
+            std::fs::write(d.join(super::exe("kpsewhich")), "").unwrap();
+        }
+        d
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("rtd-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn found(os: Os, root: &Path, env: &[(&str, &str)]) -> Vec<PathBuf> {
+        let env: Vec<(String, PathBuf)> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), root.join(v)))
+            .collect();
+        let dirs = usual_bins(os, root, &root.join("home"), |k| {
+            env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+        });
+        candidates([(TexSource::Usual, dirs)])
+            .into_iter()
+            .map(|c| c.bin_dir)
+            .collect()
+    }
+
+    #[test]
+    fn the_mac_finds_mactex_then_tex_live_newest_first_then_tinytex_and_the_package_managers() {
+        let r = scratch("mac-tex");
+        let texbin = tex_at(&r, "Library/TeX/texbin", false);
+        let tl2025 = tex_at(&r, "usr/local/texlive/2025/bin/universal-darwin", false);
+        let tl2026 = tex_at(&r, "usr/local/texlive/2026/bin/universal-darwin", false);
+        let tiny = tex_at(&r, "home/Library/TinyTeX/bin/universal-darwin", false);
+        let ports = tex_at(&r, "opt/local/bin", false);
+        tex_at(&r, "opt/homebrew/bin", true);
+        assert_eq!(
+            found(Os::Mac, &r, &[]),
+            [texbin, tl2026, tl2025, tiny, ports],
+            "a folder with lualatex but no kpsewhich is not a TeX"
+        );
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn linux_finds_tex_live_newest_first_then_tinytex() {
+        let r = scratch("linux-tex");
+        let tl2024 = tex_at(&r, "usr/local/texlive/2024/bin/x86_64-linux", false);
+        let tl2026 = tex_at(&r, "usr/local/texlive/2026/bin/x86_64-linux", false);
+        let tiny = tex_at(&r, "home/.TinyTeX/bin/x86_64-linux", false);
+        assert_eq!(found(Os::Linux, &r, &[]), [tl2026, tl2024, tiny]);
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn windows_finds_miktex_for_the_user_and_for_all_then_tex_live_then_tinytex() {
+        let r = scratch("windows-tex");
+        let env = [
+            ("LOCALAPPDATA", "local"),
+            ("ProgramFiles", "programs"),
+            ("SystemDrive", "c"),
+            ("APPDATA", "roaming"),
+        ];
+        let user = tex_at(&r, "local/Programs/MiKTeX/miktex/bin/x64", false);
+        let all = tex_at(&r, "programs/MiKTeX/miktex/bin/x64", false);
+        let tl2025 = tex_at(&r, "c/texlive/2025/bin/windows", false);
+        let tl2026 = tex_at(&r, "c/texlive/2026/bin/windows", false);
+        let tiny = tex_at(&r, "roaming/TinyTeX/bin/windows", false);
+        assert_eq!(
+            found(Os::Windows, &r, &env),
+            [user, all, tl2026, tl2025, tiny]
+        );
+        assert_eq!(found(Os::Windows, &r, &[]), Vec::<PathBuf>::new());
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn the_settings_win_over_path_and_path_over_the_usual_places_each_folder_once() {
+        let r = scratch("tex-order");
+        let (mine, on_path, usual) = (
+            tex_at(&r, "mine", false),
+            tex_at(&r, "path", false),
+            tex_at(&r, "usual", false),
+        );
+        let half = tex_at(&r, "half", true);
+        let got = candidates([
+            (TexSource::Settings, vec![half, mine.clone()]),
+            (TexSource::Path, vec![on_path.clone(), mine.clone()]),
+            (TexSource::Usual, vec![usual.clone()]),
+        ]);
+        assert_eq!(
+            got,
+            [
+                TexCandidate {
+                    bin_dir: mine,
+                    source: TexSource::Settings
+                },
+                TexCandidate {
+                    bin_dir: on_path,
+                    source: TexSource::Path
+                },
+                TexCandidate {
+                    bin_dir: usual,
+                    source: TexSource::Usual
+                },
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn a_lock_is_one_holders_until_dropped_and_a_leftover_file_is_no_lock() {
+        let r = scratch("lock");
+        let path = r.join("texlive.lock");
+        std::fs::write(&path, "4242").unwrap();
+        let held = try_lock(&path).expect("a lock file nobody holds is free");
+        assert!(try_lock(&path).is_none(), "held, it is not given twice");
+        drop(held);
+        assert!(
+            try_lock(&path).is_some(),
+            "free again once its holder is gone"
+        );
+        let _ = std::fs::remove_dir_all(&r);
+    }
 
     #[test]
     fn clearing_keeps_the_open_documents_builds_and_what_is_not_a_build() {

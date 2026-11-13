@@ -1,8 +1,9 @@
 #!/bin/sh
 # A test build to hand out: "Realtime Tex Desktop.app" for Apple-chip Macs with the rtex engine
 # inside, ad-hoc signed, in target/release/Realtime-Tex-Desktop-<version>-arm64.dmg.
-# The engine comes from $RTEX_RELEASE (an unpacked release folder), else the latest rtex release,
-# downloaded. Recipients still need a TeX distribution (MacTeX) for lualatex.
+# The engine comes from $RTEX_RELEASE (an unpacked release folder), else the rtex release the app
+# pins (src/engine/download.rs: its tag and checksum), downloaded. Recipients still need a TeX
+# distribution (MacTeX) for lualatex.
 set -e
 cd "$(dirname "$0")/.."
 ./scripts/bundle.sh >/dev/null
@@ -10,9 +11,14 @@ app="target/release/Realtime Tex Desktop.app"
 if [ -z "$RTEX_RELEASE" ]; then
   dl=target/rtex-release
   rm -rf "$dl" && mkdir -p "$dl"
-  curl -fsSL https://github.com/HenryXiaoYang/realtime-tex/releases/latest/download/rtex-aarch64-apple-darwin.tar.gz \
-    | tar -xzf - -C "$dl"
-  RTEX_RELEASE=$(ls -d "$dl"/rtex-* | tail -1)
+  asset=rtex-aarch64-apple-darwin.tar.gz
+  tag=$(sed -n 's/^const RTEX_TAG: &str = "\(.*\)";/\1/p' src/engine/download.rs)
+  sum=$(grep -A1 "\"$asset\"" src/engine/download.rs | sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p')
+  curl -fsSL --proto =https --proto-redir =https -o "$dl/$asset" \
+    "https://github.com/HenryXiaoYang/realtime-tex/releases/download/$tag/$asset"
+  echo "$sum  $dl/$asset" | shasum -a 256 -c - >/dev/null
+  tar -xzf "$dl/$asset" -C "$dl"
+  RTEX_RELEASE=$(ls -d "$dl"/rtex-*/ | tail -1)
 fi
 rtex="$RTEX_RELEASE"
 [ -x "$rtex/bin/rtex" ] || { echo "no rtex release found (set RTEX_RELEASE)" >&2; exit 1; }
