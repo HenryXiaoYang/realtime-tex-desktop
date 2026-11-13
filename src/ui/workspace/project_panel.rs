@@ -121,12 +121,14 @@ impl Workspace {
                     .child(e.item().label.clone())
             })
             .collect();
+        let depth = settings::AppSettings::get(cx).outline_depth;
         let outline: Vec<_> = self
             .doc()
             .map(|d| {
                 d.read(cx)
                     .outline
                     .iter()
+                    .filter(|h| depth.shows(h.level))
                     .map(|h| (h.offset, h.level, h.number.clone(), h.title.clone()))
                     .collect()
             })

@@ -115,6 +115,81 @@ pub(super) fn typesets_and_undoes(
     calm(cx, doc);
 }
 
+/// rtex started again (new engine settings, a TeX installed): an unsaved edit is saved first,
+/// so the new rtex has what the pages show, and the old rtex's exit does not stop the new one.
+/// `cargo test --release a_restart_keeps_the_new_rtex -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn a_restart_keeps_the_new_rtex(cx: &mut TestAppContext) {
+    let tex = "\\documentclass{article}\n\\begin{document}\nOne.\n\\end{document}\n";
+    let dir = scratch("restart", tex);
+    let (doc, cx) = open(cx, dir.clone(), "main.tex", 0);
+    doc.update_in(cx, |d, window, cx| {
+        let at = d.source.find("One.").unwrap();
+        d.replace(at..at + 4, "Two.", cx);
+        d.restart_engine(window, cx);
+    });
+    calm(cx, &doc);
+    // time for the old rtex's last words to arrive
+    for _ in 0..25 {
+        std::thread::sleep(Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    let saved = std::fs::read_to_string(dir.join("main.tex")).unwrap();
+    assert!(saved.contains("Two."), "saved before the restart: {saved}");
+    cx.read(|cx| {
+        let d = doc.read(cx);
+        assert!(d.rtex.is_some(), "the new rtex runs: {}", d.status);
+        let stopped = d
+            .notices
+            .iter()
+            .any(|n| matches!(n, super::Notice::EngineStopped(_)));
+        assert!(!stopped, "{:?}", d.notices);
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Files set to open at fit width: the first pages to come in fill the column (its width less
+/// a page gap each side). `cargo test --release fit_width_waits_for_the_first_pages -- --ignored`.
+#[gpui_kit::test]
+#[ignore]
+fn fit_width_waits_for_the_first_pages(cx: &mut TestAppContext) {
+    let tex = "\\documentclass{article}\n\\begin{document}\nOne.\n\\end{document}\n";
+    let dir = scratch("fit", tex);
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_global(AppSettings {
+            default_zoom: crate::ui::settings::Zoom::FitWidth,
+            ..AppSettings::default()
+        });
+    });
+    engine::configure("", "/Library/TeX/texbin");
+    let (doc, cx) = cx.add_window_view(|window: &mut Window, cx| {
+        Doc::new(
+            dir.clone(),
+            "main.tex".into(),
+            Default::default(),
+            window,
+            cx,
+        )
+    });
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.0), gpui_kit::px(800.0)));
+    wait(cx, &doc, "the first layout", |d| {
+        !d.preview.pages.is_empty()
+    });
+    let (zoom, width) = cx.read(|cx| {
+        let d = doc.read(cx);
+        let w = d.preview.pages.values().next().unwrap().page_width.unwrap();
+        (d.zoom, super::page_px(w, d.zoom))
+    });
+    assert!(
+        (width - (1000.0 - 2.0 * super::PAGE_GAP)).abs() < 2.0,
+        "{width} at {zoom}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A 1×1 PNG.
 pub(super) const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,

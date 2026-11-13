@@ -10,6 +10,7 @@ pub use layout::MIN_WINDOW;
 pub use notices::place_notifications;
 mod project_panel;
 mod ribbon;
+pub mod tour;
 mod widgets;
 
 use files::*;
@@ -106,6 +107,8 @@ pub struct Workspace {
     rename_error: Option<String>,
     /// Files whose failed save was asked about already (later failures only notify).
     save_alerted: std::collections::HashSet<String>,
+    /// The tour, in its scratch project's window.
+    tour: Option<tour::Tour>,
     _subs: Vec<Subscription>,
     _rename_sub: Option<Subscription>,
     _dialog_subs: Vec<Subscription>,
@@ -141,6 +144,7 @@ impl Workspace {
             rename: None,
             rename_error: None,
             save_alerted: Default::default(),
+            tour: None,
             expanded: Default::default(),
             files_scroll: ScrollHandle::new(),
             outline_scroll: ScrollHandle::new(),
@@ -181,7 +185,23 @@ impl Workspace {
             }
         });
         this._subs.push(sub);
+        // the tree again when the settings change what it hides
+        let filter = |cx: &App| {
+            let s = settings::AppSettings::get(cx);
+            (s.show_hidden_files, s.hide_files.clone())
+        };
+        let mut shown = filter(cx);
+        this._subs
+            .push(cx.observe_global::<settings::AppSettings>(move |this, cx| {
+                if filter(cx) != shown {
+                    shown = filter(cx);
+                    this.refresh_tree(cx);
+                }
+            }));
         this.refresh_tree(cx);
+        if this.root == tour::dir() {
+            this.tour = Some(tour::Tour::new());
+        }
         match main.or_else(|| crate::engine::find_main(&this.root)) {
             Some(m) => this.open(m, window, cx),
             None => {
@@ -201,6 +221,44 @@ impl Workspace {
         self.tabs.get(self.active)
     }
 
+    /// rtex started in the documents that could not start it (it was downloaded since).
+    pub fn start_stopped(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for d in &self.tabs {
+            d.update(cx, |d, cx| d.start_if_stopped(window, cx));
+        }
+    }
+
+    /// rtex started again in every document (a TeX installed since: its PATH has it).
+    pub fn restart_engines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for d in &self.tabs {
+            d.update(cx, |d, cx| d.restart_engine(window, cx));
+        }
+    }
+
+    /// The open documents' build folders.
+    pub fn build_dirs(&self, cx: &App) -> Vec<PathBuf> {
+        self.tabs
+            .iter()
+            .map(|d| crate::engine::build_dir(&self.root, &d.read(cx).path))
+            .collect()
+    }
+
+    /// The PDF exported (the tour waits for it).
+    fn export(&mut self, cx: &mut Context<Self>) {
+        if let Some(t) = &mut self.tour {
+            t.exported = true;
+        }
+        self.with_doc(cx, |d, cx| d.export(cx));
+    }
+
+    /// The full LaTeX run started now (the tour waits for it).
+    fn recompile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(t) = &mut self.tour {
+            t.recompiled = true;
+        }
+        self.with_doc(cx, |d, cx| d.recompile(window, cx));
+    }
+
     fn with_doc(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut Doc, &mut Context<Doc>)) {
         if let Some(d) = self.doc() {
             d.update(cx, f);
@@ -210,6 +268,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.tour_check(cx);
         let theme = cx.theme().clone();
         window.set_window_edited(self.tabs.iter().any(|d| d.read(cx).dirty));
         // a click outside the page view (project panel, tabs, status bar) closes the source box
@@ -224,6 +283,7 @@ impl Render for Workspace {
                 .relative()
                 .size_full()
                 .child(self.render_inspector(window, cx))
+                .children(self.tour_mark("sidebar"))
                 .child(layout::measure(self.fit.right_w.clone()))
                 .into_any_element()
         } else {
@@ -255,17 +315,18 @@ impl Render for Workspace {
             let width = f32::from(window.viewport_size().width);
             notices::fit_notifications(below, beside, width, cx);
         }
-        let pages =
-            div()
-                .size_full()
-                .children(self.doc().cloned())
-                .when(self.tabs.is_empty(), |d| {
-                    d.flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(theme.muted_foreground)
-                        .child("Open a file from the project panel")
-                });
+        let pages = div()
+            .relative()
+            .size_full()
+            .children(self.tour_mark("pages"))
+            .children(self.doc().cloned())
+            .when(self.tabs.is_empty(), |d| {
+                d.flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.muted_foreground)
+                    .child("Open a file from the project panel")
+            });
         // the tabs and the ribbon across the whole width (the styles have room), the sidebar
         // beside the pages under them
         let center = div()
@@ -277,7 +338,12 @@ impl Render for Workspace {
                     .on_mouse_down(MouseButton::Left, cx.listener(leave))
                     .child(self.render_tabs(cx)),
             )
-            .children(self.render_ribbon(cx))
+            .child(
+                div()
+                    .relative()
+                    .children(self.render_ribbon(cx))
+                    .children(self.tour_mark("ribbon")),
+            )
             .child(
                 div().flex_1().min_h_0().child(
                     h_resizable("pages-sidebar")
@@ -292,6 +358,7 @@ impl Render for Workspace {
                 ),
             );
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -307,12 +374,8 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &CloseTab, window, cx| this.close(this.active, window, cx)),
             )
-            .on_action(
-                cx.listener(|this, _: &Export, _, cx| this.with_doc(cx, |d, cx| d.export(cx))),
-            )
-            .on_action(cx.listener(|this, _: &Recompile, window, cx| {
-                this.with_doc(cx, |d, cx| d.recompile(window, cx))
-            }))
+            .on_action(cx.listener(|this, _: &Export, _, cx| this.export(cx)))
+            .on_action(cx.listener(|this, _: &Recompile, window, cx| this.recompile(window, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
                 this.with_doc(cx, |d, cx| d.zoom_step(1, window, cx))
             }))
@@ -377,12 +440,14 @@ impl Render for Workspace {
                                             .visible(self.fit.left)
                                             .child(
                                                 div()
+                                                    .relative()
                                                     .size_full()
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(leave),
                                                     )
-                                                    .child(self.render_sidebar(cx)),
+                                                    .child(self.render_sidebar(cx))
+                                                    .children(self.tour_mark("files")),
                                             ),
                                     )
                                     .child(resizable_panel().child(center)),
@@ -402,6 +467,7 @@ impl Render for Workspace {
                     .on_mouse_down(MouseButton::Left, cx.listener(leave))
                     .child(self.render_status_bar(cx)),
             )
+            .children(self.render_tour(window, cx))
     }
 }
 

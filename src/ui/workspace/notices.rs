@@ -148,7 +148,9 @@ impl Workspace {
                     note
                 } else {
                     // done, so it goes by itself; hovering it holds it for the button
-                    with_action(note, "Open PDF", move |_, cx| cx.open_with_system(Path::new(&pdf)))
+                    with_action(note, "Open PDF", move |_, cx| {
+                        cx.open_with_system(Path::new(&pdf))
+                    })
                     .autohide(true)
                 }
             }

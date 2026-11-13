@@ -16,8 +16,8 @@ pub const MIN_WINDOW: (f32, f32) = (720.0, 480.0);
 #[derive(Default)]
 pub(super) struct Fit {
     /// The project panel, the sidebar, shown although the window is narrow (until it widens).
-    left_anyway: bool,
-    right_anyway: bool,
+    pub(super) left_anyway: bool,
+    pub(super) right_anyway: bool,
     pub(super) left: bool,
     pub(super) right: bool,
     /// The ribbon's width last frame.

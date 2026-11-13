@@ -23,7 +23,7 @@ use crate::document::{self, glyphmap};
 use crate::engine;
 use crate::render::{self, viewer};
 use crate::ui::palette;
-use crate::ui::settings::AppSettings;
+use crate::ui::settings::{AppSettings, TexView, Zoom};
 pub use formatting::{FormatOp, RibbonState};
 use futures::StreamExt;
 use gpui_kit::component::input::{
@@ -158,10 +158,26 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(crate::ui::keymap::fixed_key("right"), CaretRight, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("up"), CaretUp, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("down"), CaretDown, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("alt-left"), CaretWordLeft, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("alt-right"), CaretWordRight, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-left"), CaretLineStart, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-right"), CaretLineEnd, caret),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("alt-left"),
+            CaretWordLeft,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("alt-right"),
+            CaretWordRight,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-left"),
+            CaretLineStart,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-right"),
+            CaretLineEnd,
+            caret,
+        ),
         KeyBinding::new(crate::ui::keymap::fixed_key("home"), CaretLineStart, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("end"), CaretLineEnd, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-up"), CaretDocStart, caret),
@@ -169,43 +185,123 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(crate::ui::keymap::fixed_key("backspace"), Backspace, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("delete"), DeleteForward, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("enter"), NewParagraph, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-enter"), LineBreak, caret),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-enter"),
+            LineBreak,
+            caret,
+        ),
         KeyBinding::new(crate::ui::keymap::fixed_key("tab"), Indent, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("shift-tab"), Outdent, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("escape"), SelectCaretBlock, caret),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("escape"),
+            SelectCaretBlock,
+            caret,
+        ),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-v"), Paste, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-c"), Copy, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-x"), Cut, caret),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-a"), SelectAll, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-left"), SelectLeft, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-right"), SelectRight, caret),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-left"),
+            SelectLeft,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-right"),
+            SelectRight,
+            caret,
+        ),
         KeyBinding::new(crate::ui::keymap::fixed_key("shift-up"), SelectUp, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-down"), SelectDown, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("alt-shift-left"), SelectWordLeft, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("alt-shift-right"), SelectWordRight, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-shift-left"), SelectLineStart, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-shift-right"), SelectLineEnd, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-home"), SelectLineStart, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-end"), SelectLineEnd, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-shift-up"), SelectDocStart, caret),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-shift-down"), SelectDocEnd, caret),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-down"),
+            SelectDown,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("alt-shift-left"),
+            SelectWordLeft,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("alt-shift-right"),
+            SelectWordRight,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-shift-left"),
+            SelectLineStart,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-shift-right"),
+            SelectLineEnd,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-home"),
+            SelectLineStart,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-end"),
+            SelectLineEnd,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-shift-up"),
+            SelectDocStart,
+            caret,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-shift-down"),
+            SelectDocEnd,
+            caret,
+        ),
     ]);
     cx.bind_keys([
-        KeyBinding::new(crate::ui::keymap::fixed_key("escape"), CloseFind, Some("FindBar")),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-g"), FindNext, Some("FindBar")),
-        KeyBinding::new(crate::ui::keymap::fixed_key("cmd-shift-g"), FindPrev, Some("FindBar")),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("escape"),
+            CloseFind,
+            Some("FindBar"),
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-g"),
+            FindNext,
+            Some("FindBar"),
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("cmd-shift-g"),
+            FindPrev,
+            Some("FindBar"),
+        ),
     ]);
     let pages = Some("Pages");
     cx.bind_keys([
         KeyBinding::new(crate::ui::keymap::fixed_key("enter"), EditBlock, pages),
-        KeyBinding::new(crate::ui::keymap::fixed_key("backspace"), DeleteBlock, pages),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("backspace"),
+            DeleteBlock,
+            pages,
+        ),
         KeyBinding::new(crate::ui::keymap::fixed_key("delete"), DeleteBlock, pages),
         KeyBinding::new(crate::ui::keymap::fixed_key("up"), SelectPrevBlock, pages),
         KeyBinding::new(crate::ui::keymap::fixed_key("down"), SelectNextBlock, pages),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-up"), ExtendSelectionUp, pages),
-        KeyBinding::new(crate::ui::keymap::fixed_key("shift-down"), ExtendSelectionDown, pages),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-up"),
+            ExtendSelectionUp,
+            pages,
+        ),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("shift-down"),
+            ExtendSelectionDown,
+            pages,
+        ),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-a"), SelectAll, pages),
-        KeyBinding::new(crate::ui::keymap::fixed_key("escape"), ClearSelection, pages),
+        KeyBinding::new(
+            crate::ui::keymap::fixed_key("escape"),
+            ClearSelection,
+            pages,
+        ),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-c"), Copy, pages),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-x"), Cut, pages),
         KeyBinding::new(crate::ui::keymap::fixed_key("cmd-v"), Paste, pages),
@@ -469,7 +565,11 @@ impl Doc {
             versions: HashMap::new(),
             inflight: HashSet::new(),
             live: None,
-            zoom: (AppSettings::get(cx).default_zoom / 100.0) as f32,
+            // fit width waits for the first pages
+            zoom: match AppSettings::get(cx).default_zoom {
+                Zoom::Percent(p) => (p / 100.0) as f32,
+                Zoom::FitWidth => 1.0,
+            },
             zoomed_at: Instant::now(),
             scroll: ScrollHandle::new(),
             page_bounds: Default::default(),
@@ -486,7 +586,7 @@ impl Doc {
             focus: cx.focus_handle(),
             input,
             code,
-            source_mode: false,
+            source_mode: tex && AppSettings::get(cx).open_tex_in == TexView::Source,
             code_opts: (true, true),
             autosave: None,
             active: None,
@@ -557,7 +657,8 @@ impl Doc {
                 self.notices.push(Notice::EngineMissing(e));
             }
         }
-        self._tasks.push(cx.spawn_in(window, async move |this, cx| {
+        // the last rtex's messages end here: its exit must not stop this one
+        self._tasks = vec![cx.spawn_in(window, async move |this, cx| {
             while let Some(msg) = rx.next().await {
                 if this
                     .update_in(cx, |this, window, cx| this.on_msg(msg, window, cx))
@@ -566,7 +667,7 @@ impl Doc {
                     break;
                 }
             }
-        }));
+        })];
     }
 
     /// Free the page images in the window's texture atlas (when the tab closes).
@@ -624,6 +725,25 @@ impl Doc {
         cx.notify();
     }
 
+    /// rtex stopped and started again (a TeX file only), on the file saved first: rtex reads
+    /// it from disk.
+    pub fn restart_engine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.tex {
+            return;
+        }
+        self.save(cx);
+        self.rtex = None;
+        self.start_if_stopped(window, cx);
+    }
+
+    /// rtex started if it is not running (a TeX file only).
+    pub fn start_if_stopped(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.rtex.is_none() && self.tex {
+            self.start_engine(window, cx);
+            cx.notify();
+        }
+    }
+
     /// Ask where, then have rtex typeset the whole document into a PDF there.
     pub fn export(&mut self, cx: &mut Context<Self>) {
         if self.rtex.is_none() {
@@ -665,6 +785,7 @@ impl Render for Doc {
         let st = AppSettings::get(cx).clone();
         let fs = st.source_font_size as f32;
         if !self.tex || self.source_mode {
+            let family = st.source_family();
             // follow the line-number and wrap settings (set only on change: setting them redraws)
             if self.code_opts != (st.line_numbers, st.soft_wrap) {
                 self.code_opts = (st.line_numbers, st.soft_wrap);
@@ -676,13 +797,13 @@ impl Render for Doc {
             return div()
                 .size_full()
                 .bg(theme.background)
-                .font_family(MONO)
+                .font_family(family.clone())
                 .child(
                     Editor::new(&self.code)
                         .h_full()
                         .appearance(false)
                         .bordered(false)
-                        .font_family(MONO)
+                        .font_family(family)
                         .text_size(px(fs)),
                 )
                 .into_any_element();
@@ -762,7 +883,12 @@ impl Render for Doc {
                         )
                     })
                     .child(div().text_sm().child(title))
-                    .child(div().text_xs().text_color(muted).child(crate::ui::keys_in(detail)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(crate::ui::keys_in(detail)),
+                    )
                     .into_any_element(),
             );
         }
@@ -912,9 +1038,11 @@ impl Render for Doc {
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.leave(window, cx)),
             )
-            .on_pinch(cx.listener(|this, ev: &PinchEvent, window, cx| {
-                this.set_zoom(this.zoom * (1.0 + ev.delta), Some(ev.position), window, cx)
-            }))
+            .when(st.pinch_zoom, |v| {
+                v.on_pinch(cx.listener(|this, ev: &PinchEvent, window, cx| {
+                    this.set_zoom(this.zoom * (1.0 + ev.delta), Some(ev.position), window, cx)
+                }))
+            })
             .child(
                 div()
                     .id("page-column")

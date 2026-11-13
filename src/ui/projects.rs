@@ -1,15 +1,18 @@
 // The projects (folders) opened before, newest first, kept in projects.json beside the
 // settings; each is marked open while its window is, and stays so when the app quits. At launch
 // the app opens again those still open; with none, the welcome window lists them all.
-use crate::ui::settings::support_dir;
+use crate::ui::settings::{AppSettings, OnLaunch, support_dir};
 use crate::ui::welcome;
-use crate::ui::workspace::{MIN_WINDOW, TITLE_BAR_H, Workspace};
+use crate::ui::workspace::{MIN_WINDOW, TITLE_BAR_H, Workspace, tour};
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-actions!(realtime_tex, [NewProject, OpenProject, CloseProject]);
+actions!(
+    realtime_tex,
+    [NewProject, OpenProject, CloseProject, ShowTour]
+);
 
 /// A project opened before.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -33,9 +36,6 @@ pub struct Projects {
 }
 
 impl Global for Projects {}
-
-/// How many projects the list keeps.
-const KEPT: usize = 30;
 
 fn file() -> PathBuf {
     support_dir().join("projects.json")
@@ -71,6 +71,7 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &NewProject, cx| new_project(cx));
     cx.on_action(|_: &OpenProject, cx| choose_and_open(cx));
+    cx.on_action(|_: &ShowTour, cx| start_tour(cx));
     cx.on_action(|_: &CloseProject, cx| {
         let active = cx.active_window();
         let found = cx
@@ -87,7 +88,8 @@ pub fn init(cx: &mut App) {
     // what each window shows is remembered, and nothing typed is lost; they stay open
     cx.on_app_quit(|cx| {
         let windows = cx.global::<Projects>().windows.clone();
-        for (root, _, ws) in windows {
+        // the tour is not reopened: its copy goes with it
+        for (root, _, ws) in windows.into_iter().filter(|w| w.0 != tour::dir()) {
             let shown = ws
                 .update(cx, |ws, cx| {
                     ws.save_all(cx);
@@ -95,9 +97,18 @@ pub fn init(cx: &mut App) {
                 })
                 .ok()
                 .flatten();
-            record(&mut cx.global_mut::<Projects>().list, &root, shown, true);
+            let keep = AppSettings::get(cx).recent_kept;
+            record(
+                &mut cx.global_mut::<Projects>().list,
+                &root,
+                shown,
+                true,
+                keep,
+            );
         }
         cx.global::<Projects>().save();
+        // an install half done is removed rather than left to look finished
+        crate::engine::cancel_tex_install();
         async {}
     })
     .detach();
@@ -113,12 +124,29 @@ pub fn reopened(cx: &mut App) {
 /// At launch: `arg` (a folder or a .tex file), else the projects open when the app quit, else
 /// the welcome window.
 pub fn start(arg: Option<PathBuf>, cx: &mut App) {
+    // a tour's copy a crash left behind
+    tour::remove();
+    if AppSettings::get(cx).download_rtex {
+        ensure_rtex(cx);
+    }
     if let Some(p) = arg {
         return open(&p, cx);
     }
-    let again = to_reopen(&cx.global::<Projects>().list);
+    let again = to_reopen(
+        &cx.global::<Projects>().list,
+        AppSettings::get(cx).on_launch,
+    );
     if again.is_empty() {
-        return show_welcome(cx);
+        // the very first launch: the tour, unless it could not typeset anything (rtex still
+        // downloading starts it once there)
+        if first_launch(cx) && crate::engine::find_lualatex().is_none() {
+            crate::ui::tex_setup::open_tex_setup(cx);
+        }
+        return if first_launch(cx) && welcome::setup_ok() {
+            start_tour(cx)
+        } else {
+            show_welcome(cx)
+        };
     }
     // the newest last, so its window is in front and it stays first in the list
     for r in again.into_iter().rev() {
@@ -155,6 +183,111 @@ pub fn choose_and_open(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// rtex being downloaded (it was nowhere the app looks), or why it could not be.
+#[derive(Default, Clone, PartialEq)]
+pub enum RtexDownload {
+    #[default]
+    Idle,
+    Running,
+    Failed(String),
+}
+
+impl Global for RtexDownload {}
+
+/// rtex downloaded for the app when it is nowhere else; then the documents that could not start
+/// it start it, and a first launch that waited for it starts the tour.
+pub fn ensure_rtex(cx: &mut App) {
+    if !crate::engine::needs_download()
+        || cx.try_global::<RtexDownload>() == Some(&RtexDownload::Running)
+    {
+        return;
+    }
+    cx.set_global(RtexDownload::Running);
+    cx.refresh_windows();
+    let task = cx
+        .background_executor()
+        .spawn(async { crate::engine::download_rtex() });
+    cx.spawn(async move |cx| {
+        let got = task.await;
+        cx.update(|cx| {
+            cx.set_global(match &got {
+                Ok(_) => RtexDownload::Idle,
+                Err(e) => RtexDownload::Failed(e.clone()),
+            });
+            if got.is_ok() {
+                for (_, handle, ws) in cx.global::<Projects>().windows.clone() {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        ws.update(cx, |ws, cx| ws.start_stopped(window, cx))
+                    });
+                }
+                if first_launch(cx) && welcome::setup_ok() {
+                    start_tour(cx);
+                }
+            }
+            cx.refresh_windows();
+        })
+    })
+    .detach();
+}
+
+/// LuaLaTeX there now (installed, or found by Check Again): the documents' rtex started again on
+/// it, and a first launch that waited for it takes the tour.
+pub fn tex_installed(cx: &mut App) {
+    restart_engines(cx);
+    if first_launch(cx) && welcome::setup_ok() {
+        start_tour(cx);
+    }
+}
+
+/// rtex started again in every open document (on new engine settings, or a TeX installed).
+pub fn restart_engines(cx: &mut App) {
+    let Some(p) = cx.try_global::<Projects>() else {
+        return;
+    };
+    for (_, handle, ws) in p.windows.clone() {
+        let _ = handle.update(cx, |_, window, cx| {
+            ws.update(cx, |ws, cx| ws.restart_engines(window, cx))
+        });
+    }
+}
+
+/// The build folders of every open document (their rtex is using them).
+pub fn open_build_dirs(cx: &App) -> Vec<PathBuf> {
+    let Some(p) = cx.try_global::<Projects>() else {
+        return vec![];
+    };
+    p.windows
+        .iter()
+        .filter_map(|w| w.2.upgrade())
+        .flat_map(|ws| ws.read(cx).build_dirs(cx))
+        .collect()
+}
+
+/// Nothing opened yet, ever, and the tour not seen: the first launch.
+fn first_launch(cx: &App) -> bool {
+    let p = cx.global::<Projects>();
+    p.list.is_empty()
+        && p.windows.is_empty()
+        && !crate::ui::settings::AppSettings::get(cx).tour_seen
+}
+
+/// The tour, in a fresh copy of its project (or its window to the front, when it is open). Seen
+/// once started: closing it does not bring it back.
+pub fn start_tour(cx: &mut App) {
+    crate::ui::settings::AppSettings::set(cx, |s| s.tour_seen = true);
+    let dir = tour::dir();
+    if cx.global::<Projects>().windows.iter().any(|w| w.0 == dir) {
+        return open_in(dir, None, cx);
+    }
+    match tour::create() {
+        Ok(d) => open_in(d, Some("main.tex".into()), cx),
+        Err(e) => welcome::report(
+            format!("Couldn’t start the tour: {}", crate::ui::plain_error(&e)),
+            cx,
+        ),
+    }
 }
 
 /// Ask where a new project goes, make its folder with a main.tex, and open it.
@@ -263,9 +396,13 @@ fn open_in(root: PathBuf, file: Option<String>, cx: &mut App) {
     let p = cx.global_mut::<Projects>();
     p.windows.push((root.clone(), handle, ws.downgrade()));
     let shown = ws.read(cx).shown_file(cx);
+    let keep = AppSettings::get(cx).recent_kept;
     let p = cx.global_mut::<Projects>();
-    record(&mut p.list, &root, shown, true);
-    p.save();
+    // the tour's scratch copy is not one of the projects
+    if root != tour::dir() {
+        record(&mut p.list, &root, shown, true, keep);
+        p.save();
+    }
     // a project open: the welcome window has done its work
     if let Some(w) = p.welcome.take() {
         let _ = w.update(cx, |_, window, _| window.remove_window());
@@ -277,11 +414,16 @@ fn open_in(root: PathBuf, file: Option<String>, cx: &mut App) {
 fn closing(root: &Path, ws: &WeakEntity<Workspace>, cx: &mut App) {
     let shown = ws
         .update(cx, |ws, cx| {
+            ws.tour_end(cx);
             ws.save_all(cx);
             ws.shown_file(cx)
         })
         .ok()
         .flatten();
+    if root == tour::dir() {
+        // after the window (and its rtex) is gone
+        cx.defer(|_| tour::remove());
+    }
     let p = cx.global_mut::<Projects>();
     p.windows.retain(|w| w.0 != root);
     if let Some(r) = p.list.iter_mut().find(|r| r.root == root) {
@@ -319,8 +461,9 @@ pub fn forget(root: &Path, cx: &mut App) {
     p.save();
 }
 
-/// `root` first in `list`, open or not, showing `file` (else what it showed before).
-fn record(list: &mut Vec<Recent>, root: &Path, file: Option<String>, open: bool) {
+/// `root` first in `list`, open or not, showing `file` (else what it showed before); the list
+/// cut to `keep`.
+fn record(list: &mut Vec<Recent>, root: &Path, file: Option<String>, open: bool, keep: usize) {
     let before = list
         .iter()
         .position(|r| r.root == root)
@@ -333,20 +476,23 @@ fn record(list: &mut Vec<Recent>, root: &Path, file: Option<String>, open: bool)
             open,
         },
     );
-    list.truncate(KEPT);
+    // a hand-edited 0 would empty the list
+    list.truncate(keep.max(1));
 }
 
-/// The projects to open again at launch: those open when the app quit, still there.
-fn to_reopen(list: &[Recent]) -> Vec<Recent> {
+/// The projects to open again at launch: those open when the app quit, still there (none when
+/// launching shows the welcome window).
+fn to_reopen(list: &[Recent], on_launch: OnLaunch) -> Vec<Recent> {
     list.iter()
-        .filter(|r| r.open && r.root.is_dir())
+        .filter(|r| on_launch == OnLaunch::Reopen && r.open && r.root.is_dir())
         .cloned()
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{KEPT, Recent, create, record, to_reopen};
+    use super::{Recent, create, record, to_reopen};
+    use crate::ui::settings::OnLaunch;
     use std::path::{Path, PathBuf};
 
     fn r(root: &str, open: bool) -> Recent {
@@ -361,17 +507,27 @@ mod tests {
     fn the_newest_comes_first_once_and_keeps_its_file() {
         let mut list = vec![r("/a", false), r("/b", false)];
         list[1].file = Some("ch1.tex".into());
-        record(&mut list, Path::new("/b"), None, true);
+        record(&mut list, Path::new("/b"), None, true, 30);
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].root, PathBuf::from("/b"));
         assert!(list[0].open);
         assert_eq!(list[0].file.as_deref(), Some("ch1.tex"));
-        record(&mut list, Path::new("/b"), Some("main.tex".into()), true);
+        record(
+            &mut list,
+            Path::new("/b"),
+            Some("main.tex".into()),
+            true,
+            30,
+        );
         assert_eq!(list[0].file.as_deref(), Some("main.tex"));
         for i in 0..40 {
-            record(&mut list, Path::new(&format!("/p{i}")), None, false);
+            record(&mut list, Path::new(&format!("/p{i}")), None, false, 30);
         }
-        assert_eq!(list.len(), KEPT);
+        assert_eq!(list.len(), 30);
+        // fewer kept: the oldest go at the next one opened
+        record(&mut list, Path::new("/q"), None, false, 5);
+        assert_eq!(list.len(), 5);
+        assert_eq!(list[0].root, PathBuf::from("/q"));
     }
 
     #[test]
@@ -382,9 +538,10 @@ mod tests {
             r("/no/such/folder", true),
             r("/", false),
         ];
-        let again = to_reopen(&list);
+        let again = to_reopen(&list, OnLaunch::Reopen);
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].root, here);
+        assert!(to_reopen(&list, OnLaunch::Welcome).is_empty());
     }
 
     #[test]

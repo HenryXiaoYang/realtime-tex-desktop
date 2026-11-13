@@ -51,7 +51,7 @@ impl Doc {
                 query,
                 with,
                 replacing: replace,
-                case: false,
+                case: AppSettings::get(cx).find_match_case,
                 matches: vec![],
                 current: None,
                 _subs: subs,

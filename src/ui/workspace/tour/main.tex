@@ -1,0 +1,37 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+
+\title{A Tour of Realtime Tex Desktop}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Write on the pages}
+
+Click anywhere in this sentence and type a few words. They go into the TeX file, and the page sets them as LaTeX will print them; Return starts a new paragraph.
+
+\section{The source box}
+
+Click this formula to see its TeX: $e^{i\pi} + 1 = 0$. The box shows the typeset result under it as you type. Click outside it, or press Escape, to close it.
+
+\section{Formatting}
+
+Double-click a word in this paragraph, then make it bold with the B on the ribbon. The ribbon writes the LaTeX for you, so you never type \texttt{\textbackslash textbf} yourself.
+
+\input{chapter}
+
+\section{When TeX breaks}
+
+Delete the closing brace after the 2 in $\frac{1}{2}$. LaTeX can't typeset that, so the pages keep showing the document from before, and Problems in the status bar lists the error. Undo puts the brace back.
+
+\section{Full runs}
+
+Paragraphs update as you type. Page breaks, cross-references and the table of contents come from a full LaTeX run, which follows a moment later; Recompile runs one now.
+
+\section{Export}
+
+When you are done, Export PDF typesets the whole document into a PDF file.
+
+\end{document}

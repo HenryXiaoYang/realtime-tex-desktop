@@ -256,7 +256,12 @@ impl Doc {
             .active
             .as_ref()
             .is_some_and(|a| a.frame && range.as_ref().is_some_and(|r| r.start == a.range.start));
-        let strip = div().id(kind).w(px(w)).flex_none().font_family(MONO);
+        let family = AppSettings::get(cx).source_family();
+        let strip = div()
+            .id(kind)
+            .w(px(w))
+            .flex_none()
+            .font_family(family.clone());
         if editing {
             return strip
                 .p(px(4.0 * self.zoom))
@@ -265,7 +270,7 @@ impl Doc {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child({
                     let fs = AppSettings::get(cx).source_font_size as f32 * self.zoom;
-                    self.box_editor(w - 8.0 * self.zoom, fs, fs * 1.4, 0.0, MONO, cx)
+                    self.box_editor(w - 8.0 * self.zoom, fs, fs * 1.4, 0.0, family, cx)
                 })
                 .into_any_element();
         }

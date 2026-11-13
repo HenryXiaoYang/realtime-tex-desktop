@@ -2,11 +2,12 @@
 // ↑ ↓ and Return to open one) and the way to start a new one or open a folder. ↓ takes the keys
 // from the search to the list, where VoiceOver hears the project at hand; typing goes back.
 use crate::ui::Tip;
-use crate::ui::projects::{self, Projects, Recent};
+use crate::ui::projects::{self, Projects, Recent, RtexDownload};
+use crate::ui::tex_setup::{TexInstall, open_tex_setup};
 use crate::ui::workspace::{CloseTab, open_settings};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, TitleBar};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName, Sizable, TitleBar};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::HashSet;
@@ -23,7 +24,15 @@ pub struct Welcome {
     /// The projects whose folders are gone, as of the window's coming to the front (a folder
     /// on a disk that hangs costs one look, not one a frame).
     missing: HashSet<PathBuf>,
+    /// rtex, lualatex not found (looked for again as the window comes to the front).
+    no_rtex: bool,
+    no_tex: bool,
     _subs: Vec<Subscription>,
+}
+
+/// rtex and lualatex both found: the pages can be typeset.
+pub fn setup_ok() -> bool {
+    crate::engine::rtex_found() && crate::engine::find_lualatex().is_some()
 }
 
 /// Open the welcome window.
@@ -71,8 +80,18 @@ impl Welcome {
         let front = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.check_folders(cx);
+                this.check_tools();
                 cx.notify();
             }
+        });
+        // rtex downloaded, or not: looked for again
+        let download = cx.observe_global::<RtexDownload>(|this, cx| {
+            this.check_tools();
+            cx.notify();
+        });
+        let installing = cx.observe_global::<TexInstall>(|this, cx| {
+            this.check_tools();
+            cx.notify();
         });
         let mut this = Self {
             search,
@@ -80,10 +99,90 @@ impl Welcome {
             selected: 0,
             scroll: ScrollHandle::new(),
             missing: HashSet::new(),
-            _subs: vec![typed, front],
+            no_rtex: false,
+            no_tex: false,
+            _subs: vec![typed, front, download, installing],
         };
         this.check_folders(cx);
+        this.check_tools();
         this
+    }
+
+    fn check_tools(&mut self) {
+        self.no_rtex = !crate::engine::rtex_found();
+        self.no_tex = crate::engine::find_lualatex().is_none();
+    }
+
+    /// What is missing for the pages to typeset, and the way to get it.
+    fn setup(&self, cx: &App) -> Option<impl IntoElement + use<>> {
+        if !self.no_rtex && !self.no_tex {
+            return None;
+        }
+        let theme = cx.theme();
+        let line = |text: String, button: Button| {
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    Icon::default()
+                        .path("icons/triangle-alert.svg")
+                        .small()
+                        .text_color(theme.warning),
+                )
+                .child(div().flex_1().min_w_0().text_sm().child(text))
+                .child(button.small().outline().flex_shrink_0())
+        };
+        Some(
+            div()
+                .id("setup")
+                .mx_5()
+                .mt_3()
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.warning)
+                .role(Role::Alert)
+                .when(self.no_rtex, |d| {
+                    let get = |label: &'static str| {
+                        Button::new("setup-rtex")
+                            .label(label)
+                            .on_click(|_, _, cx| projects::ensure_rtex(cx))
+                    };
+                    d.child(match cx.try_global::<RtexDownload>() {
+                        Some(RtexDownload::Running) => line(
+                            "Downloading rtex, the engine that typesets the pages…".into(),
+                            Button::new("setup-rtex").label("Downloading…").disabled(true),
+                        ),
+                        Some(RtexDownload::Failed(why)) => line(
+                            format!("Couldn’t download rtex ({why}). Check the connection and try again, or choose an rtex binary in Settings."),
+                            get("Try Again"),
+                        ),
+                        _ => line(
+                            "rtex, the engine that typesets the pages, isn’t here yet.".into(),
+                            get("Download rtex"),
+                        ),
+                    })
+                })
+                .when(self.no_tex, |d| {
+                    let text = match cx.try_global::<TexInstall>() {
+                        Some(TexInstall::Running(p)) => format!(
+                            "Installing TeX Live for LuaLaTeX: {:.0}% done.",
+                            p.fraction() * 100.0
+                        ),
+                        _ => "LuaLaTeX isn’t installed, so no page can be typeset.".into(),
+                    };
+                    d.child(line(
+                        text,
+                        Button::new("setup-tex")
+                            .label("Set Up LaTeX…")
+                            .on_click(|_, _, cx| open_tex_setup(cx)),
+                    ))
+                }),
+        )
     }
 
     /// Which projects' folders are gone.
@@ -218,6 +317,7 @@ impl Welcome {
             )
             .child(new_button("welcome-new").primary().flex_shrink_0())
             .child(open_button("welcome-open").outline().flex_shrink_0())
+            .child(tour_button("welcome-tour").ghost().flex_shrink_0())
     }
 
     fn row(&self, ix: usize, r: &Recent, in_list: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -377,7 +477,8 @@ impl Welcome {
                     .justify_center()
                     .gap_3()
                     .child(new_button("first-new").primary().large())
-                    .child(open_button("first-open").outline().large()),
+                    .child(open_button("first-open").outline().large())
+                    .child(tour_button("first-tour").ghost().large()),
             )
     }
 }
@@ -396,6 +497,14 @@ fn open_button(id: &'static str) -> Button {
         .label("Open")
         .tooltip(crate::ui::keys_in("Open a folder or a .tex file (⌘O)"))
         .on_click(|_, _, cx| projects::choose_and_open(cx))
+}
+
+fn tour_button(id: &'static str) -> Button {
+    Button::new(id)
+        .icon(Icon::default().path("icons/compass.svg"))
+        .label("Tour")
+        .tooltip("How the app works, step by step, in a scratch project")
+        .on_click(|_, _, cx| projects::start_tour(cx))
 }
 
 /// A project's tile: its initials on a colour of its own (gray when its folder is gone).
@@ -563,6 +672,7 @@ impl Render for Welcome {
                     .bg(theme.title_bar)
                     .border_color(theme.title_bar_border),
             )
+            .children(self.setup(cx))
             .child(div().flex_1().min_h_0().flex().child(body))
     }
 }

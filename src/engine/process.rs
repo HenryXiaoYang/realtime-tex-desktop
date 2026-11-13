@@ -23,7 +23,7 @@ pub fn stop_all() {
 
 /// Process group `pgid` ended: rtex and any lualatex it left running.
 #[cfg(unix)]
-fn kill_group(pgid: u32) {
+pub(super) fn kill_group(pgid: u32) {
     let _ = Command::new("/bin/kill")
         .args(["-KILL", "--", &format!("-{pgid}")])
         .stderr(Stdio::null())
@@ -32,7 +32,7 @@ fn kill_group(pgid: u32) {
 
 /// Windows has no process groups to signal: rtex's process tree ended instead.
 #[cfg(windows)]
-fn kill_group(pid: u32) {
+pub(super) fn kill_group(pid: u32) {
     let _ = Command::new("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
@@ -57,7 +57,7 @@ impl Rtex {
         tx: futures::channel::mpsc::UnboundedSender<Msg>,
     ) -> Result<Self, String> {
         let main = main_for(root, file);
-        let bin = find_binary().ok_or("rtex isn’t installed where the app looks. Install the Realtime TeX extension in VS Code, or choose the rtex binary in Settings › Engine")?;
+        let bin = find_binary().ok_or("rtex isn’t downloaded yet: the app gets it when it starts and is online. Or choose an rtex binary in Settings › Typesetting")?;
         let mut cmd = Command::new(&bin);
         // its own process group, so that rtex and its LaTeX runs end together
         #[cfg(unix)]
@@ -77,7 +77,7 @@ impl Rtex {
             .spawn()
             .map_err(|e| {
                 format!(
-                    "{} didn’t run ({e}). Choose another rtex binary in Settings › Engine",
+                    "{} didn’t run ({e}). Choose another rtex binary in Settings › Typesetting",
                     bin.display()
                 )
             })?;
@@ -180,9 +180,9 @@ pub fn configure_serve(args: Vec<String>) {
     *SERVE_ARGS.write().unwrap() = args;
 }
 
-/// The binary from the settings, else $RTEX_BIN, else `rtex` on PATH, else the newest copy the
-/// VS Code extension downloaded.
-fn find_binary() -> Option<PathBuf> {
+/// The binary from the settings, else $RTEX_BIN, else `rtex` on PATH, else the copy inside the
+/// app, else the newest one the app downloaded.
+pub(super) fn find_binary() -> Option<PathBuf> {
     let configured = CONFIG.read().unwrap().0.clone();
     if !configured.is_empty() {
         return Some(configured.into());
@@ -206,16 +206,7 @@ fn find_binary() -> Option<PathBuf> {
     {
         return Some(p);
     }
-    let dir = data_dir().join("Code/User/globalStorage/henryxiaoyang.realtime-tex/rtex-release");
-    let mut versions: Vec<PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path().join("bin").join(&exe))
-        .filter(|p| p.is_file())
-        .collect();
-    // shortcut: string order of tags (v0.0.6 < v0.0.10 sorts wrong), fine while there are few releases
-    versions.sort();
-    versions.pop()
+    super::download::downloaded()
 }
 
 /// The project's main file: main.tex, else the first .tex at its top with \documentclass.
@@ -255,12 +246,36 @@ pub fn build_dir(root: &Path, main: &str) -> PathBuf {
     cache_dir().join(format!("realtime-tex-desktop/{:016x}", h.finish()))
 }
 
-fn home() -> PathBuf {
+/// Every build folder removed but those in `keep` (the open documents', in use by their rtex).
+pub fn clear_build_cache(keep: &[PathBuf]) {
+    clear_builds(&cache_dir().join("realtime-tex-desktop"), keep);
+}
+
+fn clear_builds(dir: &Path, keep: &[PathBuf]) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        // only what build_dir names: nothing else that may share the folder
+        let build = name.len() == 16 && name.bytes().all(|b| b.is_ascii_hexdigit());
+        if build && !keep.contains(&e.path()) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
+pub(super) fn home() -> PathBuf {
     std::env::home_dir().unwrap_or_default()
 }
 
+/// The app's own folder: its settings, its projects list, the rtex it downloaded.
+pub fn app_dir() -> PathBuf {
+    data_dir().join("Realtime Tex Desktop")
+}
+
 /// Where apps keep what they remember: ~/Library/Application Support, %APPDATA%, ~/.config.
-pub fn data_dir() -> PathBuf {
+fn data_dir() -> PathBuf {
     let env = |k| std::env::var_os(k).map(PathBuf::from);
     if cfg!(target_os = "macos") {
         home().join("Library/Application Support")
@@ -323,10 +338,38 @@ pub fn kpsewhich(name: &str) -> Option<PathBuf> {
 pub fn tex_path() -> std::ffi::OsString {
     let extra = CONFIG.read().unwrap().1.clone();
     let mut dirs: Vec<PathBuf> = std::env::split_paths(&extra).collect();
-    dirs.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
     if cfg!(target_os = "macos") {
-        dirs.extend(["/Library/TeX/texbin", "/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from));
+        dirs.extend(
+            ["/Library/TeX/texbin", "/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from),
+        );
     }
+    // the TeX Live the app installed, last: one of the system's own comes first
+    dirs.extend(super::tex_install::own_tex_bin());
     dirs.retain(|d| !d.as_os_str().is_empty());
     std::env::join_paths(dirs).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clear_builds;
+
+    #[test]
+    fn clearing_keeps_the_open_documents_builds_and_what_is_not_a_build() {
+        let dir = std::env::temp_dir().join(format!("rtd-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for d in ["0123456789abcdef", "fedcba9876543210", "texlive"] {
+            std::fs::create_dir_all(dir.join(d).join("bg")).unwrap();
+        }
+        clear_builds(&dir, &[dir.join("fedcba9876543210")]);
+        assert!(
+            !dir.join("0123456789abcdef").exists(),
+            "a closed document's build goes"
+        );
+        assert!(dir.join("fedcba9876543210").exists(), "an open one's stays");
+        assert!(dir.join("texlive").exists(), "not a build folder");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

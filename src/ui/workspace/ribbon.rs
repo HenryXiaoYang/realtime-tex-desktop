@@ -459,14 +459,19 @@ impl Workspace {
         let bottom = div()
             .flex()
             .gap_0p5()
-            .child(inline(
-                self,
-                "rb-bold",
-                "icons/bold.svg",
-                "Bold (⌘B)",
-                "textbf",
-                cx,
-            ))
+            .child(
+                div()
+                    .relative()
+                    .child(inline(
+                        self,
+                        "rb-bold",
+                        "icons/bold.svg",
+                        "Bold (⌘B)",
+                        "textbf",
+                        cx,
+                    ))
+                    .children(self.tour_mark("bold")),
+            )
             .child(inline(
                 self,
                 "rb-italic",

@@ -4,8 +4,10 @@
 use crate::ui::Tip;
 use crate::ui::keymap;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{CursorBlink, Input, InputEvent, InputState};
 use gpui_kit::component::setting::{
-    NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
+    NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+    Settings,
 };
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, ThemeRegistry, TitleBar,
@@ -13,6 +15,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -22,16 +25,42 @@ pub struct AppSettings {
     pub ui_font_size: f64,
     /// Pages on dark paper in the dark theme.
     pub dark_pages: bool,
+    /// The caret blinks (the pages' and every text field's).
+    pub cursor_blink: bool,
     /// The Source mode editor and the preamble strip, at 100% zoom.
     pub source_font_size: f64,
+    /// Their font family; empty: Menlo.
+    pub source_font: String,
     /// The source box on the page: a font family, or empty for the document's own font.
     pub source_box_font: String,
-    /// Zoom a file opens at, in percent.
-    pub default_zoom: f64,
+    /// The zoom a file opens at.
+    pub default_zoom: Zoom,
+    /// A .tex file opens in Visual mode (its pages) or Source mode.
+    pub open_tex_in: TexView,
+    /// A pinch on the trackpad zooms the pages.
+    pub pinch_zoom: bool,
     /// A formula's typeset result under its source while it is edited.
     pub live_preview: bool,
+    /// A `\` typed on the pages opens the paragraph's source there; off, it is typed as text.
+    pub backslash_opens_source: bool,
     pub line_numbers: bool,
     pub soft_wrap: bool,
+    /// The LaTeX completion menu opens as you type.
+    pub autocomplete: bool,
+    /// Find starts out matching case.
+    pub find_match_case: bool,
+    /// At launch: the projects open when the app quit, or the welcome window.
+    pub on_launch: OnLaunch,
+    /// How many projects the recent list keeps.
+    pub recent_kept: usize,
+    /// rtex fetched at launch when it is nowhere the app looks.
+    pub download_rtex: bool,
+    /// The file tree shows names starting with a dot.
+    pub show_hidden_files: bool,
+    /// Names the file tree leaves out: comma-separated patterns (`*` any run, `?` one character).
+    pub hide_files: String,
+    /// The deepest heading the outline lists.
+    pub outline_depth: OutlineDepth,
     /// Save a file `autosave_delay` seconds after the last edit.
     pub autosave: bool,
     pub autosave_delay: f64,
@@ -43,7 +72,7 @@ pub struct AppSettings {
     pub picture_cache: bool,
     /// Where rtex writes a bundle per engine failure (`--debug-dir`); empty: none.
     pub debug_dir: String,
-    /// The rtex binary; empty finds it ($RTEX_BIN, PATH, the VS Code extension's copy).
+    /// The rtex binary; empty finds it ($RTEX_BIN, PATH, the app's own copy).
     pub rtex_path: String,
     /// Folders with lualatex and kpsewhich, added to PATH.
     pub tex_bin: String,
@@ -51,8 +80,53 @@ pub struct AppSettings {
     pub ribbon_collapsed: bool,
     /// The sidebar on the right closed (it stays so until shown again).
     pub inspector_closed: bool,
+    /// The tour was started once (the first launch starts it no more).
+    pub tour_seen: bool,
     /// Shortcuts changed from their defaults: command to key (empty: none).
     pub shortcuts: std::collections::BTreeMap<String, String>,
+}
+
+/// The zoom a file opens at: saved as a number, or null for fit width (a number is what
+/// settings files from before fit width hold).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum Zoom {
+    Percent(f64),
+    FitWidth,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TexView {
+    #[default]
+    Visual,
+    Source,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnLaunch {
+    #[default]
+    Reopen,
+    Welcome,
+}
+
+/// Each is how many heading levels the outline lists.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutlineDepth {
+    Sections = 1,
+    Subsections = 2,
+    #[default]
+    Subsubsections = 3,
+    Paragraphs = 4,
+}
+
+impl OutlineDepth {
+    /// Whether the outline lists a heading of `level` (0: \section).
+    pub fn shows(self, level: usize) -> bool {
+        level < self as usize
+    }
 }
 
 impl Default for AppSettings {
@@ -61,12 +135,25 @@ impl Default for AppSettings {
             theme: "system".into(),
             ui_font_size: 16.0,
             dark_pages: true,
+            cursor_blink: true,
             source_font_size: 13.0,
+            source_font: String::new(),
             source_box_font: String::new(),
-            default_zoom: 100.0,
+            default_zoom: Zoom::Percent(100.0),
+            open_tex_in: TexView::Visual,
+            pinch_zoom: true,
             live_preview: true,
+            backslash_opens_source: true,
             line_numbers: true,
             soft_wrap: true,
+            autocomplete: true,
+            find_match_case: false,
+            on_launch: OnLaunch::Reopen,
+            recent_kept: 30,
+            download_rtex: true,
+            show_hidden_files: false,
+            hide_files: String::new(),
+            outline_depth: OutlineDepth::Subsubsections,
             autosave: false,
             autosave_delay: 1.0,
             open_after_export: false,
@@ -77,6 +164,7 @@ impl Default for AppSettings {
             tex_bin: crate::engine::default_tex_bin().into(),
             ribbon_collapsed: false,
             inspector_closed: false,
+            tour_seen: false,
             shortcuts: Default::default(),
         }
     }
@@ -84,9 +172,17 @@ impl Default for AppSettings {
 
 impl Global for AppSettings {}
 
+/// The open documents' rtex restart that waits for the engine settings to settle; a newer one
+/// replaces (and so cancels) it.
+struct EngineRestart {
+    _task: Task<()>,
+}
+
+impl Global for EngineRestart {}
+
 /// Where the app keeps what it remembers.
 pub fn support_dir() -> PathBuf {
-    crate::engine::data_dir().join("Realtime Tex Desktop")
+    crate::engine::app_dir()
 }
 
 fn file() -> PathBuf {
@@ -110,9 +206,21 @@ impl AppSettings {
         cx.global::<AppSettings>()
     }
 
-    /// Change, save and apply; every window redraws with the new values.
+    /// Change, save and apply; every window redraws with the new values, and the open
+    /// documents' rtex starts again on changed engine settings.
     pub fn set(cx: &mut App, f: impl FnOnce(&mut AppSettings)) {
+        let engine_before = Self::get(cx).engine();
         f(cx.global_mut::<AppSettings>());
+        if Self::get(cx).engine() != engine_before {
+            // once they stop changing: a field sets them at each keystroke
+            let restart = cx.spawn(async |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                cx.update(crate::ui::projects::restart_engines);
+            });
+            cx.set_global(EngineRestart { _task: restart });
+        }
         let s = Self::get(cx);
         let path = file();
         if let Some(dir) = path.parent() {
@@ -133,9 +241,33 @@ impl AppSettings {
             "dark" => Theme::change(ThemeMode::Dark, None, cx),
             _ => Theme::sync_system_appearance(None, cx),
         }
-        Theme::update(cx, |t| t.font_size = px(s.ui_font_size as f32));
+        Theme::update(cx, |t| {
+            t.font_size = px(s.ui_font_size as f32);
+            t.cursor_blink = if s.cursor_blink {
+                CursorBlink::default()
+            } else {
+                CursorBlink::steady()
+            };
+        });
         crate::engine::configure(&s.rtex_path, &s.tex_bin);
         crate::engine::configure_serve(s.serve_args());
+    }
+
+    /// What `rtex serve` is started with.
+    fn engine(&self) -> (String, String, Vec<String>) {
+        (
+            self.rtex_path.clone(),
+            self.tex_bin.clone(),
+            self.serve_args(),
+        )
+    }
+
+    /// The family Source mode and the preamble strip show source in.
+    pub fn source_family(&self) -> SharedString {
+        match self.source_font.trim() {
+            "" => crate::ui::editor::MONO.into(),
+            f => f.to_string().into(),
+        }
     }
 
     /// The options `rtex serve` gets from these settings.
@@ -312,228 +444,407 @@ fn shortcut_row(id: &'static str, label: &'static str, _: &mut Window, cx: &mut 
     .into_any_element()
 }
 
-pub struct SettingsView;
+/// A switch for a setting.
+fn switch(get: fn(&AppSettings) -> bool, set: fn(&mut AppSettings, bool)) -> SettingField<bool> {
+    SettingField::switch(
+        move |cx| get(AppSettings::get(cx)),
+        move |v, cx| AppSettings::set(cx, |s| set(s, v)),
+    )
+    .default_value(get(&AppSettings::default()))
+}
 
-impl Render for SettingsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let d = AppSettings::default();
-        let number = |min: f64, max: f64, step: f64| NumberFieldOptions { min, max, step };
-        let appearance = SettingPage::new("Appearance").group(
+/// A number field for a setting, from `min` to `max` by `step`.
+fn number(
+    (min, max, step): (f64, f64, f64),
+    get: fn(&AppSettings) -> f64,
+    set: fn(&mut AppSettings, f64),
+) -> SettingField<f64> {
+    SettingField::number_input(
+        NumberFieldOptions { min, max, step },
+        move |cx| get(AppSettings::get(cx)),
+        move |v, cx| AppSettings::set(cx, |s| set(s, v)),
+    )
+    .default_value(get(&AppSettings::default()))
+}
+
+/// A dropdown of `options`, each a value and its label.
+fn choice<T: PartialEq + Copy + 'static, L: Into<SharedString>>(
+    options: impl IntoIterator<Item = (T, L)>,
+    get: fn(&AppSettings) -> T,
+    set: fn(&mut AppSettings, T),
+) -> SettingField<SharedString> {
+    let (values, labels): (Vec<T>, Vec<SharedString>) =
+        options.into_iter().map(|(v, l)| (v, l.into())).unzip();
+    let values = Rc::new(values);
+    // the dropdown's keys are the options' places in the list
+    let key = {
+        let values = values.clone();
+        move |v: T| -> SharedString {
+            let at = values.iter().position(|o| *o == v).unwrap_or_default();
+            at.to_string().into()
+        }
+    };
+    let default = key(get(&AppSettings::default()));
+    let keys = labels
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| (i.to_string().into(), l))
+        .collect();
+    SettingField::dropdown(
+        keys,
+        move |cx| key(get(AppSettings::get(cx))),
+        move |k, cx| {
+            if let Some(&v) = k.parse::<usize>().ok().and_then(|i| values.get(i)) {
+                AppSettings::set(cx, |s| set(s, v));
+            }
+        },
+    )
+    .default_value(default)
+}
+
+struct TextField {
+    input: Entity<InputState>,
+    _sub: Subscription,
+}
+
+/// A text field whose placeholder says what empty means; the setting follows each keystroke,
+/// trimmed.
+fn text(
+    placeholder: &'static str,
+    get: fn(&AppSettings) -> &String,
+    set: fn(&mut AppSettings, String),
+) -> SettingField<SharedString> {
+    SettingField::render(move |options: &RenderOptions, window, cx| {
+        let key = format!(
+            "text-{}-{}-{}",
+            options.page_ix(),
+            options.group_ix(),
+            options.item_ix()
+        );
+        let state = window.use_keyed_state(SharedString::from(key), cx, |window, cx| {
+            let value = get(AppSettings::get(cx)).clone();
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholder)
+                    .default_value(value)
+            });
+            let _sub = cx.subscribe(&input, move |_, input, ev: &InputEvent, cx| {
+                let v = input.read(cx).value().trim().to_string();
+                if matches!(ev, InputEvent::Change) && *get(AppSettings::get(cx)) != v {
+                    AppSettings::set(cx, |s| set(s, v));
+                }
+            });
+            TextField { input, _sub }
+        });
+        let input = state.read(cx).input.clone();
+        // changed elsewhere (the page's reset): shown; a space being typed is kept
+        let value = get(AppSettings::get(cx)).clone();
+        if input.read(cx).value().trim() != value {
+            input.update(cx, |s, cx| s.set_value(value, window, cx));
+        }
+        let field = Input::new(&input)
+            .disabled(options.is_disabled())
+            .with_size(options.size());
+        if options.layout() == Axis::Horizontal {
+            field.w_64()
+        } else {
+            field.w_full()
+        }
+    })
+    .on_reset(
+        move |cx| get(AppSettings::get(cx)) != get(&AppSettings::default()),
+        move |_, cx| AppSettings::set(cx, |s| set(s, get(&AppSettings::default()).clone())),
+    )
+}
+
+/// Clear: the build files of the documents not open now removed, in the background (an open
+/// document's rtex is using its own).
+fn clear_cache_button(options: &RenderOptions, window: &mut Window, cx: &mut App) -> Button {
+    let cleared = window.use_keyed_state("cache-cleared", cx, |_, _| false);
+    let done = *cleared.read(cx);
+    Button::new("clear-cache")
+        .label(if done { "Cleared" } else { "Clear" })
+        .outline()
+        .with_size(options.size())
+        .disabled(done)
+        .on_click(move |_, window, cx| {
+            let keep = crate::ui::projects::open_build_dirs(cx);
+            cx.background_executor()
+                .spawn(async move { crate::engine::clear_build_cache(&keep) })
+                .detach();
+            cleared.update(cx, |c, _| *c = true);
+            window.refresh();
+        })
+}
+
+/// The Settings window's pages, the most used first on each.
+fn pages(cx: &App) -> Vec<SettingPage> {
+    let s = AppSettings::get(cx);
+    let icon = |name: &str| Icon::default().path(format!("icons/{name}.svg"));
+    let general = SettingPage::new("General")
+        .icon(icon("sliders-horizontal"))
+        .group(SettingGroup::new().title("Startup").items([
+            SettingItem::new(
+                "On launch",
+                choice(
+                    [
+                        (OnLaunch::Reopen, "Reopen last projects"),
+                        (OnLaunch::Welcome, "Show the Welcome window"),
+                    ],
+                    |s| s.on_launch,
+                    |s, v| s.on_launch = v,
+                ),
+            ),
+            SettingItem::new(
+                "Recent projects kept",
+                number(
+                    (5.0, 100.0, 1.0),
+                    |s| s.recent_kept as f64,
+                    |s, v| s.recent_kept = v.round() as usize,
+                ),
+            ),
+        ]))
+        .group(
+            SettingGroup::new().title("Saving").items([
+                SettingItem::new("Auto-save", switch(|s| s.autosave, |s, v| s.autosave = v)),
+                SettingItem::new(
+                    "Auto-save delay (seconds)",
+                    number(
+                        (0.5, 60.0, 0.5),
+                        |s| s.autosave_delay,
+                        |s, v| s.autosave_delay = v,
+                    ),
+                )
+                .disabled(!s.autosave),
+            ]),
+        )
+        .group(SettingGroup::new().title("Export").item(SettingItem::new(
+            "Open the PDF after export",
+            switch(|s| s.open_after_export, |s, v| s.open_after_export = v),
+        )));
+    let appearance = SettingPage::new("Appearance")
+        .icon(icon("palette"))
+        .group(
             SettingGroup::new().title("Window").items([
                 SettingItem::new(
                     "Theme",
                     SettingField::dropdown(
                         vec![
-                            ("system".into(), "Follow the system".into()),
+                            ("system".into(), "System".into()),
                             ("light".into(), "Light".into()),
                             ("dark".into(), "Dark".into()),
                         ],
                         |cx| AppSettings::get(cx).theme.clone().into(),
                         |v, cx| AppSettings::set(cx, |s| s.theme = v.to_string()),
                     )
-                    .default_value(d.theme.clone()),
+                    .default_value(AppSettings::default().theme),
                 ),
                 SettingItem::new(
                     "Interface font size",
-                    SettingField::number_input(
-                        number(10.0, 24.0, 1.0),
-                        |cx| AppSettings::get(cx).ui_font_size,
-                        |v, cx| AppSettings::set(cx, |s| s.ui_font_size = v),
-                    )
-                    .default_value(d.ui_font_size),
+                    number(
+                        (10.0, 24.0, 1.0),
+                        |s| s.ui_font_size,
+                        |s, v| s.ui_font_size = v,
+                    ),
                 ),
                 SettingItem::new(
                     "Dark pages",
-                    SettingField::switch(
-                        |cx| AppSettings::get(cx).dark_pages,
-                        |v, cx| AppSettings::set(cx, |s| s.dark_pages = v),
-                    )
-                    .default_value(d.dark_pages),
+                    switch(|s| s.dark_pages, |s, v| s.dark_pages = v),
+                ),
+                SettingItem::new(
+                    "Blinking caret",
+                    switch(|s| s.cursor_blink, |s, v| s.cursor_blink = v),
                 )
-                .description("In the dark theme, show pages as light text on dark paper. Figures keep their colours; exported PDFs are unchanged."),
+                .keywords(["cursor"]),
             ]),
         )
         .group(
-            SettingGroup::new().title("Workspace").items([
+            SettingGroup::new().title("Layout").items([
                 SettingItem::new(
-                    "Fold the ribbon",
-                    SettingField::switch(
-                        |cx| AppSettings::get(cx).ribbon_collapsed,
-                        |v, cx| AppSettings::set(cx, |s| s.ribbon_collapsed = v),
-                    )
-                    .default_value(d.ribbon_collapsed),
+                    "Show ribbon tools",
+                    switch(|s| !s.ribbon_collapsed, |s, v| s.ribbon_collapsed = !v),
                 )
-                .description("Show only the ribbon's tabs; click one to open it again. Double-clicking a tab does the same."),
+                .keywords(["toolbar"]),
                 SettingItem::new(
-                    "Show the sidebar",
-                    SettingField::switch(
-                        |cx| !AppSettings::get(cx).inspector_closed,
-                        |v, cx| AppSettings::set(cx, |s| s.inspector_closed = !v),
-                    )
-                    .default_value(!d.inspector_closed),
+                    "Show sidebar",
+                    switch(|s| !s.inspector_closed, |s, v| s.inspector_closed = !v),
                 )
-                .description("The panel on the right with the settings of the element at the caret. A narrow window hides it until it widens."),
+                .keywords(["inspector"]),
             ]),
         );
-        let editor = SettingPage::new("Editor")
-            .group(
-                SettingGroup::new().title("Pages").items([
-                    SettingItem::new(
-                        "Default zoom (%)",
-                        SettingField::number_input(
-                            number(25.0, 400.0, 5.0),
-                            |cx| AppSettings::get(cx).default_zoom,
-                            |v, cx| AppSettings::set(cx, |s| s.default_zoom = v),
-                        )
-                        .default_value(d.default_zoom),
-                    )
-                    .description("The zoom a file opens at."),
-                    SettingItem::new(
-                        "Live formula preview",
-                        SettingField::switch(
-                            |cx| AppSettings::get(cx).live_preview,
-                            |v, cx| AppSettings::set(cx, |s| s.live_preview = v),
-                        )
-                        .default_value(d.live_preview),
-                    )
-                    .description("Show a formula's typeset result under its source while you edit it."),
-                ]),
-            )
-            .group(
-                SettingGroup::new().title("Source").items([
-                    SettingItem::new(
-                        "Source font size",
-                        SettingField::number_input(
-                            number(9.0, 28.0, 1.0),
-                            |cx| AppSettings::get(cx).source_font_size,
-                            |v, cx| AppSettings::set(cx, |s| s.source_font_size = v),
-                        )
-                        .default_value(d.source_font_size),
-                    )
-                    .description("In Source mode and the preamble strip. The source box on the page matches the size of the text it edits."),
-                    SettingItem::new(
-                        "Source box font",
-                        SettingField::input(
-                            |cx| AppSettings::get(cx).source_box_font.clone().into(),
-                            |v, cx| AppSettings::set(cx, |s| s.source_box_font = v.trim().to_string()),
-                        )
-                        .default_value(d.source_box_font.clone()),
-                    )
-                    .description("The font of the source box on the page, at the size of the text it edits. Empty: the font the document sets that text in. Or name a font family, such as Menlo.")
-                    .layout(Axis::Vertical),
-                    SettingItem::new(
-                        "Line numbers",
-                        SettingField::switch(
-                            |cx| AppSettings::get(cx).line_numbers,
-                            |v, cx| AppSettings::set(cx, |s| s.line_numbers = v),
-                        )
-                        .default_value(d.line_numbers),
+    let mut zooms: Vec<(Zoom, SharedString)> = [50, 75, 100, 125, 150, 200]
+        .map(|p| (Zoom::Percent(p.into()), format!("{p}%").into()))
+        .into();
+    zooms.insert(0, (Zoom::FitWidth, "Fit width".into()));
+    // a zoom typed in before there was this list
+    if let Zoom::Percent(p) = s.default_zoom
+        && !zooms.iter().any(|z| z.0 == s.default_zoom)
+    {
+        zooms.push((s.default_zoom, format!("{p}%").into()));
+    }
+    let editor = SettingPage::new("Editor")
+        .icon(icon("pencil-line"))
+        .group(
+            SettingGroup::new().title("Pages").items([
+                SettingItem::new(
+                    "Open files at",
+                    choice(zooms, |s| s.default_zoom, |s, v| s.default_zoom = v),
+                )
+                .keywords(["zoom"]),
+                SettingItem::new(
+                    "Open .tex files in",
+                    choice(
+                        [(TexView::Visual, "Visual"), (TexView::Source, "Source")],
+                        |s| s.open_tex_in,
+                        |s, v| s.open_tex_in = v,
                     ),
-                    SettingItem::new(
-                        "Soft wrap",
-                        SettingField::switch(
-                            |cx| AppSettings::get(cx).soft_wrap,
-                            |v, cx| AppSettings::set(cx, |s| s.soft_wrap = v),
-                        )
-                        .default_value(d.soft_wrap),
+                ),
+                SettingItem::new(
+                    "Live formula preview",
+                    switch(|s| s.live_preview, |s, v| s.live_preview = v),
+                ),
+                SettingItem::new(
+                    "Typing \\ opens the source",
+                    switch(
+                        |s| s.backslash_opens_source,
+                        |s, v| s.backslash_opens_source = v,
                     ),
-                ]),
-            )
-            .group(
-                SettingGroup::new().title("Files").items([
-                    SettingItem::new(
-                        "Auto-save",
-                        SettingField::switch(
-                            |cx| AppSettings::get(cx).autosave,
-                            |v, cx| AppSettings::set(cx, |s| s.autosave = v),
-                        )
-                        .default_value(d.autosave),
-                    )
-                    .description("Save a file once you stop typing. Edits are always saved when a tab or the window closes."),
-                    SettingItem::new(
-                        "Auto-save delay (seconds)",
-                        SettingField::number_input(
-                            number(0.5, 60.0, 0.5),
-                            |cx| AppSettings::get(cx).autosave_delay,
-                            |v, cx| AppSettings::set(cx, |s| s.autosave_delay = v),
-                        )
-                        .default_value(d.autosave_delay),
-                    )
-                    .description("How long typing pauses before an auto-save."),
-                    SettingItem::new(
-                        "Open the PDF after export",
-                        SettingField::switch(
-                            |cx| AppSettings::get(cx).open_after_export,
-                            |v, cx| AppSettings::set(cx, |s| s.open_after_export = v),
-                        )
-                        .default_value(d.open_after_export),
-                    )
-                    .description("Show an exported PDF in your PDF viewer (Preview, unless you chose another)."),
-                ]),
-            );
-        let engine = SettingPage::new("Engine").group(
-            SettingGroup::new()
-                .title("realtime-tex")
-                .description("Used by files opened after a change.")
-                .items([
-                    SettingItem::new(
-                        "rtex binary",
-                        SettingField::input(
-                            |cx| AppSettings::get(cx).rtex_path.clone().into(),
-                            |v, cx| AppSettings::set(cx, |s| s.rtex_path = v.trim().to_string()),
-                        )
-                        .default_value(d.rtex_path.clone()),
-                    )
-                    .description("Empty: $RTEX_BIN, else rtex on PATH, else the copy the Realtime TeX VS Code extension downloaded.")
-                    .layout(Axis::Vertical),
-                    SettingItem::new(
-                        "TeX folder",
-                        SettingField::input(
-                            |cx| AppSettings::get(cx).tex_bin.clone().into(),
-                            |v, cx| AppSettings::set(cx, |s| s.tex_bin = v.trim().to_string()),
-                        )
-                        .default_value(d.tex_bin.clone()),
-                    )
-                    .description("Where lualatex and kpsewhich are (MacTeX: /Library/TeX/texbin). Several folders: separate them as PATH does (':', on Windows ';').")
-                    .layout(Axis::Vertical),
-                ]),
+                )
+                .keywords(["backslash"]),
+                SettingItem::new(
+                    "Pinch to zoom",
+                    switch(|s| s.pinch_zoom, |s, v| s.pinch_zoom = v),
+                ),
+            ]),
         )
         .group(
-            SettingGroup::new()
-                .title("Typesetting")
-                .description("Used by files opened after a change.")
-                .items([
-                    SettingItem::new(
-                        "Live paragraph budget (ms)",
-                        SettingField::number_input(
-                            number(10.0, 1000.0, 10.0),
-                            |cx| AppSettings::get(cx).fast_budget_ms,
-                            |v, cx| AppSettings::set(cx, |s| s.fast_budget_ms = v),
-                        )
-                        .default_value(d.fast_budget_ms),
-                    )
-                    .description("A paragraph that takes longer than this to typeset three times in a row waits for the full LaTeX run instead, until the next layout. Higher keeps more paragraphs live on a slow Mac."),
-                    SettingItem::new(
-                        "Reuse drawn pictures",
-                        SettingField::switch(
-                            |cx| AppSettings::get(cx).picture_cache,
-                            |v, cx| AppSettings::set(cx, |s| s.picture_cache = v),
-                        )
-                        .default_value(d.picture_cache),
-                    )
-                    .description("A full run keeps TikZ pictures it drew before when they did not change. Turn off if a picture shows an old version."),
-                    SettingItem::new(
-                        "Diagnostics folder",
-                        SettingField::input(
-                            |cx| AppSettings::get(cx).debug_dir.clone().into(),
-                            |v, cx| AppSettings::set(cx, |s| s.debug_dir = v.trim().to_string()),
-                        )
-                        .default_value(d.debug_dir.clone()),
-                    )
-                    .description("Empty: none. A folder where rtex writes what it was given each time its engine fails, and a line per live paragraph: attach it to an rtex bug report.")
-                    .layout(Axis::Vertical),
-                ]),
+            SettingGroup::new().title("Source").items([
+                SettingItem::new(
+                    "Source font",
+                    text("Menlo", |s| &s.source_font, |s, v| s.source_font = v),
+                ),
+                SettingItem::new(
+                    "Source font size",
+                    number(
+                        (9.0, 28.0, 1.0),
+                        |s| s.source_font_size,
+                        |s, v| s.source_font_size = v,
+                    ),
+                ),
+                SettingItem::new(
+                    "Source box font",
+                    text(
+                        "Document font",
+                        |s| &s.source_box_font,
+                        |s, v| s.source_box_font = v,
+                    ),
+                ),
+                SettingItem::new(
+                    "Line numbers",
+                    switch(|s| s.line_numbers, |s, v| s.line_numbers = v),
+                ),
+                SettingItem::new("Soft wrap", switch(|s| s.soft_wrap, |s, v| s.soft_wrap = v)),
+                SettingItem::new(
+                    "Autocomplete",
+                    switch(|s| s.autocomplete, |s, v| s.autocomplete = v),
+                )
+                .keywords(["completion"]),
+            ]),
+        )
+        .group(SettingGroup::new().title("Find").item(SettingItem::new(
+            "Match case by default",
+            switch(|s| s.find_match_case, |s, v| s.find_match_case = v),
+        )));
+    let files = SettingPage::new("Files").icon(icon("folder")).group(
+        SettingGroup::new().title("Project panel").items([
+            SettingItem::new(
+                "Show hidden files",
+                switch(|s| s.show_hidden_files, |s, v| s.show_hidden_files = v),
+            ),
+            SettingItem::new(
+                "Hide files matching",
+                text("*.aux, *.log", |s| &s.hide_files, |s, v| s.hide_files = v),
+            ),
+            SettingItem::new(
+                "Outline depth",
+                choice(
+                    [
+                        (OutlineDepth::Sections, "Sections"),
+                        (OutlineDepth::Subsections, "Subsections"),
+                        (OutlineDepth::Subsubsections, "Subsubsections"),
+                        (OutlineDepth::Paragraphs, "Paragraphs"),
+                    ],
+                    |s| s.outline_depth,
+                    |s, v| s.outline_depth = v,
+                ),
+            ),
+        ]),
+    );
+    let typesetting = SettingPage::new("Typesetting")
+        .icon(icon("type"))
+        .group(
+            SettingGroup::new().title("Engine").items([
+                SettingItem::new(
+                    "rtex binary",
+                    text("Automatic", |s| &s.rtex_path, |s, v| s.rtex_path = v),
+                )
+                .layout(Axis::Vertical)
+                .keywords(["engine", "path"]),
+                SettingItem::new(
+                    "TeX folder",
+                    text("Automatic", |s| &s.tex_bin, |s, v| s.tex_bin = v),
+                )
+                .layout(Axis::Vertical)
+                .keywords(["lualatex", "path"]),
+                SettingItem::new(
+                    "Download rtex automatically",
+                    switch(|s| s.download_rtex, |s, v| s.download_rtex = v),
+                ),
+            ]),
+        )
+        .group(
+            SettingGroup::new().title("Performance").items([
+                SettingItem::new(
+                    "Paragraph time limit (ms)",
+                    number(
+                        (10.0, 1000.0, 10.0),
+                        |s| s.fast_budget_ms,
+                        |s, v| s.fast_budget_ms = v,
+                    ),
+                )
+                .keywords(["budget", "live"]),
+                SettingItem::new(
+                    "Reuse drawn pictures",
+                    switch(|s| s.picture_cache, |s, v| s.picture_cache = v),
+                )
+                .keywords(["tikz", "cache"]),
+            ]),
+        )
+        .group(
+            SettingGroup::new().title("Troubleshooting").items([
+                SettingItem::new(
+                    "Diagnostics folder",
+                    text("None", |s| &s.debug_dir, |s, v| s.debug_dir = v),
+                )
+                .layout(Axis::Vertical)
+                .keywords(["debug"]),
+                SettingItem::new("Build cache", SettingField::render(clear_cache_button)),
+            ]),
         );
+    vec![
+        general,
+        appearance,
+        editor,
+        files,
+        typesetting,
+        shortcuts_page().icon(icon("keyboard")),
+    ]
+}
+
+pub struct SettingsView;
+
+impl Render for SettingsView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // a drawn title bar, so it follows the theme like the main window's
         div()
             .size_full()
@@ -569,19 +880,18 @@ impl Render for SettingsView {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(Settings::new("settings").pages([
-                        appearance,
-                        editor,
-                        engine,
-                        shortcuts_page(),
-                    ])),
+                    .child(Settings::new("settings").pages(pages(cx))),
             )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::AppSettings;
+    use super::{
+        AppSettings, OnLaunch, OutlineDepth, SettingsView, TexView, Zoom, choice, pages, text,
+    };
+    use gpui_kit::component::setting::{AnySettingField, SelectIndex, Settings};
+    use gpui_kit::{Context, IntoElement, Render, TestAppContext, Window};
 
     #[test]
     fn rtex_gets_the_engine_settings() {
@@ -607,5 +917,123 @@ mod tests {
         let old: AppSettings = serde_json::from_str(r#"{"autosave":true}"#).unwrap();
         assert_eq!(old.autosave_delay, 1.0);
         assert!(old.picture_cache);
+    }
+
+    /// The last version's file: its zoom a number; the settings added since at their defaults.
+    #[test]
+    fn an_old_settings_file_still_reads() {
+        let old = r#"{
+            "theme": "dark", "ui_font_size": 15.0, "dark_pages": true,
+            "source_font_size": 13.0, "source_box_font": "", "default_zoom": 90.0,
+            "live_preview": true, "line_numbers": true, "soft_wrap": true, "autosave": true,
+            "autosave_delay": 2.0, "open_after_export": false, "fast_budget_ms": 50.0,
+            "picture_cache": true, "debug_dir": "", "rtex_path": "",
+            "tex_bin": "/Library/TeX/texbin", "ribbon_collapsed": false,
+            "inspector_closed": false, "tour_seen": true, "shortcuts": {}
+        }"#;
+        let s: AppSettings = serde_json::from_str(old).unwrap();
+        assert_eq!(s.default_zoom, Zoom::Percent(90.0));
+        assert_eq!((s.theme.as_str(), s.autosave_delay), ("dark", 2.0));
+        assert_eq!(
+            (s.on_launch, s.recent_kept, s.outline_depth, s.open_tex_in),
+            (
+                OnLaunch::Reopen,
+                30,
+                OutlineDepth::Subsubsections,
+                TexView::Visual
+            )
+        );
+        assert!(s.cursor_blink && s.download_rtex && s.autocomplete && s.pinch_zoom);
+        assert!(!s.show_hidden_files && s.hide_files.is_empty() && s.source_font.is_empty());
+        // and what this version writes reads back the same
+        let new = AppSettings {
+            default_zoom: Zoom::FitWidth,
+            on_launch: OnLaunch::Welcome,
+            outline_depth: OutlineDepth::Paragraphs,
+            ..s
+        };
+        let json = serde_json::to_string(&new).unwrap();
+        assert!(json.contains(r#""default_zoom":null"#), "{json}");
+        assert!(json.contains(r#""on_launch":"welcome""#), "{json}");
+        assert_eq!(serde_json::from_str::<AppSettings>(&json).unwrap(), new);
+    }
+
+    #[test]
+    fn the_outline_lists_headings_down_to_its_depth() {
+        let o = crate::document::outline(
+            "\\section{A}\n\\subsection{B}\n\\subsubsection{C}\n\\paragraph{D}\n",
+        );
+        let titles = |d: OutlineDepth| {
+            o.iter()
+                .filter(|h| d.shows(h.level))
+                .map(|h| h.title.as_str())
+                .collect::<String>()
+        };
+        assert_eq!(titles(OutlineDepth::Sections), "A");
+        assert_eq!(titles(OutlineDepth::Subsections), "AB");
+        assert_eq!(titles(OutlineDepth::Subsubsections), "ABC");
+        assert_eq!(titles(OutlineDepth::Paragraphs), "ABCD");
+    }
+
+    /// The Settings window opened on page `0`.
+    struct OnPage(usize);
+
+    impl Render for OnPage {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            Settings::new("settings")
+                .pages(pages(cx))
+                .default_selected_index(SelectIndex {
+                    page_ix: self.0,
+                    group_ix: None,
+                })
+        }
+    }
+
+    /// The window, and each of its pages, draws (the test text system has no fonts: nothing
+    /// about how it looks is checked).
+    #[gpui_kit::test]
+    fn every_page_draws(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        cx.add_window_view(|_, _| SettingsView).1.run_until_parked();
+        let n = cx.update(|cx| pages(cx).len());
+        assert_eq!(n, 6);
+        for i in 0..n {
+            cx.add_window_view(|_, _| OnPage(i)).1.run_until_parked();
+        }
+    }
+
+    /// A page's reset puts a dropdown's and a text field's settings back to their defaults.
+    #[gpui_kit::test]
+    fn reset_brings_back_the_defaults(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let zoom = choice(
+            [
+                (Zoom::FitWidth, "Fit width"),
+                (Zoom::Percent(100.0), "100%"),
+            ],
+            |s| s.default_zoom,
+            |s, v| s.default_zoom = v,
+        );
+        let font = text("Menlo", |s| &s.source_font, |s, v| s.source_font = v);
+        let (_, cx) = cx.add_window_view(|_, _| SettingsView);
+        cx.update(|window, cx| {
+            assert!(!zoom.is_resettable(cx) && !font.is_resettable(cx));
+            AppSettings::set(cx, |s| {
+                s.default_zoom = Zoom::FitWidth;
+                s.source_font = "Fira Code".into();
+            });
+            assert!(zoom.is_resettable(cx) && font.is_resettable(cx));
+            zoom.reset(window, cx);
+            font.reset(window, cx);
+            let s = AppSettings::get(cx);
+            assert_eq!(s.default_zoom, Zoom::Percent(100.0));
+            assert_eq!(s.source_font, "");
+        });
     }
 }

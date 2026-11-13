@@ -75,9 +75,11 @@ impl Doc {
             .bg(palette::desk(&theme))
             .overflow_scroll()
             .track_scroll(&self.scroll)
-            .on_pinch(cx.listener(|this, ev: &PinchEvent, window, cx| {
-                this.set_zoom(this.zoom * (1.0 + ev.delta), Some(ev.position), window, cx)
-            }))
+            .when(AppSettings::get(cx).pinch_zoom, |v| {
+                v.on_pinch(cx.listener(|this, ev: &PinchEvent, window, cx| {
+                    this.set_zoom(this.zoom * (1.0 + ev.delta), Some(ev.position), window, cx)
+                }))
+            })
             .child(
                 div()
                     .flex()

@@ -1255,7 +1255,7 @@ impl EntityInputHandler for Doc {
         }
         // a backslash starts a command: nobody types one to print it, so TeX it is, in the
         // paragraph's source box (with its completions) at the caret
-        if text.starts_with('\\') {
+        if text.starts_with('\\') && AppSettings::get(cx).backslash_opens_source {
             self.delete_selection(cx);
             let text = format!("{text}{}", complete::MARK);
             return self.edit_tex_at_caret(&text, window, cx);

@@ -1,14 +1,20 @@
 #!/bin/sh
 # A test build to hand out: "Realtime Tex Desktop.app" for Apple-chip Macs with the rtex engine
 # inside, ad-hoc signed, in target/release/Realtime-Tex-Desktop-<version>-arm64.dmg.
-# The engine comes from $RTEX_RELEASE, else the newest copy the Realtime TeX VS Code extension
+# The engine comes from $RTEX_RELEASE (an unpacked release folder), else the latest rtex release,
 # downloaded. Recipients still need a TeX distribution (MacTeX) for lualatex.
 set -e
 cd "$(dirname "$0")/.."
 ./scripts/bundle.sh >/dev/null
 app="target/release/Realtime Tex Desktop.app"
-store="$HOME/Library/Application Support/Code/User/globalStorage/henryxiaoyang.realtime-tex/rtex-release"
-rtex="${RTEX_RELEASE:-$(ls -d "$store"/v* 2>/dev/null | sort -V | tail -1)}"
+if [ -z "$RTEX_RELEASE" ]; then
+  dl=target/rtex-release
+  rm -rf "$dl" && mkdir -p "$dl"
+  curl -fsSL https://github.com/HenryXiaoYang/realtime-tex/releases/latest/download/rtex-aarch64-apple-darwin.tar.gz \
+    | tar -xzf - -C "$dl"
+  RTEX_RELEASE=$(ls -d "$dl"/rtex-* | tail -1)
+fi
+rtex="$RTEX_RELEASE"
 [ -x "$rtex/bin/rtex" ] || { echo "no rtex release found (set RTEX_RELEASE)" >&2; exit 1; }
 res="$app/Contents/Resources/rtex"
 mkdir -p "$res"

@@ -146,15 +146,24 @@ shortcuts: click a key and press the new one (Escape cancels); a key another com
 whether to take it from that one; each row and the whole list reset to the defaults. Only the
 changes are saved, under `shortcuts` in the settings file.
 
-Settings (⌘, or the gear in the status bar): theme, interface and source font sizes, default
-zoom, live formula preview, line numbers, soft wrap, auto-save, and the rtex binary and TeX
-folder. They are saved in `~/Library/Application Support/Realtime Tex Desktop/settings.json`.
+Settings (⌘, or the gear in the status bar) has six pages: General (what opens at launch, recent
+projects kept, auto-save, opening an exported PDF), Appearance (theme, font size, dark pages,
+blinking caret, ribbon and sidebar), Editor (the zoom files open at, Visual or Source, live
+formula preview, the `\` key, pinch to zoom, source fonts, line numbers, soft wrap,
+autocomplete, Find's match case), Files (hidden files, names to hide, outline depth),
+Typesetting (the rtex binary and TeX folder, downloading rtex, the live paragraph time limit,
+picture reuse, a diagnostics folder, clearing the build cache) and Keyboard shortcuts. A change
+to the engine settings restarts the open documents' rtex. They are saved in
+`~/Library/Application Support/Realtime Tex Desktop/settings.json`.
 
 ## Requirements
 
-- LuaLaTeX (MacTeX or TeX Live).
-- `rtex`: `$RTEX_BIN`, else `rtex` on `PATH`, else the copy the Realtime TeX VS Code extension
-  downloaded. rtex's build files go to `~/Library/Caches/realtime-tex-desktop`.
+- LuaLaTeX, from a TeX distribution. Without one, Set Up LaTeX (from the welcome window, and at
+  the first launch) installs the full TeX Live without its documentation (about 5 GB, no
+  administrator password) from the fastest CTAN mirror, or says how to install the system's
+  own: MacTeX, MiKTeX or TeX Live's Windows installer, or the Linux distribution's packages.
+- `rtex`: `$RTEX_BIN`, else `rtex` on `PATH`, else the copy inside the app, else the copy the app
+  downloads for itself from the rtex releases into its own folder (at launch, when there is none). rtex's build files go to `~/Library/Caches/realtime-tex-desktop`.
 
 ## Layout
 

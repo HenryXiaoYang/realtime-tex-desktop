@@ -42,9 +42,16 @@ impl Doc {
                 layout_version,
             } => {
                 self.layout_version = layout_version;
+                let first = self.preview.pages.is_empty();
                 let dirty = self
                     .preview
                     .apply_layout(pages, pages_total, placements, stale_since);
+                if first
+                    && !self.preview.pages.is_empty()
+                    && AppSettings::get(cx).default_zoom == Zoom::FitWidth
+                {
+                    self.fit_width(window, cx);
+                }
                 self.bump(dirty);
                 self.status.clear();
                 self.compiling = stale_since.is_some();

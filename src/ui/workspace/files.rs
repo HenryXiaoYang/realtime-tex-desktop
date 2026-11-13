@@ -7,7 +7,12 @@ type FileAction = dyn Fn(&mut Workspace, String, &mut Window, &mut Context<Works
 
 impl Workspace {
     pub(super) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
-        let items = list_dir(&self.root, &self.root, &self.expanded);
+        let items = list_dir(
+            &self.root,
+            &self.root,
+            &self.expanded,
+            settings::AppSettings::get(cx),
+        );
         self.tree.update(cx, |t, cx| t.set_items(items, cx));
     }
 
@@ -434,19 +439,20 @@ impl Workspace {
     }
 }
 
-/// The entries of `dir`, folders first. Only folders in `expanded` are read; the others get a
-/// stand-in child (so they show as folders) until they are opened.
+/// The entries of `dir` the settings do not hide, folders first. Only folders in `expanded` are
+/// read; the others get a stand-in child (so they show as folders) until they are opened.
 pub(super) fn list_dir(
     root: &Path,
     dir: &Path,
     expanded: &std::collections::HashSet<String>,
+    s: &settings::AppSettings,
 ) -> Vec<TreeItem> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return vec![];
     };
     let mut entries: Vec<_> = rd
         .flatten()
-        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .filter(|e| !hidden(&e.file_name().to_string_lossy(), s))
         .collect();
     // folders first, like Zed's project panel
     entries.sort_by_key(|e| (!e.path().is_dir(), e.file_name()));
@@ -465,7 +471,7 @@ pub(super) fn list_dir(
             }
             let open = expanded.contains(&id);
             let kids = if open {
-                list_dir(root, &path, expanded)
+                list_dir(root, &path, expanded, s)
             } else {
                 vec![]
             };
@@ -478,6 +484,29 @@ pub(super) fn list_dir(
             item.children(kids).expanded(open)
         })
         .collect()
+}
+
+/// Whether the file tree leaves `name` out: a dot file (unless they show), or a name matching
+/// one of the comma-separated patterns.
+pub(super) fn hidden(name: &str, s: &settings::AppSettings) -> bool {
+    let name: Vec<char> = name.chars().collect();
+    (name.first() == Some(&'.') && !s.show_hidden_files)
+        || s.hide_files
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .any(|p| glob(&p.chars().collect::<Vec<_>>(), &name))
+}
+
+/// `name` matches `pat`, where `*` stands for any run of characters and `?` for one.
+fn glob(pat: &[char], name: &[char]) -> bool {
+    match pat.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|i| glob(rest, &name[i..])),
+        Some((p, rest)) => name
+            .split_first()
+            .is_some_and(|(n, name)| (*p == '?' || p == n) && glob(rest, name)),
+    }
 }
 
 /// The id ending of the stand-in row of a folder not read yet (or empty).
@@ -520,7 +549,8 @@ fn trash_command(path: &Path) -> std::process::Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{PLACEHOLDER, list_dir};
+    use super::{PLACEHOLDER, hidden, list_dir};
+    use crate::ui::settings::AppSettings;
     use std::collections::HashSet;
 
     #[test]
@@ -535,7 +565,8 @@ mod tests {
         let names = |items: &[gpui_kit::component::tree::TreeItem]| {
             items.iter().map(|i| i.id.to_string()).collect::<Vec<_>>()
         };
-        let closed = list_dir(&root, &root, &HashSet::new());
+        let d = AppSettings::default();
+        let closed = list_dir(&root, &root, &HashSet::new(), &d);
         assert_eq!(
             names(&closed),
             ["empty", "figures", "node_modules", "main.tex"]
@@ -547,13 +578,34 @@ mod tests {
             assert!(f.children[0].id.ends_with(PLACEHOLDER));
         }
         let open: HashSet<String> = ["figures".to_string(), "empty".to_string()].into();
-        let items = list_dir(&root, &root, &open);
+        let items = list_dir(&root, &root, &open, &d);
         assert!(items[1].is_expanded());
         assert_eq!(names(&items[1].children), ["figures/a.png"]);
         // an open empty folder shows its "empty" row
         assert!(items[0].children[0].id.ends_with(PLACEHOLDER));
         assert!(!items[2].is_expanded());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_settings_hide_dot_files_and_names_matching_patterns() {
+        let d = AppSettings::default();
+        assert!(hidden(".git", &d));
+        assert!(!hidden("main.aux", &d), "nothing else by default");
+        let s = AppSettings {
+            show_hidden_files: true,
+            hide_files: " *.aux, build ,f?g.*, ".into(),
+            ..d
+        };
+        assert!(!hidden(".git", &s), "dot files shown");
+        assert!(hidden("main.aux", &s));
+        assert!(hidden("build", &s), "a folder by its name");
+        assert!(!hidden("build2", &s), "a pattern matches the whole name");
+        assert!(
+            hidden("fig.pdf", &s) && hidden("fög.png", &s),
+            "? is one character"
+        );
+        assert!(!hidden("main.tex", &s) && !hidden("figs.pdf", &s));
     }
 }
 

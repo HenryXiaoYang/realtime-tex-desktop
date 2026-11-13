@@ -189,6 +189,11 @@ impl Doc {
         files
     }
 
+    /// A source box is open on the page.
+    pub fn box_open(&self) -> bool {
+        self.active.is_some()
+    }
+
     pub fn jump_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.scroll_to(offset, false, cx);
     }

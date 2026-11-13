@@ -45,16 +45,21 @@ impl Workspace {
                             .child(project),
                     )
                     .child(
-                        Button::new("export")
-                            .icon(Icon::default().path("icons/file-output.svg"))
-                            .label("Export PDF")
-                            .small()
-                            .primary()
-                            .disabled(!can_export)
-                            .tooltip(crate::ui::keys_in("Typeset the whole document to a PDF (⌘⌥E)"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.with_doc(cx, |d, cx| d.export(cx))
-                            })),
+                        div()
+                            .relative()
+                            .child(
+                                Button::new("export")
+                                    .icon(Icon::default().path("icons/file-output.svg"))
+                                    .label("Export PDF")
+                                    .small()
+                                    .primary()
+                                    .disabled(!can_export)
+                                    .tooltip(crate::ui::keys_in(
+                                        "Typeset the whole document to a PDF (⌘⌥E)",
+                                    ))
+                                    .on_click(cx.listener(|this, _, _, cx| this.export(cx))),
+                            )
+                            .children(self.tour_mark("export")),
                     ),
             )
             .bg(theme.title_bar)
@@ -100,27 +105,26 @@ impl Workspace {
                     .suffix(close)
             })
             .collect();
-        let viewing = self.doc().filter(|d| d.read(cx).view.is_some()).map(|d| {
-            let zoom = d.read(cx).zoom;
-            self.render_zoom(zoom, cx).into_any_element()
-        });
         let tools = self.doc().filter(|d| d.read(cx).tex).map(|d| {
-            let d = d.read(cx);
-            let (zoom, source) = (d.zoom, d.source_mode);
+            let source = d.read(cx).source_mode;
             div()
                 .flex()
                 .items_center()
                 .gap_2()
-                .children((!source).then(|| self.render_zoom(zoom, cx)))
                 .child(
-                    Button::new("recompile")
-                        .icon(Icon::default().path("icons/refresh-cw.svg"))
-                        .xsmall()
-                        .ghost()
-                        .tip("Recompile: run the full LaTeX compile now (⌘⇧R)")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.with_doc(cx, |d, cx| d.recompile(window, cx))
-                        })),
+                    div()
+                        .relative()
+                        .child(
+                            Button::new("recompile")
+                                .icon(Icon::default().path("icons/refresh-cw.svg"))
+                                .xsmall()
+                                .ghost()
+                                .tip("Recompile: run the full LaTeX compile now (⌘⇧R)")
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.recompile(window, cx)),
+                                ),
+                        )
+                        .children(self.tour_mark("recompile")),
                 )
                 .child(self.render_mode_switch(source, cx))
         });
@@ -132,7 +136,6 @@ impl Workspace {
             })
             .children(tabs)
             .when_some(tools, |bar, tools| bar.suffix(tools))
-            .when_some(viewing, |bar, zoom| bar.suffix(zoom))
     }
 
     /// Visual (the typeset pages, edited in place) or Source (the file in a code editor).
@@ -192,7 +195,8 @@ impl Workspace {
                     .ghost()
                     .xsmall()
                     .dropdown_caret(true)
-                    .dropdown_menu(move |mut menu, _, _| {
+                    // in the status bar: opens upward, its right edge on the button
+                    .dropdown_menu_with_anchor(Anchor::BottomRight, move |mut menu, _, _| {
                         // the page as wide as the column, whatever the window
                         let fit = weak.clone();
                         menu = menu
@@ -235,6 +239,11 @@ impl Workspace {
 
     pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let zoom = self
+            .doc()
+            .map(|d| d.read(cx))
+            .filter(|d| d.view.is_some() || (d.tex && !d.source_mode))
+            .map(|d| d.zoom);
         let (status, pages) = match self.doc() {
             Some(d) => {
                 let d = d.read(cx);
@@ -275,16 +284,29 @@ impl Workspace {
                     .gap_2()
                     .min_w_0()
                     .child(
-                        Button::new("toggle-sidebar")
-                            .icon(Icon::default().path("icons/panel-left.svg"))
-                            .ghost()
-                            .xsmall()
-                            .selected(self.fit.left)
-                            .tip("Show or Hide Project Panel (⌘\\)")
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_left(cx))),
+                        div()
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("toggle-sidebar")
+                                    .icon(Icon::default().path("icons/panel-left.svg"))
+                                    .ghost()
+                                    .xsmall()
+                                    .selected(self.fit.left)
+                                    .tip("Show or Hide Project Panel (⌘\\)")
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_left(cx))),
+                            )
+                            .children(pages.map(|p| div().flex_none().child(p)))
+                            .children(self.tour_mark("status-left")),
                     )
-                    .children(pages.map(|p| div().flex_none().child(p)))
-                    .child(self.problems_button(cx))
+                    .child(
+                        div()
+                            .relative()
+                            .child(self.problems_button(cx))
+                            .children(self.tour_mark("problems")),
+                    )
                     .children(self.text_elsewhere(cx))
                     // a long message (a LaTeX error) cut short, whole in its tooltip
                     .child({
@@ -311,24 +333,36 @@ impl Workspace {
                     .flex_none()
                     .gap_2()
                     .pr_1()
+                    // the pages' zoom (a PDF's or a picture's too), not the source editor's
+                    .children(zoom.map(|z| self.render_zoom(z, cx)))
                     .child(
-                        Button::new("toggle-logs")
-                            .icon(Icon::default().path("icons/logs.svg"))
-                            .ghost()
-                            .xsmall()
-                            .selected(self.bottom == Some(Bottom::Logs))
-                            .tip("Show or Hide the rtex Log")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.toggle_bottom(Bottom::Logs, cx)),
-                            ),
+                        div()
+                            .relative()
+                            .child(
+                                Button::new("toggle-logs")
+                                    .icon(Icon::default().path("icons/logs.svg"))
+                                    .ghost()
+                                    .xsmall()
+                                    .selected(self.bottom == Some(Bottom::Logs))
+                                    .tip("Show or Hide the rtex Log")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_bottom(Bottom::Logs, cx)
+                                    })),
+                            )
+                            .children(self.tour_mark("logs")),
                     )
                     .child(
-                        Button::new("settings")
-                            .icon(Icon::default().path("icons/settings.svg"))
-                            .ghost()
-                            .xsmall()
-                            .tip("Settings (⌘,)")
-                            .on_click(|_, _, cx| open_settings(cx)),
+                        div()
+                            .relative()
+                            .child(
+                                Button::new("settings")
+                                    .icon(Icon::default().path("icons/settings.svg"))
+                                    .ghost()
+                                    .xsmall()
+                                    .tip("Settings (⌘,)")
+                                    .on_click(|_, _, cx| open_settings(cx)),
+                            )
+                            .children(self.tour_mark("settings")),
                     )
                     .child(
                         Button::new("toggle-inspector")

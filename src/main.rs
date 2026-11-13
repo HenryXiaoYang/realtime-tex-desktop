@@ -10,7 +10,7 @@ mod ui;
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 use std::path::PathBuf;
-use ui::projects::{CloseProject, NewProject, OpenProject};
+use ui::projects::{CloseProject, NewProject, OpenProject, ShowTour};
 use ui::workspace::*;
 use ui::{editor, settings};
 
@@ -150,6 +150,7 @@ fn main() {
                     MenuItem::action("Zoom", ZoomWindow),
                 ],
             ),
+            menu("Help", vec![MenuItem::action("Show the Tour", ShowTour)]),
         ]);
         cx.activate(true);
         // the projects open when the app quit, else the welcome window

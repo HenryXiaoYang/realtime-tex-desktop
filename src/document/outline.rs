@@ -7,9 +7,15 @@ pub struct Heading {
     pub offset: usize,
 }
 
-/// \section, \subsection and \subsubsection commands, numbered like article.cls.
+/// \section, \subsection, \subsubsection and \paragraph commands, numbered like article.cls
+/// (paragraphs are not).
 pub fn outline(src: &str) -> Vec<Heading> {
-    const CMDS: [&str; 3] = ["\\section", "\\subsection", "\\subsubsection"];
+    const CMDS: [&str; 4] = [
+        "\\section",
+        "\\subsection",
+        "\\subsubsection",
+        "\\paragraph",
+    ];
     let s = src.as_bytes();
     let mut counters = [0usize; 3];
     let mut out = vec![];
@@ -18,7 +24,7 @@ pub fn outline(src: &str) -> Vec<Heading> {
         i += k;
         let line_start = src[..i].rfind('\n').map_or(0, |n| n + 1);
         let commented = src[line_start..i].contains('%');
-        let Some(level) = (0..3).rev().find(|&l| {
+        let Some(level) = (0..CMDS.len()).rev().find(|&l| {
             src[i..].starts_with(CMDS[l])
                 && !s
                     .get(i + CMDS[l].len())
@@ -61,7 +67,7 @@ pub fn outline(src: &str) -> Vec<Heading> {
         if commented || end == open {
             continue;
         }
-        let number = (!starred).then(|| {
+        let number = (!starred && level < counters.len()).then(|| {
             counters[level] += 1;
             counters[level + 1..].iter_mut().for_each(|c| *c = 0);
             counters[..=level]
@@ -102,6 +108,19 @@ mod tests {
                 (Some("1.1"), "C x"),
                 (Some("2"), "D ab")
             ]
+        );
+    }
+
+    #[test]
+    fn paragraphs_are_listed_unnumbered() {
+        let o = outline("\\section{A}\n\\paragraph{P}\n\\subparagraph{no}\n\\subsection{B}");
+        let got: Vec<(usize, Option<&str>, &str)> = o
+            .iter()
+            .map(|h| (h.level, h.number.as_deref(), h.title.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![(0, Some("1"), "A"), (3, None, "P"), (1, Some("1.1"), "B")]
         );
     }
 }

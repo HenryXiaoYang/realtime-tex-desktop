@@ -2,6 +2,7 @@
 // `\` commands, `\begin{`/`\end{` environments, `\ref{` labels, `\cite{` keys, `\usepackage{`
 // packages and `\input{`/`\includegraphics{` files. The editor has no snippets, so an item's
 // text carries MARK where the caret goes and Doc removes it after the insert.
+use crate::ui::settings::AppSettings;
 use anyhow::Result;
 use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt};
 use gpui_kit::{App, AppContext as _, Task, WeakEntity, Window};
@@ -654,9 +655,9 @@ impl CompletionProvider for Latex {
         })
     }
 
-    fn is_completion_trigger(&self, _: usize, new_text: &str, _: &mut App) -> bool {
+    fn is_completion_trigger(&self, _: usize, new_text: &str, cx: &mut App) -> bool {
         // every typed character, so the menu follows (and closes on) each keystroke
-        new_text.chars().count() == 1
+        AppSettings::get(cx).autocomplete && new_text.chars().count() == 1
     }
 }
 
