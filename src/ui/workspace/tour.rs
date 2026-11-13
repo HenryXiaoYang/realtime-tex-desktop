@@ -128,7 +128,7 @@ const STEPS: &[Step] = &[
         Show::Nothing,
         Done::BoxOpened,
         "Open the source box",
-        "Click the formula in section 2. Its TeX opens in a box on the page, with the result under it as you type.",
+        "Double-click the formula in section 2. Its TeX opens in a box on the page, with the result under it as you type.",
     ),
     see(
         &["ribbon"],
@@ -766,7 +766,7 @@ mod e2e {
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{
         App, AppContext, Bounds, Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
-        Pixels, TestAppContext, Window, WindowBounds, WindowOptions, point, px, size,
+        Pixels, Point, TestAppContext, Window, WindowBounds, WindowOptions, point, px, size,
     };
     use std::time::{Duration, Instant};
 
@@ -932,12 +932,51 @@ mod e2e {
         assert_eq!(step(cx), Some(1), "Back does not bounce forward");
         type_in(cx, &main, "Now. ", "Then. ");
         assert_eq!(step(cx), Some(2));
-        // the formula's box: on to the Home tab, the ribbon unfolded
-        let formula = source(cx).find("e^{i\\pi}").unwrap();
-        in_window(cx, &mut |window, cx| {
-            main.update(cx, |d, cx| d.edit_at(formula, window, cx))
+        // a double-click at `at` in the window, as a mouse makes it
+        let double_click = |cx: &mut TestAppContext, at: Point<Pixels>| {
+            in_window(cx, &mut |window, cx| {
+                for n in [1, 2] {
+                    window.dispatch_event(
+                        MouseDownEvent {
+                            button: MouseButton::Left,
+                            position: at,
+                            modifiers: Modifiers::default(),
+                            click_count: n,
+                            first_mouse: false,
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: at,
+                            modifiers: Modifiers::default(),
+                            click_count: n,
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                }
+            });
+            frame(cx);
+        };
+        // the formula's box, from a double-click on it as the card says: on to the Home tab,
+        // the ribbon unfolded
+        press(cx, "escape");
+        assert_eq!(step(cx), Some(2), "the typing box closed, not the tour");
+        let formula = source(cx).find("\\[ e^{i\\pi}").expect("a display formula");
+        let pages = cx.read(|cx| ws.read(cx).tour.as_ref().unwrap().marks.borrow()["pages"]);
+        let opened = (0..60).any(|i| {
+            let at = point(pages.center().x, pages.top() + px(10.0 * i as f32));
+            double_click(cx, at);
+            let on = cx.read(|cx| main.read(cx).box_at());
+            if on.is_some() && on != Some(formula) {
+                press(cx, "escape");
+            }
+            on == Some(formula)
         });
-        frame(cx);
+        assert!(opened, "a double-click on the formula opens its box");
         assert_eq!(step(cx), Some(3));
         cx.read(|cx| {
             assert!(!AppSettings::get(cx).ribbon_collapsed, "unfolded");
@@ -1012,32 +1051,7 @@ mod e2e {
             let mut word = String::new();
             for i in 0..30 {
                 let at = point(pages.center().x, pages.top() + px(60.0 + 20.0 * i as f32));
-                in_window(cx, &mut |window, cx| {
-                    for n in [1, 2] {
-                        window.dispatch_event(
-                            MouseDownEvent {
-                                button: MouseButton::Left,
-                                position: at,
-                                modifiers: Modifiers::default(),
-                                click_count: n,
-                                first_mouse: false,
-                            }
-                            .to_platform_input(),
-                            cx,
-                        );
-                        window.dispatch_event(
-                            MouseUpEvent {
-                                button: MouseButton::Left,
-                                position: at,
-                                modifiers: Modifiers::default(),
-                                click_count: n,
-                            }
-                            .to_platform_input(),
-                            cx,
-                        );
-                    }
-                });
-                frame(cx);
+                double_click(cx, at);
                 word = cx
                     .read(|cx| {
                         let d = main.read(cx);
