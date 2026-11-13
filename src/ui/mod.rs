@@ -8,8 +8,8 @@ pub mod tex_setup;
 pub mod welcome;
 pub mod workspace;
 
-use gpui_kit::SharedString;
 use gpui_kit::component::button::Button;
+use gpui_kit::{App, SharedString, TextSystem, font, px};
 
 /// The tooltip of an icon button, which is also its name for VoiceOver: an icon gives a button
 /// no name, and a tooltip only describes it. The name leaves out the shortcut in brackets.
@@ -23,6 +23,38 @@ impl Tip for Button {
         let name = spoken(&tip);
         self.accessibility_label(name).tooltip(tip)
     }
+}
+
+/// The installed font families, sorted, for the font menus. Listing them costs CoreText some 55 ms
+/// and showing each in its face loads it (about 140 ms for all, the first time): done once, off
+/// the main thread, at launch, so the menu opens at once.
+static FONT_NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+fn list_fonts(ts: &TextSystem) -> Vec<String> {
+    let mut names = ts.all_font_names();
+    names.sort();
+    names.dedup();
+    names.retain(|n| !n.starts_with('.'));
+    names
+}
+
+/// The font list read, and every face loaded, in the background.
+pub fn warm_fonts(cx: &App) {
+    let ts = cx.text_system().clone();
+    cx.background_executor()
+        .spawn(async move {
+            let names = FONT_NAMES.get_or_init(|| list_fonts(&ts));
+            for n in names {
+                let id = ts.resolve_font(&font(n.clone()));
+                let _ = ts.advance(id, px(13.0), 'A');
+            }
+        })
+        .detach();
+}
+
+/// The installed families (listed now if the background has not yet).
+pub fn font_names(cx: &App) -> &'static [String] {
+    FONT_NAMES.get_or_init(|| list_fonts(cx.text_system()))
 }
 
 /// What a file error means, in a sentence a person reads in a notification: the common ones in

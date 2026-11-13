@@ -3,15 +3,18 @@
 // window (⌘,), built from gpui-kit's settings components.
 use crate::ui::Tip;
 use crate::ui::keymap;
+use gpui_kit::base::Scrollbar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{CursorBlink, Input, InputEvent, InputState};
+use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::setting::{
     NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
     Settings,
 };
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, ThemeRegistry, TitleBar,
+    ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, ThemeRegistry, TitleBar, h_flex,
 };
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -306,24 +309,32 @@ fn install_theme(cx: &mut App) {
     });
 }
 
+/// A group of settings. The page leaves 1 rem beside its list for focus rings, but the
+/// scrollbar's track, opaque while it shows, takes 16 px of the list's right edge: the group
+/// keeps clear of it the 3 px ring of a control on its right edge, at every interface font size.
+fn group(cx: &App) -> SettingGroup {
+    let clear = Scrollbar::width() + px(4.0) - cx.theme().font_size;
+    SettingGroup::new().pr(clear.max(px(0.0)))
+}
+
 /// Keyboard shortcuts: each command and its key; click the key and press a new one.
-fn shortcuts_page() -> SettingPage {
+fn shortcuts_page(cx: &App) -> SettingPage {
     let all = keymap::commands();
     let mut page = SettingPage::new("Keyboard shortcuts");
-    for group in ["File", "Edit", "Format", "View"] {
+    for name in ["File", "Edit", "Format", "View"] {
         let items: Vec<SettingItem> = all
             .iter()
-            .filter(|c| c.group == group)
+            .filter(|c| c.group == name)
             .map(|c| {
                 let (id, label) = (c.id, c.label);
                 SettingItem::render(move |_, window, cx| shortcut_row(id, label, window, cx))
                     .keywords([label, "shortcut", "key"])
             })
             .collect();
-        page = page.group(SettingGroup::new().title(group).items(items));
+        page = page.group(group(cx).title(name).items(items));
     }
     page.group(
-        SettingGroup::new().item(
+        group(cx).item(
             SettingItem::render(|_, _, cx| {
                 let changed = !AppSettings::get(cx).shortcuts.is_empty();
                 div().flex().justify_end().child(
@@ -502,6 +513,29 @@ fn choice<T: PartialEq + Copy + 'static, L: Into<SharedString>>(
     .default_value(default)
 }
 
+/// The key of a field's own state: its kind and its place in the Settings window.
+fn field_key(kind: &str, options: &RenderOptions) -> SharedString {
+    format!(
+        "{kind}-{}-{}-{}",
+        options.page_ix(),
+        options.group_ix(),
+        options.item_ix()
+    )
+    .into()
+}
+
+/// `field`, which the page's reset puts back to the setting's default.
+fn resettable(
+    field: SettingField<SharedString>,
+    get: fn(&AppSettings) -> &String,
+    set: fn(&mut AppSettings, String),
+) -> SettingField<SharedString> {
+    field.on_reset(
+        move |cx| get(AppSettings::get(cx)) != get(&AppSettings::default()),
+        move |_, cx| AppSettings::set(cx, |s| set(s, get(&AppSettings::default()).clone())),
+    )
+}
+
 struct TextField {
     input: Entity<InputState>,
     _sub: Subscription,
@@ -509,52 +543,246 @@ struct TextField {
 
 /// A text field whose placeholder says what empty means; the setting follows each keystroke,
 /// trimmed.
+fn text_input(
+    placeholder: &'static str,
+    get: fn(&AppSettings) -> &String,
+    set: fn(&mut AppSettings, String),
+    options: &RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+) -> Input {
+    let state = window.use_keyed_state(field_key("text", options), cx, |window, cx| {
+        let value = get(AppSettings::get(cx)).clone();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(placeholder)
+                .default_value(value)
+        });
+        let _sub = cx.subscribe(&input, move |_, input, ev: &InputEvent, cx| {
+            let v = input.read(cx).value().trim().to_string();
+            if matches!(ev, InputEvent::Change) && *get(AppSettings::get(cx)) != v {
+                AppSettings::set(cx, |s| set(s, v));
+            }
+        });
+        TextField { input, _sub }
+    });
+    let input = state.read(cx).input.clone();
+    // changed elsewhere (the page's reset, Choose…): shown; a space being typed is kept
+    let value = get(AppSettings::get(cx)).clone();
+    if input.read(cx).value().trim() != value {
+        input.update(cx, |s, cx| s.set_value(value, window, cx));
+    }
+    Input::new(&input)
+        .disabled(options.is_disabled())
+        .with_size(options.size())
+}
+
+/// A text setting's field.
 fn text(
     placeholder: &'static str,
     get: fn(&AppSettings) -> &String,
     set: fn(&mut AppSettings, String),
 ) -> SettingField<SharedString> {
-    SettingField::render(move |options: &RenderOptions, window, cx| {
-        let key = format!(
-            "text-{}-{}-{}",
-            options.page_ix(),
-            options.group_ix(),
-            options.item_ix()
-        );
-        let state = window.use_keyed_state(SharedString::from(key), cx, |window, cx| {
-            let value = get(AppSettings::get(cx)).clone();
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(placeholder)
-                    .default_value(value)
-            });
-            let _sub = cx.subscribe(&input, move |_, input, ev: &InputEvent, cx| {
-                let v = input.read(cx).value().trim().to_string();
-                if matches!(ev, InputEvent::Change) && *get(AppSettings::get(cx)) != v {
-                    AppSettings::set(cx, |s| set(s, v));
-                }
-            });
-            TextField { input, _sub }
-        });
-        let input = state.read(cx).input.clone();
-        // changed elsewhere (the page's reset): shown; a space being typed is kept
-        let value = get(AppSettings::get(cx)).clone();
-        if input.read(cx).value().trim() != value {
-            input.update(cx, |s, cx| s.set_value(value, window, cx));
-        }
-        let field = Input::new(&input)
-            .disabled(options.is_disabled())
-            .with_size(options.size());
+    let field = SettingField::render(move |options: &RenderOptions, window, cx| {
+        let field = text_input(placeholder, get, set, options, window, cx);
         if options.layout() == Axis::Horizontal {
             field.w_64()
         } else {
             field.w_full()
         }
+    });
+    resettable(field, get, set)
+}
+
+/// A path's text field, and Choose… beside it for the system's file (or folder) chooser.
+fn path(
+    placeholder: &'static str,
+    folder: bool,
+    get: fn(&AppSettings) -> &String,
+    set: fn(&mut AppSettings, String),
+) -> SettingField<SharedString> {
+    let field = SettingField::render(move |options: &RenderOptions, window, cx| {
+        h_flex()
+            .w_full()
+            .gap_2()
+            .child(text_input(placeholder, get, set, options, window, cx).flex_1())
+            .child(
+                Button::new(field_key("choose", options))
+                    .label("Choose…")
+                    .outline()
+                    .with_size(options.size())
+                    .disabled(options.is_disabled())
+                    .on_click(move |_, _, cx| choose_path(folder, set, cx)),
+            )
+    });
+    resettable(field, get, set)
+}
+
+/// The system's chooser, for a file or a folder; the one chosen becomes the setting.
+fn choose_path(folder: bool, set: fn(&mut AppSettings, String), cx: &mut App) {
+    let rx = cx.prompt_for_paths(PathPromptOptions {
+        files: !folder,
+        directories: folder,
+        multiple: false,
+        prompt: Some("Choose".into()),
+    });
+    cx.spawn(async move |cx| {
+        if let Ok(Ok(Some(paths))) = rx.await
+            && let Some(p) = paths.first()
+        {
+            let p = p.to_string_lossy().into_owned();
+            cx.update(|cx| AppSettings::set(cx, |s| set(s, p)));
+        }
     })
-    .on_reset(
-        move |cx| get(AppSettings::get(cx)) != get(&AppSettings::default()),
-        move |_, cx| AppSettings::set(cx, |s| set(s, get(&AppSettings::default()).clone())),
-    )
+    .detach();
+}
+
+/// A family in a font setting's list, drawn in its own face; `name` "" is the setting's default.
+#[derive(Clone)]
+struct FontChoice {
+    name: SharedString,
+    label: SharedString,
+    face: Option<SharedString>,
+}
+
+impl FontChoice {
+    fn named(n: &str) -> Self {
+        let n: SharedString = n.to_string().into();
+        FontChoice {
+            name: n.clone(),
+            label: n.clone(),
+            face: Some(n),
+        }
+    }
+
+    fn preview(&self) -> Div {
+        div()
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
+            .when_some(self.face.clone(), |d, f| d.font_family(f))
+            .child(self.label.clone())
+    }
+}
+
+impl SelectItem for FontChoice {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        Some(self.preview().into_any_element())
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        self.preview()
+    }
+
+    fn value(&self) -> &SharedString {
+        &self.name
+    }
+}
+
+/// A font setting's list: its default first (`default`, drawn in `face`), then the installed
+/// families but that face, then `current` when it is none of them (a font since removed).
+fn font_choices(
+    default: &str,
+    face: Option<&str>,
+    names: &[String],
+    current: &str,
+) -> Vec<FontChoice> {
+    let mut list = vec![FontChoice {
+        name: "".into(),
+        label: default.to_string().into(),
+        face: face.map(|f| f.to_string().into()),
+    }];
+    list.extend(
+        names
+            .iter()
+            .filter(|n| Some(n.as_str()) != face)
+            .map(|n| FontChoice::named(n)),
+    );
+    if !current.is_empty() && Some(current) != face && !names.iter().any(|n| n == current) {
+        list.push(FontChoice::named(current));
+    }
+    list
+}
+
+type FontSelect = SelectState<SearchableVec<FontChoice>>;
+
+struct FontField {
+    select: Entity<FontSelect>,
+    /// The setting the list last showed.
+    shown: Option<String>,
+    _sub: Subscription,
+}
+
+impl FontField {
+    fn new(
+        default: &'static str,
+        face: Option<&'static str>,
+        get: fn(&AppSettings) -> &String,
+        set: fn(&mut AppSettings, String),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let names = crate::ui::font_names(cx);
+        let items = font_choices(default, face, names, get(AppSettings::get(cx)));
+        let select = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true)
+        });
+        let _sub = cx.subscribe(&select, move |_, _, ev: &SelectEvent<_>, cx| {
+            if let SelectEvent::Confirm(Some(name)) = ev
+                && get(AppSettings::get(cx)) != name.as_ref()
+            {
+                let name = name.to_string();
+                AppSettings::set(cx, |s| set(s, name));
+            }
+        });
+        FontField {
+            select,
+            shown: None,
+            _sub,
+        }
+    }
+}
+
+/// A searchable list of the installed fonts, each drawn in its face; the first, `default`
+/// (drawn in `face`), leaves the setting empty.
+fn font(
+    default: &'static str,
+    face: Option<&'static str>,
+    get: fn(&AppSettings) -> &String,
+    set: fn(&mut AppSettings, String),
+) -> SettingField<SharedString> {
+    let field = SettingField::render(move |options: &RenderOptions, window, cx| {
+        let state = window.use_keyed_state(field_key("font", options), cx, |window, cx| {
+            FontField::new(default, face, get, set, window, cx)
+        });
+        // changed elsewhere (the page's reset): picked in the list
+        let value = get(AppSettings::get(cx)).clone();
+        if state.read(cx).shown.as_ref() != Some(&value) {
+            let pick: SharedString = match face {
+                Some(f) if f == value => "".into(),
+                _ => value.clone().into(),
+            };
+            let select = state.read(cx).select.clone();
+            select.update(cx, |s, cx| s.set_selected_value(&pick, window, cx));
+            state.update(cx, |f, _| f.shown = Some(value));
+        }
+        let select = Select::new(&state.read(cx).select)
+            .disabled(options.is_disabled())
+            .with_size(options.size())
+            .menu_max_h(px(320.0));
+        if options.layout() == Axis::Horizontal {
+            select.w_64()
+        } else {
+            select.w_full()
+        }
+    });
+    resettable(field, get, set)
 }
 
 /// Clear: the build files of the documents not open now removed, in the background (an open
@@ -583,7 +811,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
     let icon = |name: &str| Icon::default().path(format!("icons/{name}.svg"));
     let general = SettingPage::new("General")
         .icon(icon("sliders-horizontal"))
-        .group(SettingGroup::new().title("Startup").items([
+        .group(group(cx).title("Startup").items([
             SettingItem::new(
                 "On launch",
                 choice(
@@ -605,7 +833,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
             ),
         ]))
         .group(
-            SettingGroup::new().title("Saving").items([
+            group(cx).title("Saving").items([
                 SettingItem::new("Auto-save", switch(|s| s.autosave, |s, v| s.autosave = v)),
                 SettingItem::new(
                     "Auto-save delay (seconds)",
@@ -618,14 +846,14 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                 .disabled(!s.autosave),
             ]),
         )
-        .group(SettingGroup::new().title("Export").item(SettingItem::new(
+        .group(group(cx).title("Export").item(SettingItem::new(
             "Open the PDF after export",
             switch(|s| s.open_after_export, |s, v| s.open_after_export = v),
         )));
     let appearance = SettingPage::new("Appearance")
         .icon(icon("palette"))
         .group(
-            SettingGroup::new().title("Window").items([
+            group(cx).title("Window").items([
                 SettingItem::new(
                     "Theme",
                     SettingField::dropdown(
@@ -659,7 +887,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
             ]),
         )
         .group(
-            SettingGroup::new().title("Layout").items([
+            group(cx).title("Layout").items([
                 SettingItem::new(
                     "Show ribbon tools",
                     switch(|s| !s.ribbon_collapsed, |s, v| s.ribbon_collapsed = !v),
@@ -685,7 +913,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
     let editor = SettingPage::new("Editor")
         .icon(icon("pencil-line"))
         .group(
-            SettingGroup::new().title("Pages").items([
+            group(cx).title("Pages").items([
                 SettingItem::new(
                     "Open files at",
                     choice(zooms, |s| s.default_zoom, |s, v| s.default_zoom = v),
@@ -718,10 +946,15 @@ fn pages(cx: &App) -> Vec<SettingPage> {
             ]),
         )
         .group(
-            SettingGroup::new().title("Source").items([
+            group(cx).title("Source").items([
                 SettingItem::new(
                     "Source font",
-                    text("Menlo", |s| &s.source_font, |s, v| s.source_font = v),
+                    font(
+                        crate::ui::editor::MONO,
+                        Some(crate::ui::editor::MONO),
+                        |s| &s.source_font,
+                        |s, v| s.source_font = v,
+                    ),
                 ),
                 SettingItem::new(
                     "Source font size",
@@ -733,8 +966,9 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                 ),
                 SettingItem::new(
                     "Source box font",
-                    text(
+                    font(
                         "Document font",
+                        None,
                         |s| &s.source_box_font,
                         |s, v| s.source_box_font = v,
                     ),
@@ -751,12 +985,12 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                 .keywords(["completion"]),
             ]),
         )
-        .group(SettingGroup::new().title("Find").item(SettingItem::new(
+        .group(group(cx).title("Find").item(SettingItem::new(
             "Match case by default",
             switch(|s| s.find_match_case, |s, v| s.find_match_case = v),
         )));
     let files = SettingPage::new("Files").icon(icon("folder")).group(
-        SettingGroup::new().title("Project panel").items([
+        group(cx).title("Project panel").items([
             SettingItem::new(
                 "Show hidden files",
                 switch(|s| s.show_hidden_files, |s, v| s.show_hidden_files = v),
@@ -783,16 +1017,16 @@ fn pages(cx: &App) -> Vec<SettingPage> {
     let typesetting = SettingPage::new("Typesetting")
         .icon(icon("type"))
         .group(
-            SettingGroup::new().title("Engine").items([
+            group(cx).title("Engine").items([
                 SettingItem::new(
                     "rtex binary",
-                    text("Automatic", |s| &s.rtex_path, |s, v| s.rtex_path = v),
+                    path("Automatic", false, |s| &s.rtex_path, |s, v| s.rtex_path = v),
                 )
                 .layout(Axis::Vertical)
                 .keywords(["engine", "path"]),
                 SettingItem::new(
                     "TeX folder",
-                    text("Automatic", |s| &s.tex_bin, |s, v| s.tex_bin = v),
+                    path("Automatic", true, |s| &s.tex_bin, |s, v| s.tex_bin = v),
                 )
                 .layout(Axis::Vertical)
                 .keywords(["lualatex", "path"]),
@@ -803,7 +1037,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
             ]),
         )
         .group(
-            SettingGroup::new().title("Performance").items([
+            group(cx).title("Performance").items([
                 SettingItem::new(
                     "Paragraph time limit (ms)",
                     number(
@@ -821,10 +1055,10 @@ fn pages(cx: &App) -> Vec<SettingPage> {
             ]),
         )
         .group(
-            SettingGroup::new().title("Troubleshooting").items([
+            group(cx).title("Troubleshooting").items([
                 SettingItem::new(
                     "Diagnostics folder",
-                    text("None", |s| &s.debug_dir, |s, v| s.debug_dir = v),
+                    path("None", true, |s| &s.debug_dir, |s, v| s.debug_dir = v),
                 )
                 .layout(Axis::Vertical)
                 .keywords(["debug"]),
@@ -837,7 +1071,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
         editor,
         files,
         typesetting,
-        shortcuts_page().icon(icon("keyboard")),
+        shortcuts_page(cx).icon(icon("keyboard")),
     ]
 }
 
@@ -888,10 +1122,21 @@ impl Render for SettingsView {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettings, OnLaunch, OutlineDepth, SettingsView, TexView, Zoom, choice, pages, text,
+        AppSettings, FontField, OnLaunch, OutlineDepth, SettingsView, TexView, Zoom, choice, font,
+        font_choices, group, pages,
     };
-    use gpui_kit::component::setting::{AnySettingField, SelectIndex, Settings};
-    use gpui_kit::{Context, IntoElement, Render, TestAppContext, Window};
+    use crate::ui::editor::MONO;
+    use gpui_kit::base::Scrollbar;
+    use gpui_kit::component::select::SelectEvent;
+    use gpui_kit::component::setting::{
+        AnySettingField, SelectIndex, SettingField, SettingItem, SettingPage, Settings,
+    };
+    use gpui_kit::{
+        AppContext, Axis, Context, IntoElement, Pixels, Render, Styled, TestAppContext, Window,
+        canvas, px,
+    };
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn rtex_gets_the_engine_settings() {
@@ -1020,7 +1265,12 @@ mod tests {
             |s| s.default_zoom,
             |s, v| s.default_zoom = v,
         );
-        let font = text("Menlo", |s| &s.source_font, |s, v| s.source_font = v);
+        let font = font(
+            MONO,
+            Some(MONO),
+            |s| &s.source_font,
+            |s, v| s.source_font = v,
+        );
         let (_, cx) = cx.add_window_view(|_, _| SettingsView);
         cx.update(|window, cx| {
             assert!(!zoom.is_resettable(cx) && !font.is_resettable(cx));
@@ -1035,5 +1285,107 @@ mod tests {
             assert_eq!(s.default_zoom, Zoom::Percent(100.0));
             assert_eq!(s.source_font, "");
         });
+    }
+
+    /// A font list: the default first (meaning empty), the installed families without it, and
+    /// a font no longer installed kept last.
+    #[test]
+    fn a_font_list_starts_with_its_default() {
+        let names = ["Fira Code", "Menlo", "Monaco"].map(String::from);
+        let list = font_choices("Menlo", Some("Menlo"), &names, "Gone Mono");
+        let got: Vec<(&str, &str)> = list
+            .iter()
+            .map(|c| (c.name.as_ref(), c.label.as_ref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("", "Menlo"),
+                ("Fira Code", "Fira Code"),
+                ("Monaco", "Monaco"),
+                ("Gone Mono", "Gone Mono"),
+            ]
+        );
+        assert_eq!(list[0].face.as_deref(), Some("Menlo"));
+        assert_eq!(list[1].face.as_deref(), Some("Fira Code"));
+        let doc = font_choices("Document font", None, &names, "Monaco");
+        assert_eq!(
+            (doc[0].name.as_ref(), doc[0].label.as_ref()),
+            ("", "Document font")
+        );
+        assert!(doc[0].face.is_none());
+        assert_eq!(doc.len(), 4);
+    }
+
+    /// A font picked in the list is the setting; the first item empties it.
+    #[gpui_kit::test]
+    fn picking_a_font_sets_it(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let (_, cx) = cx.add_window_view(|_, _| SettingsView);
+        let field = cx.update(|window, cx| {
+            cx.new(|cx| {
+                FontField::new(
+                    MONO,
+                    Some(MONO),
+                    |s| &s.source_font,
+                    |s, v| s.source_font = v,
+                    window,
+                    cx,
+                )
+            })
+        });
+        let select = cx.update(|_, cx| field.read(cx).select.clone());
+        for name in ["Fira Code", ""] {
+            select.update(cx, |_, cx| cx.emit(SelectEvent::Confirm(Some(name.into()))));
+            cx.run_until_parked();
+            cx.update(|_, cx| assert_eq!(AppSettings::get(cx).source_font, name));
+        }
+    }
+
+    /// A page with one full-width field, which notes where its right edge is drawn, at an
+    /// interface font size.
+    struct Probe(Rc<Cell<Pixels>>, f32);
+
+    impl Render for Probe {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // the app's Root sets it from the theme
+            window.set_rem_size(px(self.1));
+            let edge = self.0.clone();
+            let field = SettingField::render(move |_, _, _| {
+                let edge = edge.clone();
+                canvas(move |b, _, _| edge.set(b.right()), |_, _, _, _| {})
+                    .w_full()
+                    .h(px(8.0))
+            });
+            let item = SettingItem::new("Field", field).layout(Axis::Vertical);
+            Settings::new("settings")
+                .pages(vec![SettingPage::new("Page").group(group(cx).item(item))])
+        }
+    }
+
+    /// The focus ring (3 px) of a control on a group's right edge stays clear of the
+    /// scrollbar's track, which covers the list's right edge while it shows.
+    #[gpui_kit::test]
+    fn focus_rings_clear_the_scrollbar(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        for size in [10.0, 16.0, 24.0] {
+            cx.update(|cx| AppSettings::set(cx, |s| s.ui_font_size = size));
+            let edge = Rc::new(Cell::new(px(0.0)));
+            let (_, vcx) = cx.add_window_view(|_, _| Probe(edge.clone(), size as f32));
+            vcx.run_until_parked();
+            let track = vcx.update(|window, _| window.viewport_size().width) - Scrollbar::width();
+            assert!(edge.get() > px(0.0), "the field was drawn");
+            assert!(
+                edge.get() + px(3.0) < track,
+                "at {size} px the ring reaches {:?}, the track starts at {track:?}",
+                edge.get() + px(3.0)
+            );
+        }
     }
 }

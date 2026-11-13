@@ -152,7 +152,7 @@ impl Workspace {
             _rename_sub: None,
             _dialog_subs: vec![],
         };
-        ribbon::warm_fonts(cx);
+        crate::ui::warm_fonts(cx);
         // a colour typed in the palette's hex field, on Enter
         let hex = this.color_hex.clone();
         this._subs.push(cx.subscribe_in(

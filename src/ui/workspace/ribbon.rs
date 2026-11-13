@@ -4,8 +4,8 @@
 // tab folds the ribbon to its tab row.
 use super::*;
 use crate::document::format::{Align, Font, SIZES, Size, Style};
-use crate::ui::Tip;
 use crate::ui::editor::{FormatOp, RibbonState};
+use crate::ui::{Tip, font_names};
 use gpui_kit::component::input::{Copy, Cut, Paste};
 
 /// The ribbon's tabs.
@@ -14,38 +14,6 @@ pub(super) enum RibbonTab {
     #[default]
     Home,
     Insert,
-}
-
-/// The installed font families, sorted, for the font menu. Listing them costs CoreText some 55 ms
-/// and showing each in its face loads it (about 140 ms for all, the first time): done once, off
-/// the main thread, at launch, so the menu opens at once.
-static FONT_NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-
-fn list_fonts(ts: &TextSystem) -> Vec<String> {
-    let mut names = ts.all_font_names();
-    names.sort();
-    names.dedup();
-    names.retain(|n| !n.starts_with('.'));
-    names
-}
-
-/// The font list read, and every face loaded, in the background.
-pub(super) fn warm_fonts(cx: &App) {
-    let ts = cx.text_system().clone();
-    cx.background_executor()
-        .spawn(async move {
-            let names = FONT_NAMES.get_or_init(|| list_fonts(&ts));
-            for n in names {
-                let id = ts.resolve_font(&font(n.clone()));
-                let _ = ts.advance(id, px(13.0), 'A');
-            }
-        })
-        .detach();
-}
-
-/// The installed families (listed now if the background has not yet).
-fn font_names(cx: &App) -> &'static [String] {
-    FONT_NAMES.get_or_init(|| list_fonts(cx.text_system()))
 }
 
 /// Faces that show what Serif, Sans and Mono look like (the system's, always there).
