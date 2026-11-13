@@ -194,6 +194,11 @@ impl Doc {
         self.active.is_some()
     }
 
+    /// Where the open source box's text starts in the source.
+    pub fn box_at(&self) -> Option<usize> {
+        self.active.as_ref().map(|a| a.range.start)
+    }
+
     pub fn jump_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.scroll_to(offset, false, cx);
     }

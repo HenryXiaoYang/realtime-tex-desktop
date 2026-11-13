@@ -88,7 +88,11 @@ pub fn init(cx: &mut App) {
     // what each window shows is remembered, and nothing typed is lost; they stay open
     cx.on_app_quit(|cx| {
         let windows = cx.global::<Projects>().windows.clone();
-        // the tour is not reopened: its copy goes with it
+        // the tour is not reopened: its copy goes with it, and what its step unfolded or opened
+        // (saved settings) is put back
+        for (_, _, ws) in windows.iter().filter(|w| w.0 == tour::dir()) {
+            let _ = ws.update(cx, |ws, cx| ws.tour_end(cx));
+        }
         for (root, _, ws) in windows.into_iter().filter(|w| w.0 != tour::dir()) {
             let shown = ws
                 .update(cx, |ws, cx| {
@@ -273,13 +277,18 @@ fn first_launch(cx: &App) -> bool {
         && !crate::ui::settings::AppSettings::get(cx).tour_seen
 }
 
-/// The tour, in a fresh copy of its project (or its window to the front, when it is open). Seen
-/// once started: closing it does not bring it back.
+/// The tour, in a fresh copy of its project (or its window to the front and the tour from its
+/// first step there, when it is open). Seen once started: closing it does not bring it back.
 pub fn start_tour(cx: &mut App) {
     crate::ui::settings::AppSettings::set(cx, |s| s.tour_seen = true);
     let dir = tour::dir();
-    if cx.global::<Projects>().windows.iter().any(|w| w.0 == dir) {
-        return open_in(dir, None, cx);
+    let open = cx.global::<Projects>().windows.iter().find(|w| w.0 == dir);
+    if let Some((_, handle, ws)) = open.cloned() {
+        let _ = handle.update(cx, |_, window, cx| {
+            window.activate_window();
+            ws.update(cx, |ws, cx| ws.tour_start(window, cx))
+        });
+        return;
     }
     match tour::create() {
         Ok(d) => open_in(d, Some("main.tex".into()), cx),

@@ -199,15 +199,15 @@ impl Workspace {
                 }
             }));
         this.refresh_tree(cx);
-        if this.root == tour::dir() {
-            this.tour = Some(tour::Tour::new());
-        }
         match main.or_else(|| crate::engine::find_main(&this.root)) {
             Some(m) => this.open(m, window, cx),
             None => {
                 this.status =
                     "No document here: this folder has no .tex file with \\documentclass. Open one from the project panel".into()
             }
+        }
+        if this.root == tour::dir() {
+            this.tour_start(window, cx);
         }
         this
     }
@@ -243,18 +243,16 @@ impl Workspace {
             .collect()
     }
 
-    /// The PDF exported (the tour waits for it).
+    /// The PDF exported (the tour's into Documents: its folder goes when its window closes).
     fn export(&mut self, cx: &mut Context<Self>) {
-        if let Some(t) = &mut self.tour {
-            t.exported = true;
-        }
-        self.with_doc(cx, |d, cx| d.export(cx));
+        let into = (self.root == tour::dir()).then(tour::export_dir);
+        self.with_doc(cx, |d, cx| d.export(into, cx));
     }
 
     /// The full LaTeX run started now (the tour waits for it).
     fn recompile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(t) = &mut self.tour {
-            t.recompiled = true;
+            t.since.recompiled = true;
         }
         self.with_doc(cx, |d, cx| d.recompile(window, cx));
     }
@@ -268,7 +266,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.tour_check(cx);
+        self.tour_check(window, cx);
         let theme = cx.theme().clone();
         window.set_window_edited(self.tabs.iter().any(|d| d.read(cx).dirty));
         // a click outside the page view (project panel, tabs, status bar) closes the source box

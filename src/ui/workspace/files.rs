@@ -38,6 +38,10 @@ impl Workspace {
         }
         let (root, resources) = (self.root.clone(), self.resources.clone());
         let doc = cx.new(|cx| Doc::new(root, path, resources, window, cx));
+        // the tour's files are what it explains: pages, whatever new files open in
+        if self.root == tour::dir() {
+            doc.update(cx, |d, cx| d.set_source_mode(false, window, cx));
+        }
         // what it has to tell (also from opening: rtex not found)
         self.show_notices(&doc, window, cx);
         self._subs
