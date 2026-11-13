@@ -2,6 +2,7 @@
 // window dimmed but for the controls a step is about, a card beside them saying what they are for.
 // A step that asks for something moves on once it is done since the step began; Escape ends the
 // tour, Return goes on. The copy is deleted when its window closes.
+use super::chrome::Bottom;
 use super::*;
 use crate::ui::keys_in;
 use std::cell::RefCell;
@@ -9,8 +10,6 @@ use std::collections::HashMap;
 
 const MAIN: &str = include_str!("tour/main.tex");
 const CHAPTER: &str = include_str!("tour/chapter.tex");
-/// What the TeX-breaks step has the reader break (its closing brace) and mend.
-const FRACTION: &str = "\\frac{1}{2}";
 
 /// The scratch copy's folder, the app's own: one, so that a second tour brings the first one's
 /// window back (a test's is its own, clear of the app's).
@@ -61,9 +60,17 @@ enum Done {
     BoxSeen,
     MadeBold,
     TypedInChapter,
-    BrokeAndFixed,
+    /// Problems opened.
+    ProblemsOpened,
     Recompiled,
     Exported,
+}
+
+impl Done {
+    /// Done, the step stays for what it opened to be looked at, and Next goes on.
+    fn stays(self) -> bool {
+        matches!(self, Done::ProblemsOpened)
+    }
 }
 
 struct Step {
@@ -158,17 +165,17 @@ const STEPS: &[Step] = &[
         "Open chapter.tex here and type in it. A file the main one brings in with \\input is edited on the same pages.",
     ),
     see(
-        &["status-left"],
+        &["panel-toggle"],
         Show::Nothing,
-        "Pages and panels",
-        "Where you are in the document, and the button that shows or hides the project panel.",
+        "The project panel",
+        "This button shows or hides the project panel (⌘\\).",
     ),
     act(
-        &["problems", "pages"],
+        &["bottom", "problems"],
         Show::Nothing,
-        Done::BrokeAndFixed,
-        "When TeX breaks",
-        "In main.tex, click the formula in section 5, delete the } after the 2 and click outside the box. LaTeX can’t typeset that, so Problems turns red: open it, then Undo (⌘Z).",
+        Done::ProblemsOpened,
+        "Problems",
+        "When LaTeX can’t typeset something, what went wrong is listed here. Click it to open the list.",
     ),
     see(
         &["logs"],
@@ -233,8 +240,8 @@ pub(super) struct Since {
     boxed: Option<usize>,
     /// A source box opened since.
     opened: bool,
-    /// The fraction was broken.
-    broke: bool,
+    /// Problems was open then, until it closes.
+    problems: bool,
     pub(super) recompiled: bool,
     /// A PDF was made.
     pub(super) exported: bool,
@@ -243,6 +250,8 @@ pub(super) struct Since {
 pub(super) struct Tour {
     /// The step shown; STEPS.len() is the end.
     step: usize,
+    /// What the step asked for is done, and it stays until Next.
+    done: bool,
     restore: Restore,
     pub(super) since: Since,
     /// The controls' bounds (window coordinates) by name, as painted last frame: only those
@@ -266,6 +275,7 @@ impl Workspace {
         });
         self.tour = Some(Tour {
             step: 0,
+            done: false,
             restore: Restore::Nothing,
             since: Since::default(),
             marks: Default::default(),
@@ -291,7 +301,8 @@ impl Workspace {
         match ks.key.as_str() {
             "escape" if ev.action.is_none() || pages => self.tour_end(cx),
             "enter"
-                if ev.action.is_none() && STEPS.get(t.step).is_some_and(|s| s.done.is_none()) =>
+                if ev.action.is_none()
+                    && (t.done || STEPS.get(t.step).is_some_and(|s| s.done.is_none())) =>
             {
                 self.tour_go(t.step + 1, window, cx)
             }
@@ -334,12 +345,13 @@ impl Workspace {
     pub(super) fn tour_check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(t) = &self.tour else { return };
         let step = t.step;
-        let Some(done) = STEPS.get(step).and_then(|s| s.done) else {
+        let Some(done) = STEPS.get(step).and_then(|s| s.done).filter(|_| !t.done) else {
             return;
         };
         let main = self.tour_source("main.tex", cx);
         let chapter = self.tour_source("chapter.tex", cx);
         let boxed = self.tour_box(cx);
+        let problems = self.bottom == Some(Bottom::Problems);
         let s = &mut self.tour.as_mut().unwrap().since;
         if s.main.is_none() {
             s.main.clone_from(&main);
@@ -352,8 +364,8 @@ impl Workspace {
         } else if boxed != s.boxed {
             s.opened = true;
         }
-        if main.as_ref().is_some_and(|m| !m.contains(FRACTION)) {
-            s.broke = true;
+        if !problems {
+            s.problems = false;
         }
         let bold = |s: &str| s.matches("\\textbf").count();
         let is_done = match done {
@@ -363,11 +375,14 @@ impl Workspace {
                 .zip(s.main.as_deref())
                 .is_some_and(|(now, then)| bold(&now) > bold(then)),
             Done::TypedInChapter => chapter != s.chapter,
-            Done::BrokeAndFixed => s.broke && main.is_some_and(|m| m.contains(FRACTION)),
+            Done::ProblemsOpened => problems && !s.problems,
             Done::Recompiled => s.recompiled,
             Done::Exported => s.exported,
         };
-        if is_done {
+        if is_done && done.stays() {
+            self.tour.as_mut().unwrap().done = true;
+            cx.notify();
+        } else if is_done {
             self.tour_go(step + 1, window, cx);
         }
     }
@@ -405,10 +420,12 @@ impl Workspace {
             main: self.tour_source("main.tex", cx),
             chapter: self.tour_source("chapter.tex", cx),
             boxed: self.tour_box(cx),
+            problems: self.bottom == Some(Bottom::Problems),
             ..Default::default()
         };
         if let Some(t) = &mut self.tour {
             t.step = to;
+            t.done = false;
             t.restore = restore;
             t.since = since;
         }
@@ -532,15 +549,20 @@ impl Workspace {
         .size_full();
         let t = self.tour.as_ref()?;
         let card = self.tour_card(t, t.holes.first().copied(), window.viewport_size(), cx);
+        // over the window's notifications and dialogs (drawn after the workspace), under its
+        // menus and dropdowns (deferred at POPUP_PRIORITY), so one opened in a hole stays lit
         Some(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .child(layer)
-                .child(card)
-                .into_any_element(),
+            deferred(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .child(layer)
+                    .child(card),
+            )
+            .with_priority(1)
+            .into_any_element(),
         )
     }
 
@@ -679,7 +701,7 @@ impl Workspace {
                         })
                         // a step that waits can still be passed, should what it waits for not come
                         .child(
-                            if step.done.is_some() {
+                            if step.done.is_some() && !t.done {
                                 Button::new("tour-next")
                                     .label("Skip Step")
                                     .outline()
@@ -764,7 +786,7 @@ mod tests {
 mod e2e {
     use super::super::Workspace;
     use super::super::ribbon::RibbonTab;
-    use super::{CHAPTER, FRACTION, MAIN, STEPS, export_dir};
+    use super::{CHAPTER, MAIN, STEPS, export_dir};
     use crate::ui::editor::Doc;
     use crate::ui::settings::{AppSettings, TexView};
     use gpui_kit::InputEvent as _;
@@ -1119,28 +1141,18 @@ mod e2e {
         press(cx, "enter");
         assert_eq!(step(cx), Some(8));
 
-        // TeX broken and mended: its brace deleted in the formula's box (which keeps a brace
-        // left open from the pages until it closes), then undone on the pages
-        let at = source(cx).find(FRACTION).unwrap();
-        in_window(cx, &mut |window, cx| {
-            main.update(cx, |d, cx| d.edit_at(at, window, cx))
-        });
-        frame(cx);
-        let start = cx.read(|cx| main.read(cx).box_at()).unwrap();
-        for _ in start..at + FRACTION.len() {
-            in_window(cx, &mut |window, cx| window.press("right", cx));
-        }
-        press(cx, "backspace");
-        press(cx, "escape");
-        assert!(
-            !source(cx).contains(FRACTION),
-            "broken: {}",
-            &source(cx)[at..at + 20]
+        // Problems opened from its button
+        click(cx, "toggle-problems");
+        assert_eq!(
+            step(cx),
+            Some(8),
+            "Problems open, and stays to be looked at"
         );
-        assert_eq!(step(cx), Some(8));
-        press(cx, "cmd-z");
-        assert!(source(cx).contains(FRACTION), "mended");
-        assert_eq!(step(cx), Some(9), "broken and mended");
+        let (holes, want) = cut(cx);
+        assert_eq!(holes, want);
+        assert_eq!(holes.len(), 2, "the button and the list it opened");
+        click(cx, "tour-next");
+        assert_eq!(step(cx), Some(9));
         click(cx, "tour-next");
         assert_eq!(step(cx), Some(10));
         cx.read(|cx| {

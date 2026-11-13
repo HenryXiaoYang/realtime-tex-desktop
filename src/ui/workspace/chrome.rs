@@ -290,16 +290,22 @@ impl Workspace {
                             .items_center()
                             .gap_2()
                             .child(
-                                Button::new("toggle-sidebar")
-                                    .icon(Icon::default().path("icons/panel-left.svg"))
-                                    .ghost()
-                                    .xsmall()
-                                    .selected(self.fit.left)
-                                    .tip("Show or Hide Project Panel (⌘\\)")
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_left(cx))),
+                                div()
+                                    .relative()
+                                    .child(
+                                        Button::new("toggle-sidebar")
+                                            .icon(Icon::default().path("icons/panel-left.svg"))
+                                            .ghost()
+                                            .xsmall()
+                                            .selected(self.fit.left)
+                                            .tip("Show or Hide Project Panel (⌘\\)")
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.toggle_left(cx)),
+                                            ),
+                                    )
+                                    .children(self.tour_mark("panel-toggle")),
                             )
-                            .children(pages.map(|p| div().flex_none().child(p)))
-                            .children(self.tour_mark("status-left")),
+                            .children(pages.map(|p| div().flex_none().child(p))),
                     )
                     .child(
                         div()

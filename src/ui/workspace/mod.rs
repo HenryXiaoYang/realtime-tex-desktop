@@ -296,7 +296,8 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .child(bottom)
-            .child(layout::measure_height(self.fit.bottom_h.clone()));
+            .child(layout::measure_height(self.fit.bottom_h.clone()))
+            .children(self.tour_mark("bottom"));
         // the notifications in the pages' corner, clear of the panel under them and the sidebar
         // (the window in front sets it: the setting is the app's, not each window's)
         if window.is_window_active() {
