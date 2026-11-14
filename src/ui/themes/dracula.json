@@ -1,0 +1,162 @@
+{
+  "name": "Dracula",
+  "author": "Dracula Theme (dracula/visual-studio-code, MIT), from its VS Code theme",
+  "url": "https://github.com/dracula/visual-studio-code",
+  "themes": [
+    {
+      "name": "Dracula",
+      "mode": "dark",
+      "colors": {
+        "background": "#282A36",
+        "sidebar.background": "#21222C",
+        "title_bar.background": "#21222C",
+        "status_bar.background": "#191A21",
+        "tab_bar.background": "#191A21",
+        "popover.background": "#21222C",
+        "foreground": "#F8F8F2",
+        "muted.background": "#3D3F49",
+        "muted.foreground": "#A3ACC9",
+        "border": "#191A21",
+        "sidebar.foreground": "#F8F8F2",
+        "sidebar.border": "#191A21",
+        "title_bar.border": "#191A21",
+        "status_bar.border": "#191A21",
+        "tab.background": "#00000000",
+        "tab.foreground": "#7583AF",
+        "tab.active.background": "#282A36",
+        "tab.active.foreground": "#F8F8F2",
+        "popover.foreground": "#F8F8F2",
+        "primary.foreground": "#282A36",
+        "primary.background": "#BD93F9",
+        "primary.hover.background": "#CCABFA",
+        "primary.active.background": "#AE7BF8",
+        "secondary.background": "#3D3F49",
+        "secondary.hover.background": "#464851",
+        "secondary.active.background": "#50515A",
+        "secondary.foreground": "#F8F8F2",
+        "ring": "#BD93F9",
+        "selection.background": "#44475A",
+        "caret": "#BD93F9",
+        "link": "#BD93F9",
+        "link.hover": "#BD93F9",
+        "link.active": "#BD93F9",
+        "input.border": "#191A21",
+        "list.background": "#282A36",
+        "list.hover.background": "#44475A75",
+        "list.active.background": "#44475A",
+        "list.active.border": "#BD93F9",
+        "accent.background": "#44475A75",
+        "accent.foreground": "#F8F8F2",
+        "sidebar.accent.background": "#44475A75",
+        "sidebar.accent.foreground": "#F8F8F2",
+        "switch.background": "#5C5E65",
+        "window.border": "#191A21",
+        "scrollbar.thumb.background": "#52535C",
+        "scrollbar.thumb.hover.background": "#66686E",
+        "group_box.background": "#2E303C",
+        "base.red": "#FF5555",
+        "base.green": "#50FA7B",
+        "base.yellow": "#F1FA8C",
+        "base.blue": "#BD93F9",
+        "base.magenta": "#FF79C6",
+        "base.cyan": "#8BE9FD",
+        "danger.background": "#FF5555",
+        "danger.foreground": "#282A36",
+        "warning.background": "#FFB86C",
+        "warning.foreground": "#282A36",
+        "success.background": "#50FA7B",
+        "success.foreground": "#282A36",
+        "info.background": "#BD93F9",
+        "info.foreground": "#282A36",
+        "pages.paper": "#282A36",
+        "pages.ink": "#F8F8F2",
+        "pages.accent": "#AB76F7",
+        "pages.selection": "#44475A",
+        "pages.source_box.background": "#21222C",
+        "pages.source_box.foreground": "#F8F8F2",
+        "accent": "#BD93F9"
+      },
+      "highlight": {
+        "editor_background": "#282A36",
+        "editor_foreground": "#F8F8F2",
+        "editor_active_line": "#32343F",
+        "editor_line_number": "#6272A4",
+        "editor_active_line_number": "#F8F8F2",
+        "editor_invisible": "#3E404A",
+        "syntax": {
+          "comment": {
+            "color": "#6272A4"
+          },
+          "keyword": {
+            "color": "#FF79C6"
+          },
+          "function": {
+            "color": "#8BE9FD"
+          },
+          "string": {
+            "color": "#F1FA8C"
+          },
+          "string.escape": {
+            "color": "#FF79C6"
+          },
+          "string.regex": {
+            "color": "#F1FA8C"
+          },
+          "number": {
+            "color": "#BD93F9"
+          },
+          "boolean": {
+            "color": "#BD93F9"
+          },
+          "constant": {
+            "color": "#BD93F9"
+          },
+          "operator": {
+            "color": "#FF79C6"
+          },
+          "preproc": {
+            "color": "#FF79C6"
+          },
+          "type": {
+            "color": "#8BE9FD",
+            "font_style": "italic"
+          },
+          "tag": {
+            "color": "#FF79C6"
+          },
+          "attribute": {
+            "color": "#50FA7B",
+            "font_style": "italic"
+          },
+          "title": {
+            "color": "#BD93F9",
+            "font_weight": 700
+          },
+          "variable": {
+            "color": "#FFB86C",
+            "font_style": "italic"
+          },
+          "variable.special": {
+            "color": "#BD93F9",
+            "font_style": "italic"
+          },
+          "property": {
+            "color": "#F8F8F2"
+          },
+          "emphasis": {
+            "color": "#F1FA8C",
+            "font_style": "italic"
+          },
+          "emphasis.strong": {
+            "color": "#FFB86C",
+            "font_weight": 700
+          },
+          "link_uri": {
+            "color": "#8BE9FD",
+            "font_style": "underline"
+          }
+        }
+      }
+    }
+  ]
+}

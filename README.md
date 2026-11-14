@@ -158,9 +158,12 @@ Typesetting (the rtex binary and TeX folder, downloading rtex, the live paragrap
 picture reuse, a diagnostics folder, clearing the build cache) and Keyboard shortcuts. A change
 to the engine settings restarts the open documents' rtex. They are saved in
 `~/Library/Application Support/Realtime Tex Desktop/settings.json`. Besides its own light and
-dark themes the app has Solarized, Nord, Gruvbox and High Contrast; a theme file
-(gpui-component's format) put in `themes` next to the settings file is in the theme lists at
-once.
+dark themes the app has Solarized, Nord, Gruvbox and High Contrast, and from VS Code One Dark
+Pro, Dracula, GitHub (Dark, Light), Night Owl and Light Owl, Tokyo Night (and Light) and
+Catppuccin (Latte, Frappé, Macchiato, Mocha); a theme file (gpui-component's format) put in
+`themes` next to the settings file is in the theme lists at once.
+`python3 scripts/themes/vscode_to_app.py` makes the VS Code ones again from their sources in
+`scripts/themes/sources/` (each with its license), raising any colour that reads too faintly.
 
 ## Requirements
 

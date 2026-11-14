@@ -1,0 +1,331 @@
+{
+  "name": "Tokyo Night",
+  "author": "Enkia (enkia/tokyo-night-vscode-theme, MIT), from its VS Code theme",
+  "url": "https://github.com/enkia/tokyo-night-vscode-theme",
+  "themes": [
+    {
+      "name": "Tokyo Night",
+      "mode": "dark",
+      "colors": {
+        "background": "#1A1B26",
+        "sidebar.background": "#16161E",
+        "title_bar.background": "#16161E",
+        "status_bar.background": "#16161E",
+        "tab_bar.background": "#16161E",
+        "popover.background": "#16161E",
+        "foreground": "#A9B1D6",
+        "muted.background": "#313342",
+        "muted.foreground": "#989BB1",
+        "border": "#020203",
+        "sidebar.foreground": "#7B7F9B",
+        "sidebar.border": "#101014",
+        "title_bar.border": "#101014",
+        "status_bar.border": "#101014",
+        "tab.background": "#00000000",
+        "tab.foreground": "#7B7F9B",
+        "tab.active.background": "#16161E",
+        "tab.active.foreground": "#A9B1D6",
+        "popover.foreground": "#7B7F9B",
+        "primary.foreground": "#FFFFFF",
+        "primary.background": "#3D59A1",
+        "primary.hover.background": "#4463B3",
+        "primary.active.background": "#364F8F",
+        "secondary.background": "#313342",
+        "secondary.hover.background": "#37394A",
+        "secondary.active.background": "#3D4051",
+        "secondary.foreground": "#A9B1D6",
+        "ring": "#4565B7",
+        "selection.background": "#515C7E4D",
+        "caret": "#C0CAF5",
+        "link": "#6586BD",
+        "link.hover": "#7DCFFF",
+        "link.active": "#7DCFFF",
+        "input.border": "#020203",
+        "list.background": "#1A1B26",
+        "list.hover.background": "#0F0F14",
+        "list.active.background": "#222533",
+        "list.active.border": "#4565B7",
+        "accent.background": "#1E202E",
+        "accent.foreground": "#A9B1D6",
+        "sidebar.accent.background": "#20212F",
+        "sidebar.accent.foreground": "#A9B1D6",
+        "switch.background": "#3E4052",
+        "window.border": "#020203",
+        "scrollbar.thumb.background": "#383A51",
+        "scrollbar.thumb.hover.background": "#383A51",
+        "group_box.background": "#1E202B",
+        "base.red": "#F7768E",
+        "base.green": "#73DACA",
+        "base.yellow": "#E0AF68",
+        "base.blue": "#7AA2F7",
+        "base.magenta": "#BB9AF7",
+        "base.cyan": "#7DCFFF",
+        "danger.background": "#C06C75",
+        "danger.foreground": "#1A1B26",
+        "warning.background": "#C49A5A",
+        "warning.foreground": "#1A1B26",
+        "success.background": "#449DAB",
+        "success.foreground": "#1A1B26",
+        "info.background": "#0DA0BA",
+        "info.foreground": "#1A1B26",
+        "pages.paper": "#1A1B26",
+        "pages.ink": "#A9B1D6",
+        "pages.accent": "#4565B7",
+        "pages.selection": "#515C7E4D",
+        "pages.find.current": "#3D59A166",
+        "pages.find.other": "#3D59A166",
+        "pages.source_box.background": "#0D0D12",
+        "pages.source_box.foreground": "#A9B1D6",
+        "accent": "#3D59A1"
+      },
+      "highlight": {
+        "editor_background": "#1A1B26",
+        "editor_foreground": "#A9B1D6",
+        "editor_active_line": "#1E202E",
+        "editor_line_number": "#5E6792",
+        "editor_active_line_number": "#8487A2",
+        "editor_invisible": "#363B54",
+        "syntax": {
+          "comment": {
+            "color": "#5D6690",
+            "font_style": "italic"
+          },
+          "keyword": {
+            "color": "#BB9AF7"
+          },
+          "function": {
+            "color": "#0DB9D7"
+          },
+          "string": {
+            "color": "#9ECE6A"
+          },
+          "string.escape": {
+            "color": "#89DDFF"
+          },
+          "string.regex": {
+            "color": "#B4F9F8"
+          },
+          "number": {
+            "color": "#FF9E64"
+          },
+          "boolean": {
+            "color": "#FF9E64"
+          },
+          "constant": {
+            "color": "#E0AF68"
+          },
+          "operator": {
+            "color": "#89DDFF"
+          },
+          "preproc": {
+            "color": "#7DCFFF"
+          },
+          "type": {
+            "color": "#0DB9D7"
+          },
+          "tag": {
+            "color": "#F7768E"
+          },
+          "attribute": {
+            "color": "#BB9AF7"
+          },
+          "label": {
+            "color": "#C0CAF5"
+          },
+          "title": {
+            "color": "#C0CAF5",
+            "font_weight": 700
+          },
+          "variable": {
+            "color": "#E0AF68"
+          },
+          "variable.special": {
+            "color": "#F7768E"
+          },
+          "property": {
+            "color": "#7DCFFF"
+          },
+          "punctuation": {
+            "color": "#F7768E"
+          },
+          "punctuation.bracket": {
+            "color": "#9ABDF5"
+          },
+          "punctuation.delimiter": {
+            "color": "#89DDFF"
+          },
+          "emphasis": {
+            "color": "#C0CAF5",
+            "font_style": "italic"
+          },
+          "emphasis.strong": {
+            "color": "#C0CAF5",
+            "font_weight": 700
+          },
+          "link_uri": {
+            "color": "#73DACA",
+            "font_style": "underline"
+          }
+        }
+      }
+    },
+    {
+      "name": "Tokyo Night Light",
+      "mode": "light",
+      "colors": {
+        "background": "#E6E7ED",
+        "sidebar.background": "#D6D8DF",
+        "title_bar.background": "#D6D8DF",
+        "status_bar.background": "#D6D8DF",
+        "tab_bar.background": "#D6D8DF",
+        "popover.background": "#D6D8DF",
+        "foreground": "#343B59",
+        "muted.background": "#DADBE3",
+        "muted.foreground": "#363C4D",
+        "border": "#C1C2C7",
+        "sidebar.foreground": "#363C4D",
+        "sidebar.border": "#C1C2C7",
+        "title_bar.border": "#C1C2C7",
+        "status_bar.border": "#C1C2C7",
+        "tab.background": "#00000000",
+        "tab.foreground": "#363C4D",
+        "tab.active.background": "#DADCE3",
+        "tab.active.foreground": "#363C4D",
+        "popover.foreground": "#363C4D",
+        "primary.foreground": "#FFFFFF",
+        "primary.background": "#2959AA",
+        "primary.hover.background": "#244E95",
+        "primary.active.background": "#1F4381",
+        "secondary.background": "#DADBE3",
+        "secondary.hover.background": "#D1D3DC",
+        "secondary.active.background": "#C9CBD5",
+        "secondary.foreground": "#343B59",
+        "ring": "#2959AA",
+        "selection.background": "#ACB0BF40",
+        "caret": "#363C4D",
+        "link": "#2959AA",
+        "link.hover": "#363C4D",
+        "link.active": "#363C4D",
+        "input.border": "#C1C2C7",
+        "list.background": "#E6E7ED",
+        "list.hover.background": "#D8DAE1",
+        "list.active.background": "#D7D9E2",
+        "list.active.border": "#2959AA",
+        "accent.background": "#7A85A8",
+        "accent.foreground": "#191D2B",
+        "sidebar.accent.background": "#E6E7ED",
+        "sidebar.accent.foreground": "#363C4D",
+        "switch.background": "#BABCC8",
+        "window.border": "#C1C2C7",
+        "scrollbar.thumb.background": "#BBBDC7",
+        "scrollbar.thumb.hover.background": "#B9BCC7",
+        "group_box.background": "#E1E2E9",
+        "base.red": "#8C4351",
+        "base.green": "#33635C",
+        "base.yellow": "#8F5E15",
+        "base.blue": "#2959AA",
+        "base.magenta": "#7B43BA",
+        "base.cyan": "#006C86",
+        "danger.background": "#942F2F",
+        "danger.foreground": "#E6E7ED",
+        "warning.background": "#8F5E15",
+        "warning.foreground": "#E6E7ED",
+        "success.background": "#166775",
+        "success.foreground": "#E6E7ED",
+        "info.background": "#0C90A7",
+        "info.foreground": "#000000",
+        "pages.accent": "#2959AA",
+        "pages.source_box.background": "#D6D8DF",
+        "pages.source_box.foreground": "#343B59",
+        "accent": "#2959AA"
+      },
+      "highlight": {
+        "editor_background": "#E6E7ED",
+        "editor_foreground": "#343B59",
+        "editor_active_line": "#DCDEE3",
+        "editor_line_number": "#7F8391",
+        "editor_active_line_number": "#363C4D",
+        "editor_invisible": "#E6E7ED",
+        "syntax": {
+          "comment": {
+            "color": "#80838D",
+            "font_style": "italic"
+          },
+          "keyword": {
+            "color": "#65359D"
+          },
+          "function": {
+            "color": "#006C86"
+          },
+          "string": {
+            "color": "#385F0D"
+          },
+          "string.escape": {
+            "color": "#363C4D"
+          },
+          "string.regex": {
+            "color": "#3E6968"
+          },
+          "number": {
+            "color": "#965027"
+          },
+          "boolean": {
+            "color": "#965027"
+          },
+          "operator": {
+            "color": "#006C86"
+          },
+          "preproc": {
+            "color": "#0F4B6E"
+          },
+          "type": {
+            "color": "#006C86"
+          },
+          "tag": {
+            "color": "#8C4351"
+          },
+          "attribute": {
+            "color": "#65359D"
+          },
+          "label": {
+            "color": "#343B58"
+          },
+          "title": {
+            "color": "#343B58",
+            "font_weight": 700
+          },
+          "variable": {
+            "color": "#8F5E15"
+          },
+          "variable.special": {
+            "color": "#8C4351"
+          },
+          "property": {
+            "color": "#0F4B6E"
+          },
+          "punctuation": {
+            "color": "#8C4351"
+          },
+          "punctuation.bracket": {
+            "color": "#484C61"
+          },
+          "punctuation.delimiter": {
+            "color": "#006C86"
+          },
+          "emphasis": {
+            "color": "#343B58",
+            "font_style": "italic"
+          },
+          "emphasis.strong": {
+            "color": "#343B58",
+            "font_weight": 700
+          },
+          "link_uri": {
+            "color": "#33635C",
+            "font_style": "underline"
+          }
+        }
+      }
+    }
+  ]
+}

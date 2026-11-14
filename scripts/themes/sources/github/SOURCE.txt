@@ -1,0 +1,8 @@
+Extension: GitHub.github-vscode-theme 6.3.5 (GitHub Theme)
+Published: 2024-10-04 on Open VSX
+Download: https://open-vsx.org/api/GitHub/github-vscode-theme/6.3.5/file/GitHub.github-vscode-theme-6.3.5.vsix
+VSIX sha256: a85236a58ad490b1600ec5a0fd0cea7eec56fb9d33660a1ac82c6da639ad3af4
+Repository: https://github.com/primer/github-vscode-theme.git
+License: MIT (LICENSE.txt in the VSIX, copied here as LICENSE)
+Files (from extension/ in the VSIX): themes/dark-default.json, themes/light-default.json
+Fetched: 2026-11-14

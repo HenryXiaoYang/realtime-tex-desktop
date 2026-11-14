@@ -1,0 +1,8 @@
+Extension: dracula-theme.theme-dracula 2.25.1 (Dracula Theme Official)
+Published: 2024-09-06 on Open VSX
+Download: https://open-vsx.org/api/dracula-theme/theme-dracula/2.25.1/file/dracula-theme.theme-dracula-2.25.1.vsix
+VSIX sha256: f4d8c28fc64874b1b959cc90dbd39c84d5d35c9cf203e32b7a758dc9abf5b1cb
+Repository: https://github.com/dracula/visual-studio-code.git
+License: MIT (LICENSE.txt in the VSIX, copied here as LICENSE)
+Files (from extension/ in the VSIX): theme/dracula.json
+Fetched: 2026-11-14

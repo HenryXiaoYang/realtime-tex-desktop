@@ -1953,9 +1953,13 @@ mod tests {
                 light,
                 [
                     themes::DEFAULT_LIGHT,
-                    "Solarized Light",
+                    "Catppuccin Latte",
+                    "GitHub Light",
                     "Gruvbox Light",
-                    "High Contrast Light"
+                    "High Contrast Light",
+                    "Light Owl",
+                    "Solarized Light",
+                    "Tokyo Night Light"
                 ]
             );
             AppSettings::set(cx, |s| {

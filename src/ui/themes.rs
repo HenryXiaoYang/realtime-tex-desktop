@@ -19,13 +19,20 @@ use std::sync::LazyLock;
 pub const DEFAULT_LIGHT: &str = "Realtime Tex Light";
 pub const DEFAULT_DARK: &str = "Realtime Tex Dark";
 
-/// The app's themes, in the order the theme lists show them; the themes folder's come after.
-const BUILT_IN: [&str; 5] = [
+/// The app's themes, in the order the theme lists show them: its own, then the others by name
+/// (those of VS Code made by scripts/themes/vscode_to_app.py); the themes folder's come after.
+const BUILT_IN: [&str; 11] = [
     include_str!("theme.json"),
-    include_str!("themes/solarized.json"),
-    include_str!("themes/nord.json"),
+    include_str!("themes/catppuccin.json"),
+    include_str!("themes/dracula.json"),
+    include_str!("themes/github.json"),
     include_str!("themes/gruvbox.json"),
     include_str!("themes/high-contrast.json"),
+    include_str!("themes/night-owl.json"),
+    include_str!("themes/nord.json"),
+    include_str!("themes/onedark-pro.json"),
+    include_str!("themes/solarized.json"),
+    include_str!("themes/tokyo-night.json"),
 ];
 
 static BUILT_IN_NAMES: LazyLock<Vec<SharedString>> = LazyLock::new(|| {
@@ -55,6 +62,7 @@ fn add_built_in(cx: &mut App) {
 /// the chosen themes again.
 pub fn init(cx: &mut App) {
     add_built_in(cx);
+    cx.set_global(page_colors());
     cx.observe_global::<ThemeRegistry>(|cx| {
         // reading the themes folder drops every theme not read from it
         if !ThemeRegistry::global(cx)
@@ -64,7 +72,7 @@ pub fn init(cx: &mut App) {
             add_built_in(cx);
         }
         // the kit drops the colours it does not know: the pages' are read here
-        cx.set_global(PageColors(page_colors_in(&dir())));
+        cx.set_global(page_colors());
         install(cx);
         Theme::change(cx.theme().mode, None, cx);
     })
@@ -150,25 +158,38 @@ pub const PAGES: [(&str, &str); 8] = [
     ("pages.ink", "Dark page text"),
 ];
 
-/// The page colours and accent each theme file in the themes folder names (theme name to key to
-/// colour).
+/// The page colours and accent each theme names, the app's and the themes folder's (theme name to
+/// key to colour).
 struct PageColors(HashMap<String, BTreeMap<String, String>>);
 
 impl Global for PageColors {}
 
-/// The page colours and accents the theme files in `dir` name; a theme named twice, the first one
-/// read.
-fn page_colors_in(dir: &Path) -> HashMap<String, BTreeMap<String, String>> {
-    let mut found = HashMap::new();
+/// The page colours of the themes folder's themes, then of the app's: as in the registry, a file
+/// in the folder wins over a theme of the app's of the same name.
+fn page_colors() -> PageColors {
+    let built_in = BUILT_IN.iter().map(|json| json.to_string());
+    PageColors(page_colors_in(
+        theme_files(&dir()).into_iter().chain(built_in),
+    ))
+}
+
+/// The text of each theme file in `dir`.
+fn theme_files(dir: &Path) -> Vec<String> {
     let files = std::fs::read_dir(dir).into_iter().flatten().flatten();
-    for path in files.map(|e| e.path()) {
-        if path.extension().is_none_or(|e| e != "json") {
-            continue;
-        }
-        let Some(set) = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        else {
+    (files.map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .collect()
+}
+
+/// The page colours and accents the theme files `sets` name; a theme named twice, the first one
+/// read.
+fn page_colors_in(
+    sets: impl IntoIterator<Item = String>,
+) -> HashMap<String, BTreeMap<String, String>> {
+    let mut found = HashMap::new();
+    for json in sets {
+        let Ok(set) = serde_json::from_str::<Value>(&json) else {
             continue;
         };
         for t in set["themes"].as_array().into_iter().flatten() {
@@ -646,13 +667,164 @@ mod tests {
                     }
                 }
                 for (k, v) in named {
-                    assert!(keys.contains(&k), "{name}: {k}");
+                    assert!(keys.contains(&k) || k == ACCENT, "{name}: {k}");
                     assert!(palette::hex_rgba(v.as_str().unwrap()).is_some(), "{k}: {v}");
                 }
             }
         }
-        assert_eq!(BUILT_IN_NAMES.len(), 9);
+        assert_eq!(BUILT_IN_NAMES.len(), 21);
         assert_eq!(BUILT_IN_NAMES[..2], [DEFAULT_LIGHT, DEFAULT_DARK]);
+    }
+
+    /// Every built-in theme reads on screen: text 4.5:1 on what it is drawn on (comments, text
+    /// meant to recede, 3:1), a primary button's text 4.5:1, the focus ring, the caret and the
+    /// pages' accent 3:1 on what they mark. Solarized, Gruvbox and Nord were made by hand before
+    /// these floors and keep their palettes as designed, some accents near 3:1.
+    #[test]
+    fn the_built_in_themes_read_on_screen() {
+        let white = palette::hex_color("#FFFFFF").unwrap();
+        let mut short = Vec::new();
+        for json in BUILT_IN {
+            let set: ThemeSet = serde_json::from_str(json).unwrap();
+            if ["Solarized", "Gruvbox", "Nord"].contains(&set.name.as_ref()) {
+                continue;
+            }
+            for config in &set.themes {
+                let t = applied(&effective(config, None, None));
+                let style = config.highlight.clone().unwrap_or_default();
+                let editor = style.editor_background.unwrap_or(t.background);
+                let mut floor = |what: String, fg: Hsla, bg: Hsla, ratio: f32| {
+                    let r = palette::contrast(fg, bg);
+                    if r < ratio {
+                        let (fg, bg) = (palette::hex(fg), palette::hex(bg));
+                        short.push(format!("{}: {what} {fg} on {bg} {r:.2}:1", config.name));
+                    }
+                };
+                for (what, bg) in [
+                    ("background", t.background),
+                    ("title bar", t.title_bar),
+                    ("status bar", t.status_bar),
+                    ("muted", t.muted),
+                ] {
+                    floor(format!("text on {what}"), t.foreground, bg, 4.5);
+                    floor(format!("muted text on {what}"), t.muted_foreground, bg, 4.5);
+                }
+                let pairs = [
+                    ("sidebar text", t.sidebar_foreground, t.sidebar),
+                    ("popover text", t.popover_foreground, t.popover),
+                    ("active tab text", t.tab_active_foreground, t.tab_active),
+                    ("primary button text", t.primary_foreground, t.primary),
+                    (
+                        "editor text",
+                        style.editor_foreground.unwrap_or(t.foreground),
+                        editor,
+                    ),
+                ];
+                for (what, fg, bg) in pairs {
+                    floor(what.into(), fg, bg, 4.5);
+                }
+                floor("focus ring".into(), t.ring, t.background, 3.0);
+                floor("caret".into(), t.caret, editor, 3.0);
+                let syntax = serde_json::to_value(&style.syntax).unwrap();
+                for (k, s) in syntax.as_object().unwrap() {
+                    let Some(color) = s["color"].as_str().and_then(palette::hex_rgba) else {
+                        continue;
+                    };
+                    let ratio = if k.starts_with("comment") { 3.0 } else { 4.5 };
+                    floor(format!("syntax.{k}"), color, editor, ratio);
+                }
+                // the page accent the theme names, on each paper its mode shows
+                let pages: Value = serde_json::from_str(json).unwrap();
+                let own = (pages["themes"].as_array().unwrap().iter())
+                    .find(|p| p["name"] == config.name.as_ref())
+                    .map(|p| p["colors"].clone())
+                    .unwrap_or_default();
+                let color = |k: &str| own[k].as_str().and_then(palette::hex_rgba);
+                if let Some(accent) = color("pages.accent") {
+                    for paper in [Some(white), color("pages.paper")].into_iter().flatten() {
+                        floor("page accent".into(), accent, paper, 3.0);
+                    }
+                }
+            }
+        }
+        assert!(short.is_empty(), "{}", short.join("\n"));
+    }
+
+    /// The themes made from VS Code's are there in their modes under the names their users know,
+    /// and keep the colours they know: the editor's background, and the comments' colour and
+    /// style as each source theme's own `comment` rule names them (scripts/themes/sources).
+    #[test]
+    fn the_vscode_themes_keep_their_colours() {
+        let all: Vec<ThemeConfig> = (BUILT_IN.iter())
+            .flat_map(|json| serde_json::from_str::<ThemeSet>(json).unwrap().themes)
+            .collect();
+        // (colour as theme.json writes it, its font style)
+        let syntax = |t: &ThemeConfig, k: &str| {
+            let style = serde_json::to_value(t.highlight.clone().unwrap_or_default()).unwrap();
+            let s = &style["syntax"][k];
+            let color = s["color"]
+                .as_str()
+                .and_then(palette::hex_rgba)
+                .map(palette::hex);
+            (
+                color.unwrap_or_default(),
+                s["font_style"].as_str().map(str::to_string),
+            )
+        };
+        let (dark, light) = (ThemeMode::Dark, ThemeMode::Light);
+        for (name, mode, background, comment) in [
+            (
+                "Catppuccin Latte",
+                light,
+                "#EFF1F5",
+                Some(("#7C7F93", true)),
+            ),
+            (
+                "Catppuccin Frappé",
+                dark,
+                "#303446",
+                Some(("#949CBB", true)),
+            ),
+            (
+                "Catppuccin Macchiato",
+                dark,
+                "#24273A",
+                Some(("#939AB7", true)),
+            ),
+            ("Catppuccin Mocha", dark, "#1E1E2E", Some(("#9399B2", true))),
+            ("Dracula", dark, "#282A36", Some(("#6272A4", false))),
+            ("GitHub Dark", dark, "#0D1117", Some(("#8B949E", false))),
+            ("GitHub Light", light, "#FFFFFF", Some(("#6E7781", false))),
+            ("Night Owl", dark, "#011627", Some(("#637777", true))),
+            ("Light Owl", light, "#FBFBFB", None),
+            ("One Dark Pro", dark, "#282C34", Some(("#7F848E", true))),
+            ("Tokyo Night", dark, "#1A1B26", None),
+            ("Tokyo Night Light", light, "#E6E7ED", None),
+        ] {
+            let t = (all.iter().find(|t| t.name == name)).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(t.mode, mode, "{name}");
+            assert_eq!(t.colors.background.as_deref(), Some(background), "{name}");
+            if let Some((color, italic)) = comment {
+                let (c, style) = syntax(t, "comment");
+                assert_eq!(c, color, "{name}");
+                assert_eq!(style.as_deref() == Some("italic"), italic, "{name}");
+            }
+        }
+        // Tokyo Night's keywords, and its comments' italic from a rule of their own
+        let tokyo = all.iter().find(|t| t.name == "Tokyo Night").unwrap();
+        assert_eq!(syntax(tokyo, "keyword").0, "#BB9AF7");
+        assert_eq!(syntax(tokyo, "comment").1.as_deref(), Some("italic"));
+    }
+
+    /// The page colours and accent a theme of the app's names reach the pages, as a theme file's
+    /// in the themes folder do; one without them leaves the pages to the editor.
+    #[test]
+    fn the_built_in_themes_page_colours_are_read() {
+        let found = page_colors().0;
+        let dracula = &found["Dracula"];
+        assert_eq!(dracula["pages.paper"], "#282A36");
+        assert_eq!(dracula[ACCENT], "#BD93F9");
+        assert!(found[DEFAULT_DARK].is_empty());
     }
 
     fn theme_json(name: &str) -> ThemeConfig {
@@ -700,7 +872,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("mine.json"), &file).unwrap();
         std::fs::write(dir.join("notes.txt"), "not a theme").unwrap();
-        let found = page_colors_in(&dir);
+        let found = page_colors_in(theme_files(&dir));
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(found.get("Mine"), Some(&pages));
         assert_eq!(found.len(), 1);

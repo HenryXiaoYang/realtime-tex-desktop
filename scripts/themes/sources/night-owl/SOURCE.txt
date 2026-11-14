@@ -1,0 +1,8 @@
+Extension: sdras.night-owl 2.1.1 (Night Owl)
+Published: 2025-01-01 on Open VSX
+Download: https://open-vsx.org/api/sdras/night-owl/2.1.1/file/sdras.night-owl-2.1.1.vsix
+VSIX sha256: 5ddeaad8d4afedbd1d6d514ed3641c92963270db558119401de5e1cc6f3bc1e3
+Repository: https://github.com/sdras/night-owl-vscode-theme.git
+License: MIT (LICENSE.md in the VSIX, copied here as LICENSE)
+Files (from extension/ in the VSIX): themes/Night Owl-color-theme.json, themes/Night Owl-Light-color-theme.json
+Fetched: 2026-11-14

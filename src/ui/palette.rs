@@ -190,7 +190,7 @@ fn luminance(c: Hsla) -> f32 {
 }
 
 /// The WCAG contrast ratio of two colours.
-fn contrast(a: Hsla, b: Hsla) -> f32 {
+pub(crate) fn contrast(a: Hsla, b: Hsla) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }

@@ -1,0 +1,8 @@
+Extension: Catppuccin.catppuccin-vsc 3.19.0 (Catppuccin for VSCode)
+Published: 2026-05-02 on Open VSX
+Download: https://open-vsx.org/api/Catppuccin/catppuccin-vsc/3.19.0/file/Catppuccin.catppuccin-vsc-3.19.0.vsix
+VSIX sha256: ebf347664837edbe91c9920ff3d14c96d4a28beeec0b95137c76058326329780
+Repository: https://github.com/catppuccin/vscode.git
+License: MIT (LICENSE.txt in the VSIX, copied here as LICENSE)
+Files (from extension/ in the VSIX): themes/latte.json, themes/frappe.json, themes/macchiato.json, themes/mocha.json
+Fetched: 2026-11-14
