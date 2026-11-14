@@ -3,6 +3,7 @@ pub mod editor;
 pub mod keymap;
 pub mod palette;
 pub mod projects;
+pub mod setting;
 pub mod settings;
 pub mod tex_setup;
 pub mod themes;

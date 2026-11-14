@@ -197,6 +197,8 @@ src/
     viewer.rs          PDF and image files opened as tabs
   ui/
     settings.rs        settings and the Settings window
+    setting/           the Settings window's widget: gpui-component 0.9.0's, copied (Apache-2.0)
+                       so a group can hold groups
     keymap.rs          the shortcuts you can change: commands, defaults, overrides, recording
     workspace/         the window: title bar, tabs, status bar (chrome.rs), the ribbon
                        (ribbon.rs), project panel,

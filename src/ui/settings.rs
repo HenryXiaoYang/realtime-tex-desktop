@@ -1,9 +1,13 @@
 // App settings: kept as a GPUI global, saved as JSON in
 // <app data>/Realtime Tex Desktop/settings.json (~/Library/Application Support on the Mac), and edited in the Settings
-// window (⌘,), built from gpui-kit's settings components.
+// window (⌘,), built with ui/setting, our copy of gpui-kit's settings widget.
 use crate::ui::Tip;
 use crate::ui::keymap;
 use crate::ui::palette;
+use crate::ui::setting::{
+    NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+    Settings,
+};
 use crate::ui::themes;
 use crate::ui::workspace::CloseTab;
 use gpui_kit::base::Scrollbar;
@@ -11,10 +15,6 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{CursorBlink, Input, InputEvent, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
-use gpui_kit::component::setting::{
-    NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
-    Settings,
-};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme, Colorize, Disableable, Icon, Sizable, Theme, ThemeMode, ThemeRegistry, TitleBar,
@@ -934,8 +934,8 @@ fn theme_list(
 }
 
 /// `page` with the theme on screen: a group named after it with its accent, Export and Reset all,
-/// then every colour of it, by group, each changeable. The page's reset puts back this theme's
-/// accent and colours, as Reset all does, and no other theme's.
+/// and nested in it every colour of the theme, by group, each changeable. The page's reset puts
+/// back this theme's accent and colours, as Reset all does, and no other theme's.
 fn with_theme_colors(page: SettingPage, cx: &App) -> SettingPage {
     let name = themes::active(cx).unwrap_or_default();
     let shown = Rc::new(themes::shown(cx));
@@ -1000,8 +1000,7 @@ fn with_theme_colors(page: SettingPage, cx: &App) -> SettingPage {
     })
     .keywords(["export", "reset", "theme"])
     .on_reset(dirty, back);
-    let mut page = page.group(group(cx).title(name).items([accent, actions]));
-    for g in themes::groups() {
+    let colors = themes::groups().iter().map(|g| {
         let items = g.keys.iter().map(|k| {
             let (key, label) = (k.key.clone(), SharedString::from(k.label.clone()));
             let color = shown.get(&k.key).copied().flatten();
@@ -1013,9 +1012,14 @@ fn with_theme_colors(page: SettingPage, cx: &App) -> SettingPage {
             )
             .keywords([k.key.clone()])
         });
-        page = page.group(group(cx).title(g.title).items(items.collect::<Vec<_>>()));
-    }
-    page
+        group(cx).title(g.title).items(items.collect::<Vec<_>>())
+    });
+    page.group(
+        group(cx)
+            .title(name)
+            .items([accent, actions])
+            .groups(colors),
+    )
 }
 
 struct ColorRow {
@@ -1549,21 +1553,22 @@ mod tests {
     };
     use crate::ui::editor::MONO;
     use crate::ui::palette;
+    use crate::ui::setting::{
+        AnySettingField, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
+        Settings,
+    };
     use crate::ui::themes;
     use gpui_kit::base::Scrollbar;
     use gpui_kit::component::color_picker::ColorPickerState;
     use gpui_kit::component::select::SelectEvent;
-    use gpui_kit::component::setting::{
-        AnySettingField, SelectIndex, SettingField, SettingItem, SettingPage, Settings,
-    };
     use gpui_kit::component::{
         ActiveTheme, Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet,
     };
-    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::test::{TestQueryExt, TestWindowExt};
     use gpui_kit::{
-        App, AppContext, Axis, Context, Entity, IntoElement, Modifiers, Pixels, Point, Render,
-        ScrollDelta, ScrollEvent, SharedString, Styled, TestAppContext, VisualTestContext, Window,
-        canvas, point, px, size,
+        App, AppContext, Axis, Context, ElementId, Entity, IntoElement, Modifiers, Pixels, Point,
+        Render, ScrollDelta, ScrollEvent, SharedString, Styled, TestAppContext, VisualTestContext,
+        Window, canvas, div, point, px, size,
     };
     use std::cell::{Cell, RefCell};
     use std::collections::{BTreeMap, HashMap, HashSet};
@@ -2556,5 +2561,161 @@ mod tests {
         vcx.run_until_parked();
         let left = cx.update(|cx| cx.windows());
         assert_eq!(left, [*other]);
+    }
+
+    /// The Settings window on Appearance, tall enough for its whole sidebar, Appearance's entry
+    /// clicked open.
+    fn on_appearance(cx: &mut TestAppContext) -> &mut VisualTestContext {
+        started(
+            AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            },
+            cx,
+        );
+        let (_, vcx) = cx.add_window_view(|_, _| OnPage(1));
+        vcx.simulate_resize(size(px(860.0), px(1100.0)));
+        vcx.run_until_parked();
+        click_entry("0-1", vcx);
+        vcx
+    }
+
+    /// The sidebar's entries, top to bottom, each by its place in the tree, as the sidebar
+    /// numbers its elements: "0-1-2" is the third entry under the second page. Their names are
+    /// drawn text, which the test text system leaves out.
+    fn entries(vcx: &mut VisualTestContext) -> Vec<String> {
+        let sidebar = ElementId::Name("settings-sidebar".into());
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            (window.elements().into_iter())
+                .filter(|e| e.path().contains(&sidebar))
+                .filter_map(|e| match e.path().last() {
+                    Some(ElementId::Name(id))
+                        if id.split('-').all(|n| n.parse::<usize>().is_ok()) =>
+                    {
+                        Some(id.to_string())
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    /// Clicks the row of the sidebar entry `id`, left of its caret.
+    fn click_entry(id: &str, vcx: &mut VisualTestContext) {
+        let row = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find(id.to_string()).map(|e| e.bounds().origin)
+        });
+        let at = row.expect(id) + point(px(20.0), px(14.0));
+        vcx.simulate_click(at, Modifiers::default());
+        vcx.run_until_parked();
+    }
+
+    /// Where the top of element `id` is, while it is on screen.
+    fn top(id: &str, vcx: &mut VisualTestContext) -> Option<Pixels> {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            (window.try_find(id.to_string()))
+                .filter(|e| e.visible())
+                .map(|e| e.bounds().top())
+        })
+    }
+
+    /// Where the colour group `title` is among the theme's, and its first colour's swatch.
+    fn colour_group(title: &str) -> (usize, String) {
+        let ix = (themes::groups().iter().position(|g| g.title == title)).unwrap();
+        (ix, format!("swatch-{}", themes::groups()[ix].keys[0].key))
+    }
+
+    /// Under Appearance the sidebar lists its three groups (Window, Layout, the theme on screen),
+    /// and under the third, the theme's, one entry per colour group; the other pages stay closed.
+    #[gpui_kit::test]
+    fn the_sidebar_nests_the_colour_groups_under_the_theme(cx: &mut TestAppContext) {
+        let vcx = on_appearance(cx);
+        let mut want: Vec<String> = ["0-0", "0-1", "0-1-0", "0-1-1", "0-1-2"]
+            .map(String::from)
+            .into();
+        want.extend((0..themes::groups().len()).map(|k| format!("0-1-2-{k}")));
+        want.extend((2..6).map(|p| format!("0-{p}")));
+        assert_eq!(entries(vcx), want);
+    }
+
+    /// A click on a colour group's entry scrolls the page to that group, the last one as far as
+    /// the page goes; a click on the theme's entry scrolls back to the theme's own settings.
+    #[gpui_kit::test]
+    fn a_nested_entry_scrolls_to_its_group(cx: &mut TestAppContext) {
+        let vcx = on_appearance(cx);
+        let (tabs, swatch) = colour_group("Tabs");
+        assert!(top(&swatch, vcx).is_none_or(|y| y > px(200.0)));
+        click_entry(&format!("0-1-2-{tabs}"), vcx);
+        let y = top(&swatch, vcx).expect("the Tabs group on screen");
+        // under the page's header and the group's title
+        assert!(y > px(60.0) && y < px(200.0), "{y:?}");
+        let (syntax, swatch) = colour_group("Source syntax");
+        assert!(top(&swatch, vcx).is_none());
+        click_entry(&format!("0-1-2-{syntax}"), vcx);
+        assert!(
+            top(&swatch, vcx).is_some(),
+            "the Source syntax group on screen"
+        );
+        click_entry("0-1-2", vcx);
+        let y = top("accent-Blue", vcx).expect("the accent on screen");
+        assert!(y > px(60.0) && y < px(200.0), "{y:?}");
+    }
+
+    /// Searching a colour's key shows its row alone on Appearance, and in the sidebar the theme
+    /// under Appearance and that colour's group under the theme, nothing else.
+    #[gpui_kit::test]
+    fn searching_a_colour_shows_it_under_the_theme(cx: &mut TestAppContext) {
+        let vcx = on_appearance(cx);
+        let search = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            (window.elements().into_iter())
+                .find(|e| e.placeholder() == Some("Search..."))
+                .map(|e| e.bounds().center())
+        });
+        vcx.simulate_click(search.expect("the search box"), Modifiers::default());
+        vcx.simulate_input("tab.active.background");
+        vcx.run_until_parked();
+        assert!(swatch("tab.active.background", vcx).is_some());
+        assert!(swatch("pages.selection", vcx).is_none());
+        // Appearance alone, now first, its entry closed as the first one was
+        assert_eq!(entries(vcx), ["0-0"]);
+        click_entry("0-0", vcx);
+        assert_eq!(entries(vcx), ["0-0", "0-0-0", "0-0-0-0"]);
+        click_entry("0-0-0-0", vcx);
+        assert!(swatch("tab.active.background", vcx).is_some());
+    }
+
+    /// A page with a setting in a group nested in another, which notes whether it was reset.
+    struct Nested(Rc<Cell<bool>>);
+
+    impl Render for Nested {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (dirty, reset) = (self.0.clone(), self.0.clone());
+            let item = SettingItem::render(|_, _, _| div().h(px(20.0)))
+                .on_reset(move |_| dirty.get(), move |_, _| reset.set(false));
+            let parent = SettingGroup::new()
+                .title("Parent")
+                .groups([SettingGroup::new().title("Child").item(item)]);
+            Settings::new("settings").pages(vec![SettingPage::new("Page").group(parent)])
+        }
+    }
+
+    /// A page's reset reaches the settings of the groups nested in its groups.
+    #[gpui_kit::test]
+    fn a_page_reset_reaches_nested_groups(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let dirty = Rc::new(Cell::new(true));
+        let (_, vcx) = cx.add_window_view(|_, _| Nested(dirty.clone()));
+        vcx.run_until_parked();
+        let reset = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("reset").map(|b| b.bounds().center())
+        });
+        vcx.simulate_click(reset.expect("the page's reset"), Modifiers::default());
+        vcx.run_until_parked();
+        assert!(!dirty.get());
     }
 }

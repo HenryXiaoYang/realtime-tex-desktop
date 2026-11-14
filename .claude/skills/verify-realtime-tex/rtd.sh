@@ -117,6 +117,7 @@ print([x['width'] for x in json.load(sys.stdin)['result']['windows'] if x['id']=
   ;;
 click)  load; act "${3:-}" click --x "${1:?click x y [window]}" --y "$2" ;;
 dclick) load; act "${3:-}" click --x "${1:?dclick x y [window]}" --y "$2" --click-count 2 ;;
+scroll) load; act "${5:-}" scroll --x "${1:?scroll x y up|down [pages] [window]}" --y "$2" --direction "${3:?up|down}" --pages "${4:-3}" ;;
 key)    load; act "${2:-}" press-key --key "${1:?key <Key> [window]}" ;;
 hotkey) load; act "${2:-}" hotkey --key "${1:?hotkey <Chord> [window]}" ;;
 type)   load; act "${2:-}" type-text --text "${1:?type <text> [window]}" ;;
@@ -142,6 +143,6 @@ stop)
   ls "$EVID"
   ;;
 *)
-  sed -n '1,4p' "$0"; echo "commands: launch doctor windows use shot click dclick key hotkey type ax axclick axset home settings evidence stop"
+  sed -n '1,4p' "$0"; echo "commands: launch doctor windows use shot click dclick scroll key hotkey type ax axclick axset home settings evidence stop"
   ;;
 esac

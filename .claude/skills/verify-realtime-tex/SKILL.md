@@ -38,6 +38,7 @@ $R windows                 # id 'title' WxH of the run's windows
 $R use <id>                # make a window the default target (Settings opens as a window titled '')
 $R shot <name>             # evidence/<name>.png + <name>.small.png; prints the points factor
 $R click X Y               # window points; also: dclick X Y, key Escape, hotkey CmdOrCtrl+,
+$R scroll X Y down [pages] # wheel over a point (default 3 pages), e.g. the Settings sidebar
 $R type "text"             # into whatever has focus (click into the page first)
 $R ax <text> <window>      # native panels only: find elements, e.g. ax Save 60437
 $R axclick <index> <window>; $R axset <index> <value> <window>
