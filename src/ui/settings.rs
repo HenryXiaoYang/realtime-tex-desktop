@@ -32,13 +32,16 @@ use std::rc::Rc;
 pub struct AppSettings {
     /// "system", "light" or "dark".
     pub theme: String,
-    /// The accent colour, "#RRGGBB"; empty: the theme's own blue.
+    /// The accent of settings files from before each theme had its own: read, carried to the
+    /// chosen themes (`migrated`), never written.
+    #[serde(skip_serializing)]
     pub accent: String,
     /// The theme in light mode and in dark mode, by name.
     pub light_theme: String,
     pub dark_theme: String,
     /// Colours changed from a theme's own: theme name to colour key (as theme files write it) to
-    /// "#RRGGBB" or "#RRGGBBAA". They win over the accent.
+    /// "#RRGGBB" or "#RRGGBBAA". The theme's accent is among them (`themes::ACCENT`); the others
+    /// win over it.
     pub colors: BTreeMap<String, BTreeMap<String, String>>,
     pub ui_font_size: f64,
     /// Pages on dark paper in the dark theme.
@@ -216,8 +219,9 @@ impl AppSettings {
     pub fn init(cx: &mut App) {
         let s = std::fs::read_to_string(file())
             .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
+            .and_then(|t| serde_json::from_str::<AppSettings>(&t).ok())
+            .unwrap_or_default()
+            .migrated();
         cx.set_global::<AppSettings>(s);
         themes::init(cx);
         if let Err(e) = ThemeRegistry::watch_dir(themes::dir(), cx, |_| {}) {
@@ -225,6 +229,20 @@ impl AppSettings {
         }
         crate::ui::workspace::place_notifications(cx);
         Self::apply(cx);
+    }
+
+    /// A settings file from before each theme had its own accent: its accent becomes the chosen
+    /// light and dark themes' own where they have none, so nothing on screen changes.
+    fn migrated(mut self) -> Self {
+        let accent = std::mem::take(&mut self.accent);
+        if palette::hex_color(&accent).is_some() {
+            for theme in [self.light_theme.clone(), self.dark_theme.clone()] {
+                (self.colors.entry(theme).or_default())
+                    .entry(themes::ACCENT.into())
+                    .or_insert_with(|| accent.clone());
+            }
+        }
+        self
     }
 
     pub fn get(cx: &App) -> &AppSettings {
@@ -343,10 +361,10 @@ struct AccentField {
     _sub: Subscription,
 }
 
-/// The accent: a round swatch for each of ACCENTS, the one in use ringed, then the color picker
-/// for any other colour, which shows that colour while it is the accent.
+/// The accent of the theme on screen: a round swatch for each of ACCENTS, the one in use ringed,
+/// then the color picker for any other colour, which shows that colour while it is the accent.
 fn accent_field(options: &RenderOptions, window: &mut Window, cx: &mut App) -> Div {
-    let current = palette::hex_color(&AppSettings::get(cx).accent)
+    let current = themes::page_color(themes::ACCENT, cx)
         .map(palette::hex)
         .unwrap_or_default();
     let custom = !ACCENTS.iter().any(|(_, v)| *v == current);
@@ -354,10 +372,11 @@ fn accent_field(options: &RenderOptions, window: &mut Window, cx: &mut App) -> D
         let picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let _sub = cx.subscribe(&picker, |_, _, ev: &ColorPickerEvent, cx| {
             if let ColorPickerEvent::Change(Some(c)) = ev {
-                let v = palette::hex(Hsla { a: 1.0, ..*c });
-                if AppSettings::get(cx).accent != v {
-                    AppSettings::set(cx, |s| s.accent = v);
-                }
+                themes::set_color(
+                    themes::ACCENT,
+                    Some(palette::hex(Hsla { a: 1.0, ..*c })),
+                    cx,
+                );
             }
         });
         AccentField { picker, _sub }
@@ -388,7 +407,10 @@ fn accent_field(options: &RenderOptions, window: &mut Window, cx: &mut App) -> D
                     ring(color, !custom && current == value)
                         .child(div().size(px(14.0)).rounded_full().bg(color)),
                 )
-                .on_click(move |_, _, cx| AppSettings::set(cx, |s| s.accent = value.into()))
+                .on_click(move |_, _, cx| {
+                    let v = (!value.is_empty()).then(|| value.to_string());
+                    themes::set_color(themes::ACCENT, v, cx)
+                })
         }))
         .child(picker_button(
             &picker,
@@ -911,13 +933,49 @@ fn theme_list(
     .default_value(get(&AppSettings::default()).clone())
 }
 
-/// Every colour of the theme on screen, by group, each changeable; the theme's name heads the
-/// page's first group, with Export and Reset all.
-fn colors_page(cx: &App) -> SettingPage {
+/// `page` with the theme on screen: a group named after it with its accent, Export and Reset all,
+/// then every colour of it, by group, each changeable. The page's reset puts back this theme's
+/// accent and colours, as Reset all does, and no other theme's.
+fn with_theme_colors(page: SettingPage, cx: &App) -> SettingPage {
     let name = themes::active(cx).unwrap_or_default();
     let shown = Rc::new(themes::shown(cx));
     let changed = AppSettings::get(cx).colors.contains_key(name.as_ref());
+    // by the name this page shows: the page's reset may change the theme on screen first
+    let has = move |name: &str, key: Option<&str>, cx: &App| {
+        let colors = AppSettings::get(cx).colors.get(name);
+        colors.is_some_and(|c| key.is_none_or(|k| c.contains_key(k)))
+    };
+    // `key` of theme `name` back to the theme's own; None: all of them
+    let clear = move |name: &str, key: Option<&str>, cx: &mut App| {
+        if has(name, key, cx) {
+            AppSettings::set(cx, |s| {
+                let c = s.colors.entry(name.to_string()).or_default();
+                if let Some(k) = key {
+                    c.remove(k);
+                }
+                if key.is_none() || c.is_empty() {
+                    s.colors.remove(name);
+                }
+            });
+        }
+    };
+    let reset = |key: Option<&'static str>| {
+        let (n1, n2) = (name.clone(), name.clone());
+        (
+            move |cx: &App| has(&n1, key, cx),
+            move |_: &mut Window, cx: &mut App| clear(&n2, key, cx),
+        )
+    };
+    let (dirty, back) = reset(Some(themes::ACCENT));
+    let accent = SettingItem::new(
+        "Accent color",
+        SettingField::render(accent_field).on_reset(dirty, back),
+    )
+    .keywords(["colour", "highlight"]);
+    let (dirty, back) = reset(None);
+    let shows = name.clone();
     let actions = SettingItem::render(move |_, _, _| {
+        let shows = shows.clone();
         h_flex()
             .justify_end()
             .gap_2()
@@ -937,17 +995,12 @@ fn colors_page(cx: &App) -> SettingPage {
                     .small()
                     .outline()
                     .disabled(!changed)
-                    .on_click(|_, _, cx| {
-                        if let Some(name) = themes::active(cx) {
-                            AppSettings::set(cx, |s| {
-                                s.colors.remove(name.as_ref());
-                            });
-                        }
-                    }),
+                    .on_click(move |_, _, cx| clear(&shows, None, cx)),
             )
     })
-    .keywords(["export", "reset", "theme"]);
-    let mut page = SettingPage::new("Colors").group(group(cx).title(name).item(actions));
+    .keywords(["export", "reset", "theme"])
+    .on_reset(dirty, back);
+    let mut page = page.group(group(cx).title(name).items([accent, actions]));
     for g in themes::groups() {
         let items = g.keys.iter().map(|k| {
             let (key, label) = (k.key.clone(), SharedString::from(k.label.clone()));
@@ -1223,15 +1276,6 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                     }),
                 ),
                 SettingItem::new(
-                    "Accent color",
-                    resettable(
-                        SettingField::render(accent_field),
-                        |s| &s.accent,
-                        |s, v| s.accent = v,
-                    ),
-                )
-                .keywords(["colour", "highlight"]),
-                SettingItem::new(
                     "Interface font size",
                     number(
                         (10.0, 24.0, 1.0),
@@ -1264,6 +1308,7 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                 .keywords(["inspector"]),
             ]),
         );
+    let appearance = with_theme_colors(appearance, cx);
     let mut zooms: Vec<(Zoom, SharedString)> = [50, 75, 100, 125, 150, 200]
         .map(|p| (Zoom::Percent(p.into()), format!("{p}%").into()))
         .into();
@@ -1432,7 +1477,6 @@ fn pages(cx: &App) -> Vec<SettingPage> {
     vec![
         general,
         appearance,
-        colors_page(cx).icon(icon("swatch-book")),
         editor,
         files,
         typesetting,
@@ -1593,59 +1637,136 @@ mod tests {
             default_zoom: Zoom::FitWidth,
             on_launch: OnLaunch::Welcome,
             outline_depth: OutlineDepth::Paragraphs,
-            accent: "#7C4DDB".into(),
             dark_theme: "Nord".into(),
             colors: BTreeMap::from([(
                 "Nord".to_string(),
-                BTreeMap::from([("syntax.keyword".to_string(), "#FF000080".to_string())]),
+                BTreeMap::from([
+                    ("syntax.keyword".to_string(), "#FF000080".to_string()),
+                    (themes::ACCENT.to_string(), "#7C4DDB".to_string()),
+                ]),
             )]),
-            ..s
+            ..s.clone()
         };
         let json = serde_json::to_string(&new).unwrap();
         assert!(json.contains(r#""default_zoom":null"#), "{json}");
         assert!(json.contains(r#""on_launch":"welcome""#), "{json}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&json)
+                .unwrap()
+                .get("accent")
+                .is_none()
+        );
         assert_eq!(serde_json::from_str::<AppSettings>(&json).unwrap(), new);
+        // with no accent of its own, reading it changes nothing
+        assert_eq!(s.clone().migrated(), s);
     }
 
-    /// The accent colours the theme at launch and on each change, and a switch of mode, the
-    /// system's too, keeps it; empty, the theme is theme.json's own.
+    /// A settings file from when the accent was one for all themes: the chosen light and dark
+    /// themes each get it, unless they have their own; nothing else changes, and it is not
+    /// written again. An empty or unreadable one changes nothing.
+    #[test]
+    fn an_old_accent_goes_to_the_chosen_themes() {
+        let old = r##"{
+            "accent": "#C93A85", "light_theme": "Solarized Light", "dark_theme": "Nord",
+            "colors": {
+                "Nord": {"accent": "#1E7F47", "background": "#000000"},
+                "Gruvbox Dark": {"background": "#111111"}
+            }
+        }"##;
+        let s = serde_json::from_str::<AppSettings>(old).unwrap().migrated();
+        let map = |pairs: &[(&str, &str)]| {
+            (pairs.iter())
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(
+            s.colors,
+            BTreeMap::from([
+                ("Solarized Light".to_string(), map(&[("accent", "#C93A85")])),
+                (
+                    "Nord".to_string(),
+                    map(&[("accent", "#1E7F47"), ("background", "#000000")])
+                ),
+                (
+                    "Gruvbox Dark".to_string(),
+                    map(&[("background", "#111111")])
+                ),
+            ])
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&json)
+                .unwrap()
+                .get("accent")
+                .is_none()
+        );
+        // the themes chosen by default when the file names none
+        let s = serde_json::from_str::<AppSettings>(r##"{"accent": "#7C4DDB"}"##)
+            .unwrap()
+            .migrated();
+        assert_eq!(
+            s.colors.keys().collect::<Vec<_>>(),
+            [themes::DEFAULT_DARK, themes::DEFAULT_LIGHT]
+        );
+        for accent in ["", "blue"] {
+            let file = format!(r#"{{"accent": "{accent}", "theme": "dark"}}"#);
+            let s = serde_json::from_str::<AppSettings>(&file)
+                .unwrap()
+                .migrated();
+            assert_eq!(
+                s,
+                AppSettings {
+                    theme: "dark".into(),
+                    ..AppSettings::default()
+                }
+            );
+        }
+    }
+
+    /// Each theme has its own accent: it colours the theme at launch (an old settings file's,
+    /// carried to both chosen themes) and on each change, a switch of mode (the system's too)
+    /// keeps it, and changing the dark theme's leaves the light one's. None: the theme's own.
     #[gpui_kit::test]
-    fn the_accent_survives_a_switch_of_mode(cx: &mut TestAppContext) {
+    fn the_accent_belongs_to_its_theme(cx: &mut TestAppContext) {
         let hex = |c| palette::hex(c);
-        // the theme registry's observer in place, which puts back a theme it holds by name
-        cx.update(gpui_kit::init);
-        cx.update(|cx| {
-            cx.set_global(AppSettings {
-                theme: "light".into(),
-                accent: "#C93A85".into(),
-                ..AppSettings::default()
-            });
-            // as AppSettings::init does
-            themes::init(cx);
-            AppSettings::apply(cx);
-        });
-        cx.run_until_parked();
+        let old = r##"{"theme": "light", "accent": "#C93A85"}"##;
+        started(
+            serde_json::from_str::<AppSettings>(old).unwrap().migrated(),
+            cx,
+        );
+        let accent = |cx: &App| themes::page_color(themes::ACCENT, cx).map(palette::hex);
         cx.update(|cx| {
             assert_eq!(hex(cx.theme().primary), "#C93A85");
-            Theme::change(ThemeMode::Dark, None, cx);
+            AppSettings::set(cx, |s| s.theme = "dark".into());
             assert!(cx.theme().mode.is_dark());
             assert_eq!(hex(cx.theme().primary), "#C93A85");
             assert_ne!(hex(cx.theme().ring), "#86A1FF");
-            AppSettings::set(cx, |s| s.accent = "#1E7F47".into());
+            // the dark theme's accent changed: the light one keeps its own
+            set(themes::ACCENT, "#1E7F47", cx);
             assert_eq!(hex(cx.theme().primary), "#1E7F47");
+            assert_eq!(accent(cx).as_deref(), Some("#1E7F47"));
+            Theme::change(ThemeMode::Light, None, cx);
+            assert_eq!(hex(cx.theme().primary), "#C93A85");
             Theme::change(ThemeMode::Dark, None, cx);
             assert_eq!(hex(cx.theme().primary), "#1E7F47");
+            AppSettings::set(cx, |s| s.theme = "light".into());
+            assert_eq!(hex(cx.theme().primary), "#C93A85");
+            assert_eq!(accent(cx).as_deref(), Some("#C93A85"));
             // the theme's own: theme.json's light and dark blues
-            AppSettings::set(cx, |s| s.accent = String::new());
+            themes::set_color(themes::ACCENT, None, cx);
             assert_eq!(hex(cx.theme().primary), "#3557D4");
             assert_eq!(hex(cx.theme().ring), "#3557D4");
-            Theme::change(ThemeMode::Dark, None, cx);
+            assert_eq!(accent(cx), None);
+            AppSettings::set(cx, |s| s.theme = "dark".into());
+            assert_eq!(hex(cx.theme().primary), "#1E7F47");
+            themes::set_color(themes::ACCENT, None, cx);
             assert_eq!(hex(cx.theme().primary), "#4A68E8");
             assert_eq!(hex(cx.theme().ring), "#86A1FF");
             assert_eq!(hex(cx.theme().link), "#86A1FF");
+            assert!(AppSettings::get(cx).colors.is_empty());
             // a colour no one can read is the theme's own
-            AppSettings::set(cx, |s| s.accent = "blue".into());
-            assert_eq!(hex(cx.theme().primary), "#3557D4");
+            set(themes::ACCENT, "blue", cx);
+            assert_eq!(hex(cx.theme().primary), "#4A68E8");
         });
         cx.run_until_parked();
     }
@@ -1706,7 +1827,7 @@ mod tests {
             set("tab.active.background", "#123456", cx);
             assert_eq!(hex(cx.theme().tab_active), "#123456");
             // the accent is under it
-            AppSettings::set(cx, |s| s.accent = "#C93A85".into());
+            set(themes::ACCENT, "#C93A85", cx);
             assert_eq!(hex(cx.theme().tab_active), "#123456");
             assert_eq!(hex(cx.theme().primary), "#C93A85");
             set("primary.background", "#00FF0080", cx);
@@ -1843,7 +1964,7 @@ mod tests {
 
     /// The pages' colours, each changed in Settings, are what the editor draws, for the theme on
     /// screen alone; unchanged, they are what it drew before they could be changed, and the
-    /// Colors page shows what is drawn.
+    /// Appearance shows what is drawn.
     #[gpui_kit::test]
     fn page_colours_reach_the_pages(cx: &mut TestAppContext) {
         started(
@@ -1972,19 +2093,18 @@ mod tests {
         });
     }
 
-    /// The Colors page draws a row for every colour of the theme schema.
+    /// Appearance draws a row for every colour of the theme schema; there is no page of colours
+    /// apart from it (the pages are those every_page_draws counts).
     #[gpui_kit::test]
-    fn the_colors_page_has_a_row_per_colour(cx: &mut TestAppContext) {
+    fn appearance_has_a_row_per_colour(cx: &mut TestAppContext) {
         started(AppSettings::default(), cx);
-        // after General and Appearance
-        let colors = 2;
         COLOR_ROWS.with(|r| r.borrow_mut().clear());
         let t = std::time::Instant::now();
-        let (_, vcx) = cx.add_window_view(|_, _| OnPage(colors));
+        let (_, vcx) = cx.add_window_view(|_, _| OnPage(1));
         // tall enough that the page's list draws every group
         vcx.simulate_resize(size(px(1000.0), px(200_000.0)));
         vcx.run_until_parked();
-        eprintln!("the Colors page, every row, drew in {:?}", t.elapsed());
+        eprintln!("Appearance, every colour row, drew in {:?}", t.elapsed());
         let t = std::time::Instant::now();
         vcx.update(|window, _| window.refresh());
         vcx.run_until_parked();
@@ -1993,6 +2113,55 @@ mod tests {
             .flat_map(|g| g.keys.iter().map(|k| k.key.clone()))
             .collect();
         COLOR_ROWS.with(|r| assert_eq!(r.borrow().keys().cloned().collect::<HashSet<_>>(), keys));
+        // and the theme's actions with them
+        let export = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("colors-export").is_some()
+        });
+        assert!(export);
+    }
+
+    /// Appearance's reset puts back its settings and the accent and colours of the theme it
+    /// shows, as Reset all colors does, and leaves the other themes' alone.
+    #[gpui_kit::test]
+    fn appearance_reset_leaves_other_themes_colours(cx: &mut TestAppContext) {
+        started(
+            AppSettings {
+                theme: "dark".into(),
+                ui_font_size: 18.0,
+                ..AppSettings::default()
+            },
+            cx,
+        );
+        cx.update(|cx| {
+            set(themes::ACCENT, "#1E7F47", cx);
+            set("tab.active.background", "#123456", cx);
+            AppSettings::set(cx, |s| s.theme = "light".into());
+            set(themes::ACCENT, "#C93A85", cx);
+            AppSettings::set(cx, |s| s.theme = "dark".into());
+        });
+        let (_, vcx) = cx.add_window_view(|_, _| OnPage(1));
+        vcx.simulate_resize(size(px(860.0), px(586.0)));
+        vcx.run_until_parked();
+        let reset = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("reset").map(|b| b.bounds().center())
+        });
+        vcx.simulate_click(reset.expect("the page's reset"), Modifiers::default());
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let s = AppSettings::get(cx);
+            assert_eq!((s.theme.as_str(), s.ui_font_size), ("system", 16.0));
+            assert!(
+                !s.colors.contains_key(themes::DEFAULT_DARK),
+                "{:?}",
+                s.colors
+            );
+            assert_eq!(
+                (s.colors[themes::DEFAULT_LIGHT].get(themes::ACCENT)).map(String::as_str),
+                Some("#C93A85")
+            );
+        });
     }
 
     #[test]
@@ -2036,7 +2205,7 @@ mod tests {
         });
         cx.add_window_view(SettingsView::new).1.run_until_parked();
         let n = cx.update(|cx| pages(cx).len());
-        assert_eq!(n, 7);
+        assert_eq!(n, 6);
         for i in 0..n {
             cx.add_window_view(|_, _| OnPage(i)).1.run_until_parked();
         }
@@ -2190,7 +2359,7 @@ mod tests {
             cx,
         );
         // the Settings window's size, less its title bar
-        let (_, vcx) = cx.add_window_view(|_, _| OnPage(2));
+        let (_, vcx) = cx.add_window_view(|_, _| OnPage(1));
         vcx.simulate_resize(size(px(860.0), px(586.0)));
         vcx.run_until_parked();
         // the Pages group at the top, as its entry in the sidebar shows it

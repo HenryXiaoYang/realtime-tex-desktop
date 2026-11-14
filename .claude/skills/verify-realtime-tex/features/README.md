@@ -26,8 +26,8 @@ The maintained source for verifying what a user of Realtime Tex Desktop can see 
 ## Features
 
 - [tour.md](tour.md): the first-run spotlight tour.
-- [settings.md](settings.md): Settings window pages, accent, themes.
-- [colors.md](colors.md): the Colors page (every theme color, per theme, export).
+- [settings.md](settings.md): Settings window pages, per-theme accent, themes.
+- [colors.md](colors.md): every theme color under Appearance (per theme, accent, export).
 - [pages-editing.md](pages-editing.md): typing on the pages and the source box.
 - [export.md](export.md): Export PDF through the native Save panel.
 

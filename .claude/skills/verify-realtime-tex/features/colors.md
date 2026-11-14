@@ -1,19 +1,19 @@
 # Colors
 
-The Colors page in Settings lists every color of the theme in use (about 190 rows, in groups such as Window, Tabs, Sidebar, Buttons, Inputs & controls, Source syntax, Pages), each with its hex value, a swatch that opens a color picker, and a reset icon once changed. Changes are stored per theme (`colors` in settings.json, keyed by theme name), win over the accent, and survive light/dark switches. The first group, titled with the theme's name, has Export theme and Reset all colors.
+Settings › Appearance lists every color of the theme in use after its Window and Layout groups: first a group titled with the theme's name (Accent color, Export theme, Reset all colors), then about 190 rows in groups (Pages, Window colors, Title & status bars, Tabs, Sidebar, Buttons, Inputs & controls, …, Source syntax), each with its hex value, a swatch that opens a color picker, and a reset icon once changed. Changes and the accent are stored per theme (`colors` in settings.json, keyed by theme name; the accent under the key `accent`), per-key changes win over the accent, and both survive light/dark switches. A settings file with the old top-level `accent` has it copied to the chosen light and dark themes on load.
 
 ## Sub-features
 
 - `colors-list` every group and row draws; settings search finds a color by label or key.
 - `colors-edit` a swatch opens the picker; a pick changes that color in the app at once and shows the row's reset icon.
 - `colors-per-theme` an edit in the dark theme does not change the light theme.
-- `colors-reset` the row reset and Reset all colors restore the theme's own colors.
-- `colors-export` Export theme writes `<support>/themes/<name> (custom).json`, which then appears in Appearance's theme lists.
+- `colors-reset` the row reset and Reset all colors restore the theme's own colors (Reset all also its accent).
+- `colors-export` Export theme writes `<support>/themes/<name> (custom).json` (with `"accent"` among its colors), which then appears in Appearance's theme lists and shows that accent ringed.
 - `colors-pages` the Pages group (selected text, find matches, selected block, source box) changes what is drawn on the pages.
 
 ## How to get to it (user POV)
 
-- Settings › Colors in the sidebar.
+- Settings › Appearance, then the theme-named sub-entry (or any color group) in the sidebar.
 - Settings search: type a color's name (e.g. "selection").
 
 ## Driving it with rtd.sh
@@ -22,11 +22,11 @@ Preconditions:
 
 - `$R launch --build`; open Settings as in [settings.md](settings.md); `$R doctor` exits 0.
 
-- **Open.** Click `Colors` in the sidebar; `$R shot colors-open`. The first group's title is the active theme's name (e.g. `Realtime Tex Dark`).
+- **Open.** Click `Appearance`, then the sub-entry named after the active theme (e.g. `Realtime Tex Dark`); `$R shot colors-open`. The group shows Accent color, Export theme, Reset all colors; Pages follows.
 - **Edit.** Click a row's swatch (e.g. in Buttons, the primary background); pick a palette cell; `$R key Escape`. `$R shot colors-edited`: the row's hex changed and its reset icon shows; buttons in the window took the color. `$R settings` has `"colors": {"<theme name>": {"<key>": "#…"}}`.
-- **Per theme.** Appearance › Theme › Light; back to Colors: the group title is the light theme's name and the edited row is unchanged there.
+- **Per theme.** Window group › Theme › Light; back to the theme-named group: its title is the light theme's name, and the edited row and the accent are unchanged there.
 - **Export.** Click Export theme. `ls "$($R home)/Library/Application Support/Realtime Tex Desktop/themes"` lists `<name> (custom).json`; Appearance's dark/light theme list includes it.
-- **Pages colors.** Open a project (`$R launch --build <folder>`), select text on the pages, change Colors › Pages › Selected text; the selection on the page takes the color (shot before/after).
+- **Pages colors.** Open a project (`$R launch --build <folder>`), select text on the pages, change Appearance › Pages › Selected text; the selection on the page takes the color (shot before/after).
 - **Proof.** Shots before/after, `$R settings`, and the exported file copied into `$($R evidence)`.
 
 ## Gotchas

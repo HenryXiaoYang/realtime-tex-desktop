@@ -1,6 +1,6 @@
 // The themes: the app's own (theme.json and themes/), those in the themes folder, and over the one
-// chosen for each mode the accent and the colours changed in Settings › Colors, kept per theme as
-// VS Code keeps its colour customizations. Every colour a theme can name is read off the kit's
+// chosen for each mode its accent and the colours changed in Settings › Appearance, kept per theme
+// as VS Code keeps its colour customizations. Every colour a theme can name is read off the kit's
 // theme schema, so the colours a newer kit adds are listed without a change here; with them the
 // app's own, those the editor draws on the pages, which a theme file names among its colours too.
 use crate::ui::palette;
@@ -133,6 +133,10 @@ pub fn effective(
     t
 }
 
+/// The key a theme's accent is kept under among its colours, in the settings file and in a theme
+/// file alike; no colour of the kit's theme has it.
+pub const ACCENT: &str = "accent";
+
 /// The colours the editor draws on the pages, the app's own: each key and its name in Settings.
 /// Unchanged, the editor makes them from the theme's (palette::marks).
 pub const PAGES: [(&str, &str); 8] = [
@@ -146,12 +150,14 @@ pub const PAGES: [(&str, &str); 8] = [
     ("pages.ink", "Dark page text"),
 ];
 
-/// The page colours each theme file in the themes folder names (theme name to key to colour).
+/// The page colours and accent each theme file in the themes folder names (theme name to key to
+/// colour).
 struct PageColors(HashMap<String, BTreeMap<String, String>>);
 
 impl Global for PageColors {}
 
-/// The page colours the theme files in `dir` name; a theme named twice, the first one read.
+/// The page colours and accents the theme files in `dir` name; a theme named twice, the first one
+/// read.
 fn page_colors_in(dir: &Path) -> HashMap<String, BTreeMap<String, String>> {
     let mut found = HashMap::new();
     let files = std::fs::read_dir(dir).into_iter().flatten().flatten();
@@ -170,7 +176,7 @@ fn page_colors_in(dir: &Path) -> HashMap<String, BTreeMap<String, String>> {
                 continue;
             };
             let pages: BTreeMap<String, String> = (colors.iter())
-                .filter(|(k, _)| matches!(Place::of(k), Place::Pages))
+                .filter(|(k, _)| matches!(Place::of(k), Place::Pages) || *k == ACCENT)
                 .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
                 .collect();
             found.entry(name.to_string()).or_insert(pages);
@@ -179,8 +185,8 @@ fn page_colors_in(dir: &Path) -> HashMap<String, BTreeMap<String, String>> {
     found
 }
 
-/// The page colour `key` of the theme on screen: as changed in Settings, else as its theme file
-/// names it; None: the editor makes it.
+/// The page colour (or the accent) `key` of the theme on screen: as changed in Settings, else as
+/// its theme file names it; None: the editor makes it (the theme's own).
 pub fn page_color(key: &str, cx: &App) -> Option<Hsla> {
     let name = active(cx)?;
     let changed = AppSettings::get(cx).colors.get(name.as_ref());
@@ -256,13 +262,20 @@ fn change(t: &mut ThemeConfig, changed: &BTreeMap<String, String>) {
     }
 }
 
-/// Each mode's chosen theme, with the accent and its changed colours, in the theme's slots, where
+/// The accent changed in Settings among `changed`, a theme's changed colours.
+fn accent_in(changed: Option<&BTreeMap<String, String>>) -> Option<Hsla> {
+    palette::hex_color(changed?.get(ACCENT)?)
+}
+
+/// Each mode's chosen theme, with its accent and changed colours, in the theme's slots, where
 /// every switch of mode (the system's too) takes it.
 pub fn install(cx: &mut App) {
     let s = AppSettings::get(cx);
-    let accent = palette::hex_color(&s.accent);
     let made = |mode| {
-        chosen(s, mode, cx).map(|b| Rc::new(effective(&b, accent, s.colors.get(b.name.as_ref()))))
+        chosen(s, mode, cx).map(|b| {
+            let changed = s.colors.get(b.name.as_ref());
+            Rc::new(effective(&b, accent_in(changed), changed))
+        })
     };
     let (Some(light), Some(dark)) = (made(ThemeMode::Light), made(ThemeMode::Dark)) else {
         return;
@@ -282,22 +295,20 @@ pub fn export(cx: &App) -> std::io::Result<PathBuf> {
         Some(_) => base.name.to_string(),
         None => format!("{} (custom)", base.name),
     };
-    let theme = effective(
-        &base,
-        palette::hex_color(&s.accent),
-        s.colors.get(base.name.as_ref()),
-    );
+    let changed = s.colors.get(base.name.as_ref());
+    let theme = effective(&base, accent_in(changed), changed);
     let dir = dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.json", name.replace(['/', '\\', ':'], "-")));
-    let pages = (PAGES.iter())
-        .filter_map(|(k, _)| Some((k.to_string(), palette::hex(page_color(k, cx)?))))
+    // the accent too, so the theme read back shows it as its own
+    let pages = (PAGES.iter().map(|(k, _)| *k).chain([ACCENT]))
+        .filter_map(|k| Some((k.to_string(), palette::hex(page_color(k, cx)?))))
         .collect();
     std::fs::write(&path, theme_file(&theme, &name, &pages))?;
     Ok(path)
 }
 
-/// `theme` as a theme file, named `name`, with the page colours `pages` among its colours, without
+/// `theme` as a theme file, named `name`, with the page colours and accent `pages` among its colours, without
 /// the settings it leaves unset.
 fn theme_file(theme: &ThemeConfig, name: &str, pages: &BTreeMap<String, String>) -> String {
     let mut t = theme.clone();
@@ -341,10 +352,12 @@ pub struct ColorGroup {
     pub keys: Vec<ColorKey>,
 }
 
-/// Settings › Colors' groups, each by the starts of its keys; a key has exactly one start.
+/// The colour groups of Settings › Appearance, each by the starts of its keys; a key has exactly
+/// one start.
 const GROUPS: [(&str, &[&str]); 15] = [
+    ("Pages", &["pages."]),
     (
-        "Window",
+        "Window colors",
         &[
             "background",
             "foreground",
@@ -356,7 +369,6 @@ const GROUPS: [(&str, &[&str]); 15] = [
             "overlay",
         ],
     ),
-    ("Pages", &["pages."]),
     ("Title & status bars", &["title_bar.", "status_bar."]),
     ("Tabs", &["tab.", "tab_bar."]),
     ("Sidebar", &["sidebar."]),
@@ -490,7 +502,7 @@ static GROUPED: LazyLock<Vec<ColorGroup>> = LazyLock::new(|| {
         .collect()
 });
 
-/// Settings › Colors' groups, in order, each with its keys.
+/// The colour groups of Settings › Appearance, in order, each with its keys.
 pub fn groups() -> &'static [ColorGroup] {
     &GROUPED
 }
@@ -580,7 +592,7 @@ pub fn set_color(key: &str, value: Option<String>, cx: &mut App) {
 mod tests {
     use super::*;
 
-    /// The kit's theme schema, every colour of it, each in one group of Settings › Colors, and
+    /// The kit's theme schema, every colour of it, each in one colour group of Settings, and
     /// each interface colour found on the theme: a newer kit's colours cannot go missing unseen.
     #[test]
     fn every_colour_of_the_schema_is_in_one_group() {
@@ -656,7 +668,7 @@ mod tests {
     }
 
     /// A theme file written by Export reads back as the same colours, the accent's and the
-    /// changed ones in it, its syntax colours and page colours too.
+    /// changed ones in it, its syntax colours and page colours too, and names its accent.
     #[test]
     fn an_exported_theme_reads_back_the_same() {
         let base = theme_json(DEFAULT_DARK);
@@ -672,6 +684,7 @@ mod tests {
         let pages = BTreeMap::from([
             ("pages.selection".to_string(), "#FFCC0066".to_string()),
             ("pages.paper".to_string(), "#101830".to_string()),
+            (ACCENT.to_string(), "#C93A85".to_string()),
         ]);
         let file = theme_file(&made, "Mine", &pages);
         assert!(!file.contains("null"), "{file}");
@@ -681,8 +694,8 @@ mod tests {
         assert_eq!(applied(&read).colors, applied(&made).colors);
         assert_eq!(read.highlight, made.highlight);
         assert_eq!(palette::hex(applied(&read).tab_active), "#112233");
-        // the kit reads the file and leaves the page colours out; the themes folder's reading
-        // keeps them
+        // the kit reads the file and leaves the page colours and accent out; the themes
+        // folder's reading keeps them
         let dir = std::env::temp_dir().join(format!("rtex-export-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("mine.json"), &file).unwrap();
@@ -701,7 +714,7 @@ mod tests {
         let made = effective(&base, None, Some(&changed));
         assert_eq!(applied(&made).colors, applied(&base).colors);
         assert_eq!(label("pages.paper"), "Dark page paper");
-        assert!(groups()[1].title == "Pages" && groups()[1].keys.len() == PAGES.len());
+        assert!(groups()[0].title == "Pages" && groups()[0].keys.len() == PAGES.len());
     }
 
     /// A colour no one can read, or a key no theme has, changes nothing.

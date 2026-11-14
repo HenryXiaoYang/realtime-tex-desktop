@@ -1,6 +1,6 @@
 // The editor's colours. The marks it draws on the typeset pages (the selected block, the insert
 // line, the text selection, find matches, the source box) and the dark pages' paper and ink are
-// the theme's, as Settings › Colors › Pages changes them; unchanged, the marks take their hue
+// the theme's, as Settings › Appearance › Pages changes them; unchanged, the marks take their hue
 // from the theme's roles, made to stand out from the paper they sit on, white or dark. And the
 // surfaces the pages lie in.
 use crate::render::{DARK, DarkPaper};
@@ -121,7 +121,7 @@ pub struct Marks {
     pub match_other: Hsla,
 }
 
-/// The marks for pages on `dark` paper: those the theme names in Settings › Colors › Pages, and
+/// The marks for pages on `dark` paper: those the theme names in Settings › Appearance › Pages, and
 /// for the rest, from the theme: its selection hue, at a lightness that stands 3:1 from the paper
 /// (WCAG's floor for marks and controls), and its warning hue for find, as a highlighter's.
 pub fn marks(dark: bool, cx: &App) -> Marks {
