@@ -268,18 +268,20 @@ def dark_only(key):
 
 
 def papers(t):
-    """Each paper the pages can show in the theme's mode, its ink, and the alpha the editor
-    draws an opaque mark colour at over it (palette::marks)."""
-    white = [(WHITE, BLACK, 0.4)]
-    return [(t.c["pages.paper"], t.c["pages.ink"], 0.6)] + white if t.dark else white
+    """Each paper the pages can show in the theme's mode, and its ink."""
+    white = [(WHITE, BLACK)]
+    return [(t.c["pages.paper"], t.c["pages.ink"])] + white if t.dark else white
 
 
-def page_fill(*keys):
-    """A fill the editor draws under page text, as the theme names it: kept only while it shows
-    on every paper and the text over it reads; else the app makes it from the accent."""
+def page_fill(key, alpha):
+    """A find highlight under page text, as the theme names it (an opaque one the editor draws at
+    `alpha`, palette::marks): kept only while it shows on every paper and the text over it reads;
+    else the app makes it from the theme's warning colour."""
+    keys = [key]
+
     def make(t):
         f = t.first(keys)
-        for paper, ink, alpha in papers(t) if f else []:
+        for paper, ink in papers(t) if f else []:
             drawn = over(f if f[3] < 1 else f[:3] + (alpha,), paper)
             if contrast(drawn, paper) < 1.25 or contrast(ink, drawn) < 4.5:
                 t.note(f"{keys[0]} {hexs(f)} left to the app (shows {contrast(drawn, paper):.2f}:1, "
@@ -300,7 +302,7 @@ SURFACES = ["background", "sidebar.background", "title_bar.background", "status_
 # Fills drawn over other surfaces keep their alpha; every other colour is made opaque.
 KEEP_ALPHA = {"accent.background", "list.active.background", "list.hover.background",
               "sidebar.accent.background", "selection.background", "tab.background",
-              "pages.selection", "pages.find.current", "pages.find.other"}
+              "pages.find.current", "pages.find.other"}
 
 # (key, VS Code keys in order, derived when none is set, (floor, keys it is drawn against) | None)
 # Keys starting "_" are working colours, not written.
@@ -390,9 +392,10 @@ UI = [
     ("pages.paper", [], dark_only("editor.background"), None),
     ("pages.ink", [], dark_only("editor.foreground"), (TEXT, ["pages.paper"])),
     ("pages.accent", [], of("_accent"), (MARK, ["pages.paper", "_white"])),
-    ("pages.selection", [], page_fill("editor.selectionBackground"), None),
-    ("pages.find.current", [], page_fill("editor.findMatchBackground"), None),
-    ("pages.find.other", [], page_fill("editor.findMatchHighlightBackground"), None),
+    # no pages.selection: VS Code's selection is a code editor's tint, too faint on a page; the app
+    # fills selected text with the page accent, as strong as the text over it allows
+    ("pages.find.current", [], page_fill("editor.findMatchBackground", 0.6), None),
+    ("pages.find.other", [], page_fill("editor.findMatchHighlightBackground", 0.28), None),
     ("pages.source_box.background", [], lambda t: t.first(["editorWidget.background", "editorHoverWidget.background"]),
      (1.1, ["pages.paper", "_white"])),
     ("pages.source_box.foreground", [], lambda t: t.c.get("pages.source_box.background") and t.c["foreground"],

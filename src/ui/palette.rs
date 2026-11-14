@@ -128,8 +128,11 @@ pub fn marks(dark: bool, cx: &App) -> Marks {
     let theme = cx.theme();
     let own = |key| themes::page_color(key, cx);
     let paper = paper(dark, cx);
-    let accent = own("pages.accent")
-        .unwrap_or_else(|| readable_on(theme.selection.opacity(1.0), paper, 3.0));
+    // the selection hue opaque: the kit keeps the theme's selection at most 30% opaque
+    let accent =
+        own("pages.accent").unwrap_or_else(|| readable_on(theme.selection.alpha(1.0), paper, 3.0));
+    let selection = own("pages.selection");
+    let filled = selection.filter(|c| c.a >= 1.0).unwrap_or(accent);
     let white: Hsla = rgb(0xffffff).into();
     let black: Hsla = rgb(0x000000).into();
     Marks {
@@ -139,8 +142,11 @@ pub fn marks(dark: bool, cx: &App) -> Marks {
         } else {
             black
         },
-        // the accent, strong enough to stand out from the paper (dark paper needs more of it)
-        text_selection: over(own("pages.selection"), accent, selection_alpha(dark)),
+        text_selection: over(
+            selection,
+            accent,
+            selection_alpha(filled, paper, ink(dark, cx), dark),
+        ),
         match_current: over(own("pages.find.current"), theme.warning, 0.6),
         match_other: over(own("pages.find.other"), theme.warning, 0.28),
     }
@@ -155,10 +161,14 @@ fn over(own: Option<Hsla>, base: Hsla, alpha: f32) -> Hsla {
     }
 }
 
-/// How much of the accent fills selected text: enough that the fill stands 1.5:1 from the paper
-/// while the text over it still reads.
-fn selection_alpha(dark: bool) -> f32 {
-    if dark { 0.6 } else { 0.4 }
+/// How much of `c` fills selected text: enough that the fill stands 1.5:1 from the paper (dark
+/// paper needs more of it), less where the text over it would read under 4.5:1.
+fn selection_alpha(c: Hsla, paper: Hsla, ink: Hsla, dark: bool) -> f32 {
+    let mut a = if dark { 0.6 } else { 0.4 };
+    while a > 0.2 && contrast(ink, paper.blend(c.alpha(a))) < 4.5 {
+        a -= 0.05;
+    }
+    a
 }
 
 /// The source box's background and text over `dark` paper: the theme's own, else a step off the
@@ -342,7 +352,7 @@ mod surface_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{accented, contrast, hex, hex_color, hex_rgba, readable_on};
+    use super::{accented, contrast, hex, hex_color, hex_rgba, readable_on, selection_alpha};
     use gpui_kit::component::{ThemeConfig, ThemeSet};
     use gpui_kit::{Hsla, SharedString, rgb};
 
@@ -368,15 +378,29 @@ mod tests {
             };
             Hsla::from(r)
         };
-        for (sel, paper, dark) in [(0x55a0fc, white, false), (0x1d4ed8, black, true)] {
+        // white paper and black ink, black paper and light gray ink: the fill stands 1.5:1, the
+        // text over it reads
+        let gray: Hsla = rgb(0xe0e0e0).into();
+        for (sel, paper, ink, dark) in [
+            (0x55a0fc, white, black, false),
+            (0x1d4ed8, black, gray, true),
+        ] {
             let accent = readable_on(rgb(sel).into(), paper, 3.0);
-            let fill = blend(accent, super::selection_alpha(dark), paper);
-            assert!(
-                contrast(fill, paper) >= 1.5,
-                "{dark}: {}",
-                contrast(fill, paper)
-            );
+            let fill = blend(accent, selection_alpha(accent, paper, ink, dark), paper);
+            assert!(contrast(fill, paper) >= 1.5, "{}", contrast(fill, paper));
+            assert!(contrast(ink, fill) >= 4.5, "{}", contrast(ink, fill));
         }
+        // a bright accent under dim ink (One Dark Pro's page): less fill, the text still reads
+        let (paper, ink, accent) = (
+            rgb(0x282c34).into(),
+            rgb(0xabb2bf).into(),
+            rgb(0x4d78cc).into(),
+        );
+        let a = selection_alpha(accent, paper, ink, true);
+        assert!(
+            a < 0.6 && contrast(ink, blend(accent, a, paper)) >= 4.5,
+            "{a}"
+        );
         // a colour that already reads stays as it is
         let ok: Hsla = rgb(0x1d4ed8).into();
         assert_eq!(readable_on(ok, white, 3.0), ok);

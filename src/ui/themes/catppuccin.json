@@ -69,7 +69,6 @@
         "info.background": "#1E66F5",
         "info.foreground": "#FFFFFF",
         "pages.accent": "#8839EF",
-        "pages.selection": "#7C7F934D",
         "pages.find.current": "#E6ADBD",
         "pages.source_box.background": "#E6E9EF",
         "pages.source_box.foreground": "#4C4F69",
@@ -222,7 +221,6 @@
         "pages.ink": "#C6D0F5",
         "pages.accent": "#B67ADD",
         "pages.find.current": "#674B59",
-        "pages.find.other": "#506373",
         "pages.source_box.background": "#292C3C",
         "pages.source_box.foreground": "#C6D0F5",
         "accent": "#CA9EE6"
@@ -373,9 +371,7 @@
         "pages.paper": "#24273A",
         "pages.ink": "#CAD3F5",
         "pages.accent": "#AD76F2",
-        "pages.selection": "#939AB740",
         "pages.find.current": "#604456",
-        "pages.find.other": "#455C6D",
         "pages.source_box.background": "#1C1E2D",
         "pages.source_box.foreground": "#CAD3F5",
         "accent": "#C6A0F6"
@@ -526,9 +522,7 @@
         "pages.paper": "#1E1E2E",
         "pages.ink": "#CDD6F4",
         "pages.accent": "#B077F3",
-        "pages.selection": "#9399B240",
         "pages.find.current": "#5E3F53",
-        "pages.find.other": "#3E5767",
         "pages.source_box.background": "#14141F",
         "pages.source_box.foreground": "#CDD6F4",
         "accent": "#CBA6F7"

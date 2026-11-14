@@ -2015,13 +2015,14 @@ mod tests {
             v
         };
         let strings = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        // as the editor drew them before: the theme's selection blue and warning amber, the
-        // source box a step off the paper, black paper with light gray ink
+        // as the editor drew them before: the theme's selection blue (opaque for the block and
+        // insert line, 60% under selected text, 40% on white) and warning amber, the source box a
+        // step off the paper, black paper with light gray ink
         let dark_before = strings(&[
-            "#4A68E82E",
+            "#4A68E899",
             "#FACC1599",
             "#FACC1547",
-            "#4A68E84D",
+            "#4A68E8",
             "#262626",
             "#E6E6E6",
             "[0, 0, 0]",
@@ -2029,10 +2030,10 @@ mod tests {
             "#FFFFFF",
         ]);
         let light_before = strings(&[
-            "#3557D41F",
+            "#3557D466",
             "#CA8A0499",
             "#CA8A0447",
-            "#3557D44D",
+            "#3557D4",
             "#EBEBEB",
             "#1F1F1F",
             "[0, 0, 0]",
@@ -2042,12 +2043,13 @@ mod tests {
         cx.update(|cx| {
             assert_eq!(drawn(cx).to_vec(), dark_before);
             assert_eq!(shown(cx), as_hex(drawn(cx), cx));
-            // the selection follows a changed accent, and the icon on it reads
+            // the selection follows a changed accent (a pale one, less of it, so the light ink
+            // over it still reads), and the icon on it reads
             set("pages.accent", "#FFE066", cx);
             let d = drawn(cx);
             assert_eq!(
                 (&*d[0], &*d[3], &*d[8]),
-                ("#FFE06699", "#FFE066", "#000000")
+                ("#FFE06666", "#FFE066", "#000000")
             );
             let mine = [
                 ("pages.selection", "#00FF0040"),
