@@ -10,11 +10,14 @@ pub use tex_install::{Stage, TexInstall, TexProgress, cancel_tex_install, instal
 pub use process::*;
 pub use protocol::*;
 
-/// What a download or an install cut short by a crash or a quit left behind, removed, on a thread
-/// of its own (half a TeX Live is gigabytes).
+/// What a download or an install cut short by a crash or a quit left behind, removed, and the
+/// rtex runs a crashed app left running ended, on a thread of its own (half a TeX Live is
+/// gigabytes).
 pub fn clean_leftovers() {
     std::thread::spawn(|| {
         download::clean_leftovers();
         tex_install::clean_leftovers();
+        #[cfg(unix)]
+        process::end_leftover_groups();
     });
 }
