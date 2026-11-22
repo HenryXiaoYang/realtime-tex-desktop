@@ -268,7 +268,7 @@ impl Doc {
         if readable
             && let (Ok(f), Ok(d)) = (file.canonicalize(), dir.canonicalize())
             && let Ok(rel) = f.strip_prefix(&d)
-            && let rel = rel.to_string_lossy().replace('\\', "/")
+            && let rel = crate::ui::slashed(rel)
             // a name \includegraphics cannot take as it is gets a copy that it can
             && !rel.contains(['%', '#', '{', '}', '~', '$', '&', '^', '\\'])
             && Path::new(&rel).file_stem().is_some_and(|s| !s.to_string_lossy().contains('.'))

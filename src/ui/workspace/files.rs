@@ -149,12 +149,7 @@ impl Workspace {
     }
 
     pub(super) fn rel(&self, path: &Path) -> Option<String> {
-        Some(
-            path.strip_prefix(&self.root)
-                .ok()?
-                .to_string_lossy()
-                .to_string(),
-        )
+        Some(crate::ui::slashed(path.strip_prefix(&self.root).ok()?))
     }
 
     /// Edit the name of the tree entry at `rel` in place; Enter or a click away renames it,
@@ -434,7 +429,7 @@ impl Workspace {
         let mut dir = Path::new(rel).parent();
         let mut added = false;
         while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty()) {
-            added |= self.expanded.insert(d.to_string_lossy().to_string());
+            added |= self.expanded.insert(crate::ui::slashed(d));
             dir = d.parent();
         }
         if added {
@@ -464,11 +459,7 @@ pub(super) fn list_dir(
         .into_iter()
         .map(|e| {
             let path = e.path();
-            let id = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
+            let id = crate::ui::slashed(path.strip_prefix(root).unwrap_or(&path));
             let item = TreeItem::new(id.clone(), e.file_name().to_string_lossy().to_string());
             if !path.is_dir() {
                 return item;

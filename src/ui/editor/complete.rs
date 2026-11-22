@@ -422,7 +422,7 @@ fn project_files(root: &Path) -> Vec<String> {
             if p.is_dir() {
                 dirs.push(p);
             } else if let Ok(rel) = p.strip_prefix(root) {
-                out.push(rel.to_string_lossy().to_string());
+                out.push(crate::ui::slashed(rel));
             }
             if out.len() > 5000 {
                 return out;

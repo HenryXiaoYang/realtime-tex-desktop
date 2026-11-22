@@ -13,6 +13,15 @@ pub mod workspace;
 use gpui_kit::component::button::Button;
 use gpui_kit::{App, SharedString, TextSystem, font, px};
 
+/// A path in the project written with `/`, as TeX writes it and as tab and file-tree ids are kept,
+/// on Windows too.
+pub fn slashed(rel: &std::path::Path) -> String {
+    rel.iter()
+        .map(|c| c.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// The tooltip of an icon button, which is also its name for VoiceOver: an icon gives a button
 /// no name, and a tooltip only describes it. The name leaves out the shortcut in brackets.
 pub trait Tip {
