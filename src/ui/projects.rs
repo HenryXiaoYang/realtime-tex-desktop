@@ -208,6 +208,7 @@ pub fn ensure_rtex(cx: &mut App) {
     {
         return;
     }
+    let upgrading = crate::engine::upgrading();
     cx.set_global(RtexDownload::Running);
     cx.refresh_windows();
     let task = cx
@@ -223,7 +224,14 @@ pub fn ensure_rtex(cx: &mut App) {
             if got.is_ok() {
                 for (_, handle, ws) in cx.global::<Projects>().windows.clone() {
                     let _ = handle.update(cx, |_, window, cx| {
-                        ws.update(cx, |ws, cx| ws.start_stopped(window, cx))
+                        ws.update(cx, |ws, cx| {
+                            // documents running the older rtex move to the new one
+                            if upgrading {
+                                ws.restart_engines(window, cx)
+                            } else {
+                                ws.start_stopped(window, cx)
+                            }
+                        })
                     });
                 }
                 if first_launch(cx) && welcome::setup_ok() {

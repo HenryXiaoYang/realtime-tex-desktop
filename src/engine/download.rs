@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const RELEASES: &str = "https://github.com/HenryXiaoYang/realtime-tex/releases/download";
-const RTEX_TAG: &str = "v0.0.7";
+const RTEX_TAG: &str = "v0.0.8";
 
 /// This system's build in that release, and its SHA-256 (scripts/dmg.sh reads the Mac's here).
 const BUILD: Option<(&str, &str)> = match (
@@ -17,23 +17,23 @@ const BUILD: Option<(&str, &str)> = match (
 ) {
     (b"macos", b"aarch64") => Some((
         "rtex-aarch64-apple-darwin.tar.gz",
-        "9c8090dcd2c286e603b87995a1952d2a252ee9167a5850e3048489eccfdbfb64",
+        "acf5e46ab8f9ba18c2ccf3c53d8c17c40a7f9e7181df6c977357c30bbe68388f",
     )),
     (b"macos", b"x86_64") => Some((
         "rtex-x86_64-apple-darwin.tar.gz",
-        "f8fc0761ee1f9a9540d012bed09ca734f984a92ac2c1e96c36ec0858e9354c94",
+        "aa7edcb268ce47ac6aae6f155cced7137d82fa5317d506f7e48a7bbbbf7ff590",
     )),
     (b"linux", b"aarch64") => Some((
         "rtex-aarch64-unknown-linux-gnu.tar.gz",
-        "96725f34cf1297a00fcd81ee33af43fcb92dbc2f7d0750ee484a2e1778a3e621",
+        "da4c7f4821a5587daf3ed3d3dfa23c63bb2e13f64d5136aad16a8327c938f24d",
     )),
     (b"linux", b"x86_64") => Some((
         "rtex-x86_64-unknown-linux-gnu.tar.gz",
-        "f1c962c27f02fb760cb116b80bbf2930a51c26de2fc5b4a48f883953f2104340",
+        "aeea57a8d1db33fdc509e0ac45a324043cef00e8fbe82b5d2aeba33b8bb5542d",
     )),
     (b"windows", b"x86_64") => Some((
         "rtex-x86_64-pc-windows-msvc.zip",
-        "3f461d021057cd262eb654907001d012ecd50967fb2b8d74cd708f4b9080134d",
+        "b36a2e5abc6216301d180d7b800b1dbbb34672b04946d0b25d227ce6f9590e54",
     )),
     _ => None,
 };
@@ -83,21 +83,59 @@ fn dir() -> PathBuf {
     app_dir().join("rtex")
 }
 
-/// rtex is nowhere the app looks (an rtex chosen in the settings counts, there or not).
+/// The app should fetch rtex: it finds none, or runs one of its own downloads that is older than
+/// the pinned release (an rtex chosen in the settings, on PATH or in the app counts as is).
 pub fn needs_download() -> bool {
-    find_binary().is_none()
+    match find_binary() {
+        None => true,
+        Some(bin) => bin.starts_with(dir()) && pinned_in(&dir()).is_none(),
+    }
 }
 
-/// The newest rtex downloaded: each release unpacks to rtex-<version>-<target>.
-pub(super) fn downloaded() -> Option<PathBuf> {
-    std::fs::read_dir(dir())
-        .ok()?
+/// The pinned release's version: [0, 0, 8] for v0.0.8.
+fn pinned() -> Vec<u32> {
+    version(&format!("rtex-{}", RTEX_TAG.trim_start_matches('v'))).unwrap_or_default()
+}
+
+/// The pinned release's binary among the downloads in `dir`.
+fn pinned_in(dir: &Path) -> Option<PathBuf> {
+    versions_in(dir)
+        .into_iter()
+        .find(|(v, _)| *v == pinned())
+        .map(|(_, bin)| bin)
+}
+
+/// The downloads in `dir` that have a binary, by version.
+fn versions_in(dir: &Path) -> Vec<(Vec<u32>, PathBuf)> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
         .flatten()
         .filter_map(|e| {
             let v = version(&e.file_name().to_string_lossy())?;
             let bin = e.path().join("bin").join(exe("rtex"));
             bin.is_file().then_some((v, bin))
         })
+        .collect()
+}
+
+/// Downloads other than the pinned release, removed once it is in (only the app's own folders,
+/// rtex-<version>-<target>). At launch only: a running rtex reads its share/ beside its binary.
+fn remove_older(dir: &Path) {
+    for (v, bin) in versions_in(dir) {
+        if v != pinned()
+            && let Some(folder) = bin.parent().and_then(Path::parent)
+        {
+            let _ = std::fs::remove_dir_all(folder);
+        }
+    }
+}
+
+/// The newest rtex downloaded (an older one serves while the pinned one downloads): each release
+/// unpacks to rtex-<version>-<target>.
+pub(super) fn downloaded() -> Option<PathBuf> {
+    versions_in(&dir())
+        .into_iter()
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, bin)| bin)
 }
@@ -125,7 +163,7 @@ pub fn download_rtex() -> Result<PathBuf, String> {
         .open(lock_path())
         .map_err(|e| e.to_string())?;
     lock.lock().map_err(|e| e.to_string())?;
-    if let Some(bin) = downloaded() {
+    if let Some(bin) = pinned_in(&dir()) {
         return Ok(bin);
     }
     remove_partial();
@@ -144,7 +182,15 @@ fn lock_path() -> PathBuf {
 pub(super) fn clean_leftovers() {
     if let Some(_lock) = try_lock(&lock_path()) {
         remove_partial();
+        if pinned_in(&dir()).is_some() {
+            remove_older(&dir());
+        }
     }
+}
+
+/// A download now would replace an older rtex of the app's own (documents then restart on it).
+pub fn upgrading() -> bool {
+    needs_download() && downloaded().is_some()
 }
 
 fn remove_partial() {
@@ -204,6 +250,54 @@ fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
 
 #[cfg(test)]
 pub(super) mod tests {
+    /// A downloads folder with rtex binaries for `versions` (and a partial download).
+    fn downloads(name: &str, versions: &[&str]) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("rtd-dl-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for v in versions {
+            let bin = d.join(format!("rtex-{v}-aarch64-apple-darwin/bin"));
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join(super::exe("rtex")), "").unwrap();
+        }
+        std::fs::create_dir_all(d.join(".download")).unwrap();
+        d
+    }
+
+    #[test]
+    fn an_older_download_is_replaced_by_the_pinned_release() {
+        let pinned = super::RTEX_TAG.trim_start_matches('v');
+        let old = downloads("old", &["0.0.6"]);
+        assert_eq!(
+            super::pinned_in(&old),
+            None,
+            "0.0.6 alone: the pinned one is wanted"
+        );
+        let both = downloads("both", &["0.0.6", pinned]);
+        let bin = super::pinned_in(&both).expect("the pinned one found");
+        assert!(bin.to_string_lossy().contains(&format!("rtex-{pinned}-")));
+        super::remove_older(&both);
+        let left: Vec<String> = std::fs::read_dir(&both)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            left.iter().all(|f| !f.contains("0.0.6")),
+            "older removed: {left:?}"
+        );
+        assert!(
+            left.iter().any(|f| f.contains(pinned)),
+            "pinned kept: {left:?}"
+        );
+        assert!(
+            left.contains(&".download".to_string()),
+            "nothing else touched: {left:?}"
+        );
+        for d in [old, both] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
     #[test]
     fn versions_order_as_numbers() {
         let v = |s| super::version(s).unwrap();
