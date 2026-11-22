@@ -1,6 +1,6 @@
 #!/bin/sh
-# A test build to hand out: "Realtime Tex Desktop.app" for Apple-chip Macs with the rtex engine
-# inside, ad-hoc signed, in target/release/Realtime-Tex-Desktop-<version>-arm64.dmg.
+# A test build to hand out: "Realtime Tex Desktop.app" for this Mac's kind of chip with the rtex
+# engine inside, ad-hoc signed, in target/release/Realtime-Tex-Desktop-<version>-<target>.dmg.
 # The engine comes from $RTEX_RELEASE (an unpacked release folder), else the rtex release the app
 # pins (src/engine/download.rs: its tag and checksum), downloaded. Recipients still need a TeX
 # distribution (MacTeX) for lualatex.
@@ -8,10 +8,14 @@ set -e
 cd "$(dirname "$0")/.."
 ./scripts/bundle.sh >/dev/null
 app="target/release/Realtime Tex Desktop.app"
+case $(uname -m) in
+  arm64) target=aarch64-apple-darwin chip="Apple-chip Macs" ;;
+  *) target=x86_64-apple-darwin chip="Intel Macs" ;;
+esac
 if [ -z "$RTEX_RELEASE" ]; then
   dl=target/rtex-release
   rm -rf "$dl" && mkdir -p "$dl"
-  asset=rtex-aarch64-apple-darwin.tar.gz
+  asset=rtex-$target.tar.gz
   tag=$(sed -n 's/^const RTEX_TAG: &str = "\(.*\)";/\1/p' src/engine/download.rs)
   sum=$(grep -A1 "\"$asset\"" src/engine/download.rs | sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p')
   curl -fsSL --proto =https --proto-redir =https -o "$dl/$asset" \
@@ -28,12 +32,12 @@ cp -R "$rtex/bin" "$rtex/share" "$rtex/LICENSE" "$res/"
 # unsigned code is refused on Apple silicon; an ad-hoc signature is enough to run
 codesign --force --deep --sign - "$app"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-dmg="target/release/Realtime-Tex-Desktop-$version-arm64.dmg"
+dmg="target/release/Realtime-Tex-Desktop-$version-$target.dmg"
 stage=$(mktemp -d)
 cp -R "$app" "$stage/"
 ln -s /Applications "$stage/Applications"
 cat > "$stage/Read Me.txt" <<TXT
-Realtime Tex Desktop $version (test build, Apple-chip Macs)
+Realtime Tex Desktop $version (test build, $chip)
 
 1. Drag Realtime Tex Desktop into Applications.
 2. Install MacTeX (https://tug.org/mactex/) if you do not have it: the app needs lualatex.
