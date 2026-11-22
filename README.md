@@ -165,6 +165,16 @@ Catppuccin (Latte, Frappé, Macchiato, Mocha); a theme file (gpui-component's fo
 `python3 scripts/themes/vscode_to_app.py` makes the VS Code ones again from their sources in
 `scripts/themes/sources/` (each with its license), raising any colour that reads too faintly.
 
+## Builds
+
+Every push to `main` or `experimental`, and every pull request, runs `.github/workflows/build.yml`:
+the tests, then a build for macOS (Apple chip and Intel, a .dmg with rtex inside), Windows x86_64
+(a .zip of the .exe) and Linux x86_64 and arm64 (a .tar.gz of the binary). The packages are the
+run's artifacts, on its page under Actions. Pushing a tag `v<version>` also makes a draft GitHub
+Release with all of them; check it and publish it by hand. The builds are not signed or notarized,
+so macOS and Windows warn on first launch. On Windows and Linux the app downloads rtex at first
+launch.
+
 ## Requirements
 
 - LuaLaTeX, from a TeX distribution. Without one, Set Up LaTeX (from the welcome window, and at
