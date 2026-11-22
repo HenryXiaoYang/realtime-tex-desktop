@@ -352,8 +352,18 @@ pub(super) fn try_lock(path: &Path) -> Option<std::fs::File> {
         .truncate(false)
         .open(path)
         .ok()?;
-    file.try_lock().ok()?;
-    Some(file)
+    // a program this process is starting holds a copy of every open file until it runs, so a
+    // lock just let go can look held for a moment: that is waited out, another holder is not
+    let until = Instant::now() + Duration::from_millis(250);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < until => {
+                std::thread::sleep(Duration::from_millis(2))
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Where the TeX in use came from, in the order they are preferred.

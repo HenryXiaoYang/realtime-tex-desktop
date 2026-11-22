@@ -968,6 +968,11 @@ mod tests {
         /// One install per process at a time, as in the app.
         static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
+        /// The turn to install; one test failing does not fail the others waiting for it.
+        fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+            ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
         /// A TeX put in $1 whose lualatex runs and whose kpsewhich finds LuaLaTeX's format.
         const TEX: &str = r#"b="$1/bin/fake"; mkdir -p "$b"
 printf '#!/bin/sh\necho "This is LuaHBTeX"\n' > "$b/lualatex"
@@ -1006,7 +1011,7 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
 
         #[test]
         fn a_whole_install_is_marked_and_found_and_not_done_twice() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             let dir = fresh("success");
             let body = format!("{TEX}{PACKAGE}echo 'running mktexlsr'\nexit 0");
             let seen = Mutex::new(vec![]);
@@ -1027,7 +1032,7 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
 
         #[test]
         fn errors_in_steps_that_spare_lualatex_are_warnings_and_the_tree_stays() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             let dir = fresh("usable");
             let body = format!(
                 "{TEX}{PACKAGE}echo 'fmtutil-sys: xetex.fmt failed' >&2\necho 'install-tl: errors in installation reported above' >&2\nexit 1"
@@ -1042,7 +1047,7 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
 
         #[test]
         fn a_tex_whose_lualatex_does_not_work_is_removed_and_said_why() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             let dir = fresh("broken");
             let body = format!("{BROKEN_TEX}{PACKAGE}echo 'mktexlsr: no space' >&2\nexit 1");
             let got = install(&dir, &body, &|_| {});
@@ -1055,7 +1060,7 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
 
         #[test]
         fn a_tex_that_exits_well_but_does_not_work_is_not_installed() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             let dir = fresh("broken-ok");
             let got = install(&dir, &format!("{BROKEN_TEX}{PACKAGE}exit 0"), &|_| {});
             assert!(matches!(got, TexInstall::Failed(_)), "{got:?}");
@@ -1064,7 +1069,7 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
 
         #[test]
         fn cancel_while_packages_install_ends_the_installer_and_removes_its_work() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             let dir = fresh("cancel");
             let body = format!("{TEX}{PACKAGE}sleep 30\nexit 0");
             let start = Instant::now();
@@ -1084,7 +1089,7 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
 
         #[test]
         fn cancel_before_the_installer_starts_starts_nothing() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             for during in ["probe", "download"] {
                 let dir = fresh(&format!("early-{during}"));
                 let ran = dir.with_file_name("installer-ran");
@@ -1116,7 +1121,7 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
 
         #[test]
         fn a_mirror_that_fails_before_any_package_is_followed_by_the_next_once() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             let dir = fresh("retry");
             let tried = Mutex::new(vec![]);
             let got = install_into(
@@ -1158,13 +1163,13 @@ chmod +x "$b/lualatex" "$b/kpsewhich"
             assert_eq!(
                 *tried.lock().unwrap(),
                 ["https://a"],
-                "packages were in: not started again elsewhere"
+                "packages were in: not started again elsewhere ({got:?})"
             );
         }
 
         #[test]
         fn a_second_copy_of_the_app_does_not_install_over_the_first() {
-            let _one = ONE_AT_A_TIME.lock().unwrap();
+            let _one = one_at_a_time();
             let dir = fresh("locked");
             std::fs::create_dir_all(dir.join("bin")).unwrap();
             let _other = super::super::try_lock(&super::super::lock_path(&dir)).unwrap();
