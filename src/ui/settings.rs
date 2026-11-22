@@ -2563,7 +2563,7 @@ mod tests {
         let (_, vcx) = cx.add_window_view(SettingsView::new);
         vcx.run_until_parked();
         assert_eq!(vcx.update(|_, cx| cx.windows().len()), 2);
-        vcx.update(|window, cx| window.press("cmd-w", cx));
+        vcx.update(|window, cx| window.press(&crate::ui::keymap::platform_key("cmd-w"), cx));
         vcx.run_until_parked();
         let left = cx.update(|cx| cx.windows());
         assert_eq!(left, [*other]);
