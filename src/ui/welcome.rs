@@ -711,9 +711,10 @@ mod tests {
     #[test]
     fn home_is_a_tilde() {
         let home = std::env::var("HOME").unwrap();
+        let sep = std::path::MAIN_SEPARATOR;
         assert_eq!(
-            tilde(&Path::new(&home).join("Documents/x")),
-            "~/Documents/x"
+            tilde(&Path::new(&home).join("Documents").join("x")),
+            format!("~{sep}Documents{sep}x")
         );
         assert_eq!(tilde(Path::new("/tmp/x")), "/tmp/x");
         assert_eq!(
