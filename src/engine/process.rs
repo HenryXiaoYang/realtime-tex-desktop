@@ -16,133 +16,18 @@ static RUNNING: Mutex<Vec<u32>> = Mutex::new(vec![]);
 /// Every rtex stopped, with its LaTeX runs (the app is quitting, and its documents may not be
 /// dropped before it exits).
 pub fn stop_all() {
-    let all = std::mem::take(&mut *RUNNING.lock().unwrap());
-    for pgid in all {
+    for pgid in RUNNING.lock().unwrap().drain(..) {
         kill_group(pgid);
-        forget(pgid);
-    }
-}
-
-/// rtex's group `pgid` started for the build folder `build`: ended by `stop_all` when the
-/// process exits (the test binary too, whose documents are never dropped), and recorded on disk
-/// so that the next launch ends it after a crash.
-#[cfg_attr(not(unix), allow(unused_variables))]
-fn track(pgid: u32, build: &Path) {
-    RUNNING.lock().unwrap().push(pgid);
-    #[cfg(unix)]
-    {
-        extern "C" fn at_exit() {
-            stop_all();
-        }
-        static AT_EXIT: std::sync::Once = std::sync::Once::new();
-        AT_EXIT.call_once(|| unsafe {
-            libc::atexit(at_exit);
-        });
-        let _ = std::fs::create_dir_all(groups_dir());
-        let _ = std::fs::write(
-            groups_dir().join(pgid.to_string()),
-            format!("{}\n{}", std::process::id(), build.display()),
-        );
-    }
-}
-
-/// rtex's group `pgid` ended.
-fn forget(pgid: u32) {
-    RUNNING.lock().unwrap().retain(|p| *p != pgid);
-    #[cfg(unix)]
-    let _ = std::fs::remove_file(groups_dir().join(pgid.to_string()));
-}
-
-/// A file per rtex group running, named for the group, holding the app's pid and the build
-/// folder.
-#[cfg(unix)]
-fn groups_dir() -> PathBuf {
-    cache_dir().join("realtime-tex-desktop/groups")
-}
-
-/// SIGTERM, SIGINT and SIGHUP end the app through `exit`, whose hook stops every rtex (their
-/// default ends it at once, leaving rtex's LaTeX runs behind).
-#[cfg(unix)]
-pub fn exit_on_signals() {
-    use std::io::Read;
-    use std::os::fd::IntoRawFd;
-    use std::sync::atomic::{AtomicI32, Ordering};
-    static WAKE: AtomicI32 = AtomicI32::new(-1);
-    // a signal handler may only write to a socket: the exit, its locks and its allocations, run
-    // on a thread
-    extern "C" fn on_signal(sig: libc::c_int) {
-        let b = sig as u8;
-        unsafe { libc::write(WAKE.load(Ordering::Relaxed), (&raw const b).cast(), 1) };
-    }
-    let Ok((tx, mut rx)) = std::os::unix::net::UnixStream::pair() else {
-        return;
-    };
-    WAKE.store(tx.into_raw_fd(), Ordering::Relaxed);
-    std::thread::spawn(move || {
-        let mut sig = [0u8];
-        if rx.read_exact(&mut sig).is_ok() {
-            std::process::exit(128 + sig[0] as i32);
-        }
-    });
-    for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
-        unsafe { libc::signal(sig, on_signal as *const () as libc::sighandler_t) };
-    }
-}
-
-/// The rtex groups an app that is gone left running (it was killed or crashed), ended: only
-/// their processes still working in the recorded build folder, never one that took a group's
-/// id since.
-#[cfg(unix)]
-pub(super) fn end_leftover_groups() {
-    end_groups_in(&groups_dir());
-}
-
-#[cfg(unix)]
-fn end_groups_in(dir: &Path) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let ps = Command::new("/bin/ps")
-        .args(["-axo", "pid=,pgid=,command="])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    for e in rd.flatten() {
-        let record = std::fs::read_to_string(e.path()).unwrap_or_default();
-        let pgid = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok());
-        let app = record
-            .split_once('\n')
-            .and_then(|(app, build)| Some((app.parse::<i32>().ok()?, build)));
-        let (Some(pgid), Some((app, build))) = (pgid, app) else {
-            let _ = std::fs::remove_file(e.path());
-            continue;
-        };
-        if app > 0 && unsafe { libc::kill(app, 0) } == 0 {
-            continue;
-        }
-        if Path::new(build).is_absolute() {
-            for l in ps.lines() {
-                let mut ids = l.split_whitespace().map(|n| n.parse::<i32>());
-                if let (Some(Ok(pid)), Some(Ok(g))) = (ids.next(), ids.next())
-                    && g as u32 == pgid
-                    && pid > 1
-                    && l.contains(build)
-                {
-                    unsafe { libc::kill(pid, libc::SIGKILL) };
-                }
-            }
-        }
-        let _ = std::fs::remove_file(e.path());
     }
 }
 
 /// Process group `pgid` ended: rtex and any lualatex it left running.
 #[cfg(unix)]
 pub(super) fn kill_group(pgid: u32) {
-    // -1 and -0 would name every process and the app's own group
-    if pgid > 1 {
-        unsafe { libc::kill(-(pgid as i32), libc::SIGKILL) };
-    }
+    let _ = Command::new("/bin/kill")
+        .args(["-KILL", "--", &format!("-{pgid}")])
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// Windows has no process groups to signal: rtex's process tree ended instead.
@@ -177,13 +62,12 @@ impl Rtex {
         // its own process group, so that rtex and its LaTeX runs end together
         #[cfg(unix)]
         cmd.process_group(0);
-        let build = build_dir(root, file);
         let mut child = cmd
             .args(["serve", "--project"])
             .arg(root)
             .args(["--main", &main])
             .arg("--build")
-            .arg(&build)
+            .arg(build_dir(root, file))
             .args(SERVE_ARGS.read().unwrap().iter())
             .current_dir(root)
             .env("PATH", tex_path())
@@ -197,7 +81,7 @@ impl Rtex {
                     bin.display()
                 )
             })?;
-        track(child.id(), &build);
+        RUNNING.lock().unwrap().push(child.id());
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
@@ -277,7 +161,7 @@ impl Drop for Rtex {
         kill_group(pgid);
         let _ = self.child.kill();
         let _ = self.child.wait();
-        forget(pgid);
+        RUNNING.lock().unwrap().retain(|p| *p != pgid);
     }
 }
 
@@ -866,140 +750,5 @@ mod tests {
         assert!(dir.join("fedcba9876543210").exists(), "an open one's stays");
         assert!(dir.join("texlive").exists(), "not a build folder");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A stand-in for an rtex group: a process in a group of its own whose command line names
-    /// `build`, as rtex's and its lualatex runs' do.
-    #[cfg(unix)]
-    fn group_in(build: &Path) -> std::process::Child {
-        use std::os::unix::process::CommandExt;
-        std::fs::create_dir_all(build).unwrap();
-        std::fs::write(build.join("log"), "").unwrap();
-        std::process::Command::new("/usr/bin/tail")
-            .arg("-f")
-            .arg(build.join("log"))
-            .process_group(0)
-            // not the caller's stdout: a child test's reader waits for it to close
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap()
-    }
-
-    #[cfg(unix)]
-    fn group_alive(pgid: u32) -> bool {
-        unsafe { libc::kill(-(pgid as i32), 0) == 0 }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_launch_ends_the_groups_a_gone_app_left_and_nothing_that_took_their_ids() {
-        let r = scratch("groups");
-        let records = r.join("groups");
-        std::fs::create_dir_all(&records).unwrap();
-        let gone = {
-            let mut c = std::process::Command::new("/usr/bin/true").spawn().unwrap();
-            c.wait().unwrap();
-            c.id()
-        };
-        let record = |g: &std::process::Child, app: u32, build: &Path| {
-            let text = format!("{app}\n{}", build.display());
-            std::fs::write(records.join(g.id().to_string()), text).unwrap();
-        };
-        let mut left = group_in(&r.join("left"));
-        record(&left, gone, &r.join("left"));
-        let mut reused = group_in(&r.join("other"));
-        record(&reused, gone, &r.join("before"));
-        let mut open = group_in(&r.join("open"));
-        record(&open, std::process::id(), &r.join("open"));
-        super::end_groups_in(&records);
-        let ended = |c: &mut std::process::Child| {
-            (0..50).any(|_| {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                c.try_wait().unwrap().is_some()
-            })
-        };
-        let left_ended = ended(&mut left);
-        let reused_ended = ended(&mut reused);
-        let open_ended = ended(&mut open);
-        for c in [&mut left, &mut reused, &mut open] {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-        let kept: Vec<String> = std::fs::read_dir(&records)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        let _ = std::fs::remove_dir_all(&r);
-        assert!(left_ended, "a gone app's group, still in its build, ends");
-        assert!(
-            !reused_ended,
-            "a group whose id another process took, outside the build, is left alone"
-        );
-        assert!(!open_ended, "a running app's group is left alone");
-        assert_eq!(
-            kept,
-            [open.id().to_string()],
-            "only the running app's record stays"
-        );
-    }
-
-    /// The process that started rtex ending, by returning from main (a test binary whose
-    /// documents are never dropped) or by SIGTERM, ends rtex's group too. Each runs this test
-    /// again as a child process, which starts the group and ends.
-    #[cfg(unix)]
-    #[test]
-    fn rtexs_group_ends_with_the_process_on_exit_and_on_sigterm() {
-        use std::io::BufRead;
-        if let Some(how) = std::env::var_os("RTD_GROUP_CHILD") {
-            let build = PathBuf::from(std::env::var_os("RTD_GROUP_BUILD").unwrap());
-            // never waited for: the exit or the signal under test ends it
-            let pgid = group_in(&build).id();
-            super::track(pgid, &build);
-            if how == "term" {
-                super::exit_on_signals();
-            }
-            println!("pgid={pgid}");
-            if how == "term" {
-                std::thread::sleep(std::time::Duration::from_secs(60));
-            }
-            return;
-        }
-        let r = scratch("group-exit");
-        for how in ["exit", "term"] {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "engine::process::tests::rtexs_group_ends_with_the_process_on_exit_and_on_sigterm",
-                    "--exact",
-                    "--nocapture",
-                ])
-                .env("RTD_GROUP_CHILD", how)
-                .env("RTD_GROUP_BUILD", r.join(how))
-                .stdout(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
-            let mut out = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
-            let pgid: u32 = out
-                .find_map(|l| l.ok()?.strip_prefix("pgid=")?.parse().ok())
-                .expect("the child started its group");
-            if how == "term" {
-                unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
-            }
-            out.for_each(drop);
-            let status = child.wait().unwrap();
-            let ended = (0..300).any(|_| {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                !group_alive(pgid)
-            });
-            if !ended {
-                super::kill_group(pgid);
-                let _ = std::fs::remove_file(super::groups_dir().join(pgid.to_string()));
-            }
-            assert!(ended, "{how}: the group outlived the process ({status})");
-            assert!(
-                !super::groups_dir().join(pgid.to_string()).exists(),
-                "{how}: its record is removed"
-            );
-        }
-        let _ = std::fs::remove_dir_all(&r);
     }
 }

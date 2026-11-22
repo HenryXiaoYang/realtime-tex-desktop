@@ -18,8 +18,6 @@ fn main() {
     // `realtime-tex-desktop [folder or .tex file]`; with nothing, what was open last
     let arg = std::env::args().nth(1).map(PathBuf::from);
     engine::clean_leftovers();
-    #[cfg(unix)]
-    engine::exit_on_signals();
     let app = gpui_kit::application().with_assets(gpui_kit::assets::AllAssets);
     app.on_reopen(ui::projects::reopened);
     app.run(move |cx| {
