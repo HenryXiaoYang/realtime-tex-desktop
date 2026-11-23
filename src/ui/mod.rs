@@ -1,4 +1,5 @@
 // The window: the workspace around the open files, each file's editor, and the settings.
+pub mod app_icon;
 pub mod editor;
 pub mod keymap;
 pub mod palette;

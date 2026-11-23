@@ -14,9 +14,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The app's icon, shown on the left of the window.
-const ICON: &[u8] = include_bytes!("../../assets/icon.png");
-
 /// What the app is, in a line.
 const BLURB: &str = "Write LaTeX right on the typeset pages, and see every change as you type.";
 
@@ -34,7 +31,7 @@ pub struct Welcome {
     /// rtex, lualatex not found (looked for again as the window comes to the front).
     no_rtex: bool,
     no_tex: bool,
-    icon: Arc<Image>,
+    icon: Option<Arc<Image>>,
     _subs: Vec<Subscription>,
 }
 
@@ -109,7 +106,8 @@ impl Welcome {
             missing: HashSet::new(),
             no_rtex: false,
             no_tex: false,
-            icon: Arc::new(Image::from_bytes(ImageFormat::Png, ICON.to_vec())),
+            icon: crate::ui::app_icon::png()
+                .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png))),
             _subs: vec![typed, front, download, installing],
         };
         this.check_folders(cx);
@@ -449,13 +447,13 @@ impl Welcome {
             .bg(theme.sidebar)
             .border_r_1()
             .border_color(theme.border)
-            .child(
-                img(self.icon.clone())
+            .children(self.icon.clone().map(|icon| {
+                img(icon)
                     .size(px(128.0))
                     .flex_shrink_0()
                     .role(Role::Image)
-                    .aria_label("Realtime Tex Desktop icon"),
-            )
+                    .aria_label("Realtime Tex Desktop icon")
+            }))
             .child(
                 div()
                     .flex()
