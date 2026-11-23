@@ -12,6 +12,13 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// The app's icon, shown on the left of the window.
+const ICON: &[u8] = include_bytes!("../../assets/icon.png");
+
+/// What the app is, in a line.
+const BLURB: &str = "Write LaTeX right on the typeset pages, and see every change as you type.";
 
 pub struct Welcome {
     search: Entity<InputState>,
@@ -27,6 +34,7 @@ pub struct Welcome {
     /// rtex, lualatex not found (looked for again as the window comes to the front).
     no_rtex: bool,
     no_tex: bool,
+    icon: Arc<Image>,
     _subs: Vec<Subscription>,
 }
 
@@ -38,8 +46,8 @@ pub fn setup_ok() -> bool {
 /// Open the welcome window.
 pub fn open_window(cx: &mut App) -> Option<AnyWindowHandle> {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(680.0), px(520.0)), cx)),
-        window_min_size: Some(size(px(520.0), px(400.0))),
+        window_bounds: Some(WindowBounds::centered(size(px(780.0), px(520.0)), cx)),
+        window_min_size: Some(size(px(660.0), px(420.0))),
         ..TitleBar::window_options()
     };
     let opened = gpui_kit::open_window(options, cx, |window, cx| {
@@ -101,6 +109,7 @@ impl Welcome {
             missing: HashSet::new(),
             no_rtex: false,
             no_tex: false,
+            icon: Arc::new(Image::from_bytes(ImageFormat::Png, ICON.to_vec())),
             _subs: vec![typed, front, download, installing],
         };
         this.check_folders(cx);
@@ -299,25 +308,13 @@ impl Welcome {
         cx.notify();
     }
 
+    /// The search, over the list of projects.
     fn header(&self) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_5()
-            .pt_4()
-            .pb_3()
-            // the search gives up room; the buttons keep their names
-            .child(
-                div().flex_1().min_w_0().child(
-                    Input::new(&self.search)
-                        .prefix(Icon::new(IconName::Search).small())
-                        .cleanable(true),
-                ),
-            )
-            .child(new_button("welcome-new").primary().flex_shrink_0())
-            .child(open_button("welcome-open").outline().flex_shrink_0())
-            .child(tour_button("welcome-tour").ghost().flex_shrink_0())
+        div().px_5().pt_4().pb_3().child(
+            Input::new(&self.search)
+                .prefix(Icon::new(IconName::Search).small())
+                .cleanable(true),
+        )
     }
 
     fn row(&self, ix: usize, r: &Recent, in_list: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -436,8 +433,72 @@ impl Welcome {
             .into_any_element()
     }
 
-    /// No project yet: what the app is, and the two ways in.
-    fn first_run(&self, cx: &App) -> impl IntoElement {
+    /// The left pane: the icon, the name, what the app is, and the ways in.
+    fn brand(&self, cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .w(px(280.0))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_4()
+            .px_6()
+            .pb_6()
+            .bg(theme.sidebar)
+            .border_r_1()
+            .border_color(theme.border)
+            .child(
+                img(self.icon.clone())
+                    .size(px(128.0))
+                    .flex_shrink_0()
+                    .role(Role::Image)
+                    .aria_label("Realtime Tex Desktop icon"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_center()
+                            .child("Realtime Tex Desktop"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(concat!("Version ", env!("CARGO_PKG_VERSION"))),
+                    )
+                    .child(
+                        div()
+                            .pt_1()
+                            .text_sm()
+                            .text_center()
+                            .text_color(theme.muted_foreground)
+                            .child(BLURB),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .pt_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(new_button("welcome-new").primary().w_full())
+                    .child(open_button("welcome-open").outline().w_full())
+                    .child(tour_button("welcome-tour").outline().w_full()),
+            )
+    }
+
+    /// No project yet: the list's place says where they will show up.
+    fn no_projects(&self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         div()
             .flex_1()
@@ -446,39 +507,27 @@ impl Welcome {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap_6()
-            .px_10()
-            .pb_10()
+            .gap_2()
+            .px_8()
+            .pb_6()
+            .text_center()
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Welcome to Realtime Tex Desktop"),
-                    )
-                    .child(
-                        div()
-                            .max_w(px(380.0))
-                            .text_sm()
-                            .text_center()
-                            .text_color(theme.muted_foreground)
-                            .child("Write LaTeX on the typeset pages. Start a project, or open a folder with your .tex files."),
-                    ),
+                Icon::default()
+                    .path("icons/folder-open.svg")
+                    .size_8()
+                    .text_color(theme.muted_foreground),
             )
             .child(
                 div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_center()
-                    .gap_3()
-                    .child(new_button("first-new").primary().large())
-                    .child(open_button("first-open").outline().large())
-                    .child(tour_button("first-tour").ghost().large()),
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("No recent projects"),
+            )
+            .child(
+                div()
+                    .max_w(px(300.0))
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("Start a project, or open a folder with your .tex files. Projects you open show up here."),
             )
     }
 }
@@ -573,7 +622,14 @@ impl Render for Welcome {
         let none_yet = cx.global::<Projects>().list.is_empty();
         let theme = cx.theme().clone();
         let body: AnyElement = if none_yet {
-            self.first_run(cx).into_any_element()
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(self.header())
+                .child(self.no_projects(cx))
+                .into_any_element()
         } else {
             let in_list = self.list.is_focused(window);
             let rows: Vec<AnyElement> = shown
@@ -649,15 +705,7 @@ impl Render for Welcome {
                                 } else {
                                     window.start_window_move();
                                 }
-                            })
-                            .child("Realtime Tex Desktop")
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::NORMAL)
-                                    .text_color(theme.muted_foreground)
-                                    .child(concat!("Version ", env!("CARGO_PKG_VERSION"))),
-                            ),
+                            }),
                     )
                     .child(
                         div().pr_2().child(
@@ -673,7 +721,14 @@ impl Render for Welcome {
                     .border_color(theme.title_bar_border),
             )
             .children(self.setup(cx))
-            .child(div().flex_1().min_h_0().flex().child(body))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(self.brand(cx))
+                    .child(body),
+            )
     }
 }
 
