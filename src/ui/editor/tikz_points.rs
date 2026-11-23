@@ -32,8 +32,7 @@ impl View {
         let (sx, sy) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
         let scale = (f64::from(w - 2.0 * MARGIN) / sx)
             .min(f64::from(h - 2.0 * MARGIN) / sy)
-            .min(MOST)
-            .max(1.0);
+            .clamp(1.0, MOST);
         Self {
             min_x: x0,
             max_y: y1,
