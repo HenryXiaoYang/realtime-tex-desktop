@@ -993,19 +993,22 @@ mod e2e {
         press(cx, "escape");
         assert_eq!(step(cx), Some(2), "the typing box closed, not the tour");
         let formula = source(cx).find("\\[ e^{i\\pi}").expect("a display formula");
+        // the formula editor opens on the formula's TeX, just inside its `\[`
+        let at_formula =
+            |on: Option<usize>| on.is_some_and(|o| (formula..=formula + 3).contains(&o));
         let pages = cx.read(|cx| ws.read(cx).tour.as_ref().unwrap().marks.borrow()["pages"]);
         let opened = (0..60).any(|i| {
             let at = point(pages.center().x, pages.top() + px(10.0 * i as f32));
             double_click(cx, at);
             let on = cx.read(|cx| main.read(cx).box_at());
             // another block's box, seen and closed, would do the step: the step again
-            if on.is_some() && on != Some(formula) {
+            if on.is_some() && !at_formula(on) {
                 press(cx, "escape");
                 in_window(cx, &mut |window, cx| {
                     ws.update(cx, |ws, cx| ws.tour_go(2, window, cx))
                 });
             }
-            on == Some(formula)
+            at_formula(on)
         });
         assert!(opened, "a double-click on the formula opens its box");
         calm(cx);

@@ -8,8 +8,12 @@ pub mod format;
 pub mod glyphmap;
 pub mod html;
 pub mod insert;
+pub mod math;
 mod outline;
+pub mod preamble;
 mod preview;
+pub mod table;
+pub mod tikz;
 
 pub use blocks::*;
 pub use outline::*;

@@ -119,6 +119,14 @@ impl Doc {
                             |_, _, cx| AppSettings::set(cx, |s| s.inspector_closed = false),
                         ),
                     )
+                    .when(k == document::element::Kind::Table, |m| {
+                        m.item(item(
+                            "Edit Table",
+                            Rc::new(|d, ix, w, cx| {
+                                d.open_table(ix, w, cx);
+                            }),
+                        ))
+                    })
                     .separator(),
                 None => menu,
             };

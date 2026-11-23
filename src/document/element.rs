@@ -66,7 +66,7 @@ pub struct Change {
     pub packages: Vec<&'static str>,
 }
 
-fn change(range: Range<usize>, text: impl Into<String>) -> Option<Change> {
+pub(super) fn change(range: Range<usize>, text: impl Into<String>) -> Option<Change> {
     Some(Change {
         range,
         text: text.into(),
@@ -247,16 +247,16 @@ fn render_opts(opts: &[(String, Option<String>)]) -> String {
 
 /// A command `\name` in `r` of `src` (at depth 0 of its own text): where it starts, its
 /// `[options]` (inside the brackets, if any) and its first `{argument}` (inside the braces).
-struct Cmd {
-    start: usize,
-    opts: Option<Range<usize>>,
+pub(super) struct Cmd {
+    pub(super) start: usize,
+    pub(super) opts: Option<Range<usize>>,
     /// Where options would go: just after the name.
-    after_name: usize,
-    arg: Option<Range<usize>>,
-    end: usize,
+    pub(super) after_name: usize,
+    pub(super) arg: Option<Range<usize>>,
+    pub(super) end: usize,
 }
 
-fn find_cmd(src: &str, r: Range<usize>, name: &str) -> Option<Cmd> {
+pub(super) fn find_cmd(src: &str, r: Range<usize>, name: &str) -> Option<Cmd> {
     let pat = format!("\\{name}");
     let end = src.floor_char_boundary(r.end.min(src.len()));
     let mut from = src.floor_char_boundary(r.start.min(end));
@@ -348,6 +348,25 @@ fn width_percent(v: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The width of the picture in figure `el` as a percent of the line, when that alone sizes it
+/// (no scale, angle, trim or height, and a width given as a part of the line).
+pub fn image_width_percent(src: &str, el: &Element) -> Option<f64> {
+    let fields = fields(src, el);
+    let get = |k: &str| {
+        fields
+            .iter()
+            .find(|f| f.key == k)
+            .map_or("", |f| f.value.trim())
+    };
+    if ["scale", "angle", "trim", "height"]
+        .iter()
+        .any(|k| !get(k).is_empty())
+    {
+        return None;
+    }
+    get("width").parse::<f64>().ok().filter(|p| *p > 0.0)
 }
 
 /// The fields of `el`, with their values now.
@@ -583,6 +602,7 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
                 .into_iter()
                 .find(|s| has(s))
                 .unwrap_or("letterpaper");
+            let side = |k: &str| geometry_opt(src, k).unwrap_or_default();
             let name = class
                 .and_then(|c| c.arg)
                 .map(|a| src[a].to_string())
@@ -625,12 +645,23 @@ pub fn fields(src: &str, el: &Element) -> Vec<Field> {
                     paper.into(),
                 ),
                 f(
+                    "landscape",
+                    "Landscape",
+                    Input::Toggle,
+                    false,
+                    has("landscape").to_string(),
+                ),
+                f(
                     "margin",
-                    "Margins (geometry)",
+                    "All sides",
                     Input::Text,
                     false,
-                    geometry_margin(src).unwrap_or_default(),
+                    geometry_opt(src, "margin").unwrap_or_default(),
                 ),
+                f("top", "Top", Input::Text, false, side("top")),
+                f("bottom", "Bottom", Input::Text, false, side("bottom")),
+                f("left", "Left", Input::Text, false, side("left")),
+                f("right", "Right", Input::Text, false, side("right")),
                 f(
                     "twoside",
                     "Two-sided",
@@ -709,7 +740,8 @@ fn label_after(src: &str, el: &Element) -> Option<(Range<usize>, String)> {
     Some((c.start..c.end, src[c.arg?].to_string()))
 }
 
-fn geometry_margin(src: &str) -> Option<String> {
+/// The value of option `key` of the `geometry` package, when the preamble loads it with one.
+fn geometry_opt(src: &str, key: &str) -> Option<String> {
     let begin = src.find("\\begin{document}").unwrap_or(src.len());
     let mut from = 0;
     while let Some(c) = find_cmd(src, from..begin, "usepackage") {
@@ -720,7 +752,7 @@ fn geometry_margin(src: &str) -> Option<String> {
             let opts = parse_opts(&src[c.opts?]);
             return opts
                 .into_iter()
-                .find(|(k, _)| k == "margin")
+                .find(|(k, _)| k == key)
                 .and_then(|(_, v)| v);
         }
         from = c.end;
@@ -794,7 +826,7 @@ fn checked(key: &str, v: &str) -> Option<String> {
         "width" => number(v.trim_end_matches('%').trim()) || is_length(v),
         "scale" | "angle" => number(v),
         "page" | "start" => v.parse::<u32>().is_ok(),
-        "height" | "margin" => is_length(v),
+        "height" | "margin" | "top" | "bottom" | "left" | "right" => is_length(v),
         "trim" => {
             let parts: Vec<&str> = v.split_whitespace().collect();
             parts.len() == 4 && parts.iter().all(|p| number(p) || is_length(p))
@@ -820,7 +852,9 @@ pub fn hint(kind: Kind, key: &str, value: &str) -> Option<&'static str> {
         "width" => "A percentage of the line, or a length like 6cm",
         "scale" | "angle" => "A number",
         "page" | "start" => "A whole number",
-        "height" | "margin" => "A length like 2cm, 1in or 0.5\\textheight",
+        "height" | "margin" | "top" | "bottom" | "left" | "right" => {
+            "A length like 2cm, 1in or 0.5\\textheight"
+        }
         "trim" => "Four lengths: left bottom right top",
         "placement" => "Letters from h t b p ! H",
         "label" => "No \\ { } # % ~ $ & ^ or commas",
@@ -971,24 +1005,29 @@ pub fn set(src: &str, el: &Element, key: &str, value: &str) -> Option<Change> {
             let c = find_cmd(src, 0..src.len(), "documentclass")?;
             change(c.arg?, v)
         }
-        (Kind::Document, "fontsize" | "paper" | "twoside" | "twocolumn") => {
+        (Kind::Document, "fontsize" | "paper" | "landscape" | "twoside" | "twocolumn") => {
             let c = find_cmd(src, 0..src.len(), "documentclass")?;
             let group: &[&str] = match key {
                 "fontsize" => &["10pt", "11pt", "12pt"],
                 "paper" => &["a4paper", "letterpaper", "a5paper", "legalpaper"],
+                "landscape" => &["landscape"],
                 "twoside" => &["twoside", "oneside"],
                 _ => &["twocolumn", "onecolumn"],
             };
             edit_opts(src, c.opts, c.after_name, vec![], |opts| {
                 opts.retain(|(k, _)| !group.contains(&k.as_str()));
                 match key {
-                    "twoside" | "twocolumn" if v == "true" => opts.push((key.to_string(), None)),
-                    "twoside" | "twocolumn" => {}
+                    "landscape" | "twoside" | "twocolumn" if v == "true" => {
+                        opts.push((key.to_string(), None))
+                    }
+                    "landscape" | "twoside" | "twocolumn" => {}
                     _ => opts.push((v.to_string(), None)),
                 }
             })
         }
-        (Kind::Document, "margin") => set_margin(src, v),
+        (Kind::Document, "margin" | "top" | "bottom" | "left" | "right") => {
+            set_geometry(src, key, v)
+        }
         _ => None,
     }
 }
@@ -1113,8 +1152,9 @@ fn set_equation_env(src: &str, el: &Element, env: &str, starred: bool) -> Option
     })
 }
 
-/// The margins through geometry's `margin=`: changing its option, or adding the package.
-fn set_margin(src: &str, v: &str) -> Option<Change> {
+/// Option `key` (a margin, or one side's) of the `geometry` package made `v`: changing its option,
+/// or adding the package when `v` is not empty.
+fn set_geometry(src: &str, key: &str, v: &str) -> Option<Change> {
     let begin = src.find("\\begin{document}")?;
     let mut from = 0;
     while let Some(c) = find_cmd(src, from..begin, "usepackage") {
@@ -1123,9 +1163,9 @@ fn set_margin(src: &str, v: &str) -> Option<Change> {
             .is_some_and(|a| src[a.clone()].trim() == "geometry")
         {
             return edit_opts(src, c.opts, c.after_name, vec![], |opts| {
-                opts.retain(|(k, _)| k != "margin");
+                opts.retain(|(k, _)| k != key);
                 if !v.is_empty() {
-                    opts.push(("margin".into(), Some(v.to_string())));
+                    opts.push((key.into(), Some(v.to_string())));
                 }
             });
         }
@@ -1135,7 +1175,7 @@ fn set_margin(src: &str, v: &str) -> Option<Change> {
         return None;
     }
     let (at, _) = add_package(src, "geometry")?;
-    change(at..at, format!("\\usepackage[margin={v}]{{geometry}}\n"))
+    change(at..at, format!("\\usepackage[{key}={v}]{{geometry}}\n"))
 }
 
 #[cfg(test)]
@@ -1381,5 +1421,33 @@ mod tests {
         let li = "\\begin{itemize}\n  \\item see\n  \\begin{equation}\n    x\n  \\end{equation}\n\\end{itemize}";
         let at = li.find("x\n").unwrap();
         assert_eq!(element_at(li, Some(0..li.len()), at).kind, Kind::Equation);
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    #[test]
+    fn a_figures_width_as_a_percent_of_the_line() {
+        let fig = |opts: &str| {
+            format!(
+                "\\begin{{figure}}[h]\n\\centering\n\\includegraphics[{opts}]{{a.png}}\n\\caption{{A}}\n\\end{{figure}}"
+            )
+        };
+        let pct = |opts: &str| {
+            let f = fig(opts);
+            let el = element_at(&f, Some(0..f.len()), 0);
+            (el.kind, image_width_percent(&f, &el))
+        };
+        assert_eq!(pct("width=0.5\\linewidth"), (Kind::Figure, Some(50.0)));
+        assert_eq!(pct("width=\\textwidth"), (Kind::Figure, Some(100.0)));
+        assert_eq!(
+            pct("width=6cm").1,
+            None,
+            "a length is not a part of the line"
+        );
+        assert_eq!(pct("width=0.5\\linewidth,angle=90").1, None);
+        assert_eq!(pct("").1, None);
     }
 }

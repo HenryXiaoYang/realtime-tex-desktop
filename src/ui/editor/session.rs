@@ -40,7 +40,9 @@ impl Doc {
                 placements,
                 stale_since,
                 layout_version,
+                source_revision,
             } => {
+                self.note_revision(source_revision);
                 self.layout_version = layout_version;
                 let first = self.preview.pages.is_empty();
                 let dirty = self
@@ -55,11 +57,18 @@ impl Doc {
                 self.bump(dirty);
                 self.status.clear();
                 self.compiling = stale_since.is_some();
+                // a full run that caught up with the source
+                if stale_since.is_none() {
+                    self.quit_run_done();
+                }
                 if std::mem::take(&mut self.typeset_failed) {
                     self.typeset_notice = None;
                     self.notices.push(Notice::Typeset);
                 }
-                self.overlay_seen();
+                // behind the source, it has not the typed text yet
+                if stale_since.is_none() {
+                    self.overlay_seen(u64::MAX);
+                }
             }
             engine::Msg::Paragraph {
                 par_id,
@@ -76,7 +85,8 @@ impl Doc {
                 );
                 self.bump(dirty);
                 self.status.clear();
-                self.overlay_seen();
+                self.note_revision(source_revision);
+                self.overlay_seen(source_revision);
             }
             engine::Msg::Spans(spans) => {
                 self.spans_pending = self.spans_pending.saturating_sub(1);
@@ -101,6 +111,7 @@ impl Doc {
                     });
                 }));
                 self.compiling = false;
+                self.quit_runs = 0;
             }
             engine::Msg::Compiling => self.compiling = true,
             engine::Msg::Exported { path, ok } => {
@@ -143,6 +154,7 @@ impl Doc {
                 self.notices.push(Notice::EngineStopped(tail));
                 self.rtex = None;
                 self.compiling = false;
+                self.quit_runs = 0;
             }
         }
         self.blocks = document::blocks(&self.spans, &self.source, &self.preview);
@@ -262,6 +274,10 @@ impl Doc {
 
     /// The live typeset result of the block being edited, shown under its source.
     pub(super) fn render_live(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // the formula editor has no result under it: the page itself shows it
+        if self.active.as_ref().is_some_and(|a| a.in_panel()) {
+            return;
+        }
         let Some(b) = self.active_block() else { return };
         let rows: Vec<render::Row> = b.rows.iter().map(|r| r.row.clone()).collect();
         let Some(bbox) = union(b.rows.iter().map(|r| r.bbox)) else {

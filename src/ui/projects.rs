@@ -8,6 +8,7 @@ use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 actions!(
     realtime_tex,
@@ -33,6 +34,8 @@ pub struct Projects {
     /// Each project window: its folder, the window, its workspace.
     windows: Vec<(PathBuf, AnyWindowHandle, WeakEntity<Workspace>)>,
     welcome: Option<AnyWindowHandle>,
+    /// Quit was asked once (a second one does not wait for the compile).
+    quitting: bool,
 }
 
 impl Global for Projects {}
@@ -114,6 +117,56 @@ pub fn init(cx: &mut App) {
         // an install half done is removed rather than left to look finished
         crate::engine::cancel_tex_install();
         async {}
+    })
+    .detach();
+}
+
+/// How long quitting waits for each of the compile runs, at most.
+const QUIT_RUN_LIMIT: Duration = Duration::from_secs(45);
+
+/// Quit the app. With "Compile when quitting" on, every TeX document is first saved and compiled
+/// the chosen number of times; ⌘Q again quits without waiting.
+pub fn quit(cx: &mut App) {
+    let s = AppSettings::get(cx);
+    let (on, runs) = (s.compile_on_quit, s.compile_runs.clamp(1, 5));
+    let again = std::mem::replace(&mut cx.global_mut::<Projects>().quitting, true);
+    if !on || again {
+        return cx.quit();
+    }
+    let windows: Vec<_> = cx
+        .global::<Projects>()
+        .windows
+        .iter()
+        .filter(|w| w.0 != tour::dir())
+        .map(|w| w.2.clone())
+        .collect();
+    let mut busy = false;
+    for ws in &windows {
+        busy |= ws
+            .update(cx, |ws, cx| ws.compile_for_quit(runs, cx))
+            .unwrap_or(false);
+    }
+    if !busy {
+        return cx.quit();
+    }
+    let ws = windows;
+    cx.spawn(async move |cx| {
+        let until = Instant::now() + QUIT_RUN_LIMIT * runs;
+        while Instant::now() < until {
+            cx.background_executor()
+                .timer(Duration::from_millis(100))
+                .await;
+            let busy = cx.update(|cx| {
+                ws.iter().any(|w| {
+                    w.read_with(cx, |w, cx| w.quit_compiling(cx))
+                        .unwrap_or(false)
+                })
+            });
+            if !busy {
+                break;
+            }
+        }
+        cx.update(|cx| cx.quit());
     })
     .detach();
 }

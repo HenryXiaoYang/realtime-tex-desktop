@@ -112,6 +112,7 @@ impl Doc {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseUpEvent, window, cx| {
+                    this.resize_end(cx);
                     this.dragging = false;
                     if ev.click_count >= 2 && this.active.is_none() {
                         let clicks = ev.click_count;
@@ -121,6 +122,14 @@ impl Doc {
                 }),
             )
             .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                if this.resizing.is_some() {
+                    // a release off the page was not seen: the drag ends with the next move
+                    match ev.pressed_button {
+                        Some(MouseButton::Left) => this.resize_to(n, ev.position, cx),
+                        _ => this.resize_end(cx),
+                    }
+                    return;
+                }
                 if ev.pressed_button == Some(MouseButton::Left) {
                     this.drag_to(n, ev.position, cx);
                 } else {
@@ -235,10 +244,13 @@ impl Doc {
                 .child(slice(0.0, h))
                 .children(blank)
                 .children(outline)
+                .children(self.render_image_handle(n, cx))
                 .children(insert)
                 .children(self.render_matches(n, cx))
                 .children(self.render_selection(n, cx))
                 .children(self.render_caret(n, window, cx))
+                .children(self.render_formula(n, dl, cx))
+                .children(self.render_table(n, dl, cx))
                 .children(spinner)
                 .into_any_element();
         };

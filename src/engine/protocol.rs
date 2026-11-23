@@ -114,6 +114,8 @@ pub enum Msg {
         layout_version: u64,
         /// Set while the layout is behind the source: overlays from this revision on stay.
         stale_since: Option<u64>,
+        /// The source revision it has (rtex counts one per edit, from 1).
+        source_revision: u64,
     },
     Paragraph {
         par_id: u64,
@@ -155,6 +157,7 @@ pub(super) fn parse(line: &str) -> Option<Msg> {
                     pages_total: v["pages_total"].as_u64()? as u32,
                     placements: serde_json::from_value(v["placements"].clone()).ok()?,
                     layout_version: v["versions"]["layout_version"].as_u64().unwrap_or(0),
+                    source_revision: rev(&v),
                     stale_since: (conv["state"] == "Stale")
                         .then(|| conv["pending_since"].as_u64())
                         .flatten(),

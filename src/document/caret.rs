@@ -1140,7 +1140,9 @@ pub fn group_close(src: &str, open: usize) -> Option<usize> {
 /// Enter at `off` in a paragraph, `block` its range: before its text, a new paragraph above
 /// it (the caret in it); after its text, one below; between, a paragraph break that closes the
 /// formatting or heading open there and reopens it after. None where a break cannot go.
-pub fn enter_in_paragraph(src: &str, block: Range<usize>, off: usize) -> Option<Edit> {
+/// `soft`: in running text, after or between its text, two line breaks (`\\\\`) in the same
+/// paragraph instead: a gap with no first-line indent and no blank line in the source.
+pub fn enter_in_paragraph(src: &str, block: Range<usize>, off: usize, soft: bool) -> Option<Edit> {
     // a format picked for what is typed next (its group still empty): the new paragraph has it,
     // as Word's does, and this one is left without the empty group
     if let Some((group, open, close)) = pending_format(src, block.clone(), off)
@@ -1152,7 +1154,19 @@ pub fn enter_in_paragraph(src: &str, block: Range<usize>, off: usize) -> Option<
             &format!("{rest}\n\n{open}{MARK}{close}"),
         ));
     }
-    Some(match split_at(src, block.clone(), off)? {
+    let split = split_at(src, block.clone(), off)?;
+    if soft && is_prose(&src[block.clone()]) {
+        match split {
+            Split::End => return Some(break_edit(block.end, 2)),
+            Split::Mid(..) => {
+                if let Some(e) = breaks(src, block.clone(), off, 2) {
+                    return Some(e);
+                }
+            }
+            Split::Start => {}
+        }
+    }
+    Some(match split {
         Split::Start => Edit::marked(block.start..block.start, &format!("{MARK}\n\n")),
         Split::End => Edit::marked(block.end..block.end, &format!("\n\n{MARK}")),
         Split::Mid(at, close, reopen) => {
@@ -1260,13 +1274,22 @@ fn mark_end(tex: &str) -> String {
 /// Shift-Enter: a line break between text, in formatting but not in a heading or a command's
 /// argument (where `\\` breaks the TeX).
 pub fn line_break(src: &str, block: Range<usize>, off: usize) -> Option<Edit> {
+    breaks(src, block, off, 1)
+}
+
+/// `n` line breaks at `at`, the caret on the line after them.
+fn break_edit(at: usize, n: usize) -> Edit {
+    Edit::marked(at..at, &format!("{}\n{MARK}", "\\\\".repeat(n)))
+}
+
+fn breaks(src: &str, block: Range<usize>, off: usize, n: usize) -> Option<Edit> {
     match split_at(src, block.clone(), off)? {
         Split::Mid(at, _, _) => {
             let groups = open_groups(&src[block.clone()], block.start, at);
             groups
                 .iter()
-                .all(|(n, ..)| FORMAT.contains(&n.as_str()))
-                .then(|| Edit::marked(at..at, &format!("\\\\\n{MARK}")))
+                .all(|(name, ..)| FORMAT.contains(&name.as_str()))
+                .then(|| break_edit(at, n))
         }
         _ => None,
     }
@@ -1416,7 +1439,7 @@ mod tests {
     fn enter(src: &str) -> Option<String> {
         let off = src.find('|').unwrap();
         let s = src.replace('|', "");
-        let e = enter_in_paragraph(&s, 0..s.len(), off)?;
+        let e = enter_in_paragraph(&s, 0..s.len(), off, false)?;
         Some(apply(&s, &e))
     }
 
@@ -1540,6 +1563,24 @@ mod tests {
     }
 
     #[test]
+    fn a_soft_enter_breaks_the_line_twice_not_the_paragraph() {
+        let soft = |src: &str| {
+            let off = src.find('|').unwrap();
+            let s = src.replace('|', "");
+            enter_in_paragraph(&s, 0..s.len(), off, true).map(|e| apply(&s, &e))
+        };
+        assert_eq!(soft("one |two").unwrap(), "one \\\\\\\\\n|two");
+        assert_eq!(
+            soft("Text \\emph{end|}").unwrap(),
+            "Text \\emph{end}\\\\\\\\\n|"
+        );
+        // before the text, in a heading, in a command's argument: as without it
+        assert_eq!(soft("|Plain text.").unwrap(), "|\n\nPlain text.");
+        assert_eq!(soft("\\section{Intro|}").unwrap(), "\\section{Intro}\n\n|");
+        assert_eq!(soft("\\fbox{in a |box} after"), None);
+    }
+
+    #[test]
     fn enter_in_an_item_adds_one_above_below_or_splits() {
         let src = "\\begin{itemize}\n  \\item \\textbf{Rapid dev} text\n\\end{itemize}";
         let at = |s: &str| src.find(s).unwrap();
@@ -1590,7 +1631,7 @@ mod tests {
     #[test]
     fn a_picture_beside_text_is_not_text_before_it() {
         let s = "\\begin{minipage}{.5\\textwidth}\\begin{tikzpicture}\\node{Start};\\end{tikzpicture}\\end{minipage}\nlimit = 7";
-        let e = enter_in_paragraph(s, 0..s.len(), s.find("limit").unwrap()).unwrap();
+        let e = enter_in_paragraph(s, 0..s.len(), s.find("limit").unwrap(), false).unwrap();
         assert_eq!(
             (e.range.start, e.caret),
             (0, 0),

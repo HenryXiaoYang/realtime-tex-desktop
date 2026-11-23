@@ -21,7 +21,9 @@ pub struct Inspector {
     pending: HashMap<&'static str, Task<()>>,
     /// What is wrong with what a field holds, by field, shown under it.
     hints: HashMap<&'static str, &'static str>,
-    _subs: Vec<Subscription>,
+    /// The field that adds a package (the document's settings).
+    pub(super) new_package: Option<Entity<InputState>>,
+    pub(super) _subs: Vec<Subscription>,
 }
 
 /// The icon of an element's kind, beside its name.
@@ -71,10 +73,19 @@ impl Workspace {
             }
         }
         let advanced = self.inspector.advanced;
-        let (common, more): (Vec<&Field>, Vec<&Field>) = fields.iter().partition(|f| !f.advanced);
+        let document = el.kind == Kind::Document;
+        let (common, more): (Vec<&Field>, Vec<&Field>) = fields
+            .iter()
+            .filter(|f| !(document && page_setup::MARGIN_KEYS.contains(&f.key)))
+            .partition(|f| !f.advanced);
         let mut body = div().flex().flex_col().gap_3().p_3();
         for f in common {
             body = body.child(self.inspector_field(f, cx));
+        }
+        if document {
+            body = body
+                .child(self.page_setup(&fields, cx))
+                .child(self.package_list(window, cx));
         }
         if !more.is_empty() {
             body = body.child(
@@ -224,7 +235,7 @@ impl Workspace {
     }
 
     /// One field: its label over its control.
-    fn inspector_field(&self, f: &Field, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn inspector_field(&self, f: &Field, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let key = f.key;
         let set = {

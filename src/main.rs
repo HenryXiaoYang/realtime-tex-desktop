@@ -28,7 +28,7 @@ fn main() {
         // changed some): later bindings win
         editor::bind_keys(cx);
         ui::keymap::bind_all(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| ui::projects::quit(cx));
         // no rtex or lualatex outlives the app
         cx.on_app_quit(|_| async { engine::stop_all() }).detach();
         // every command has a place in the menu bar, where its shortcut shows

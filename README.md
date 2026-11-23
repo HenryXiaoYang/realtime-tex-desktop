@@ -26,9 +26,11 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   you type goes into the source escaped (`%` becomes `\%`), rtex re-typesets the paragraph in
   milliseconds, and until it has, the typed text is drawn at the caret. Input methods (pinyin…)
   compose in place, underlined. Arrows, ⌥←/⌥→ (word), ⌘←/⌘→ (line) and ⌘↑/⌘↓ (document) move the
-  caret. Enter starts a paragraph (closing and reopening `\textbf{…}` and the like around the
-  break) or, in a list, an item (on an empty item, leaves the list); Shift-Enter is a line break
-  (`\\`); Tab and Shift-Tab nest and un-nest list items; Backspace and Delete remove a character,
+  caret. Enter in running text puts two line breaks (`\\\\`) in the same paragraph, so what
+  follows has no first-line indent and the source no blank line (Settings → Editor: "Enter makes
+  a gap with `\\\\`"; off, it starts a paragraph, closing and reopening `\textbf{…}` and the like
+  around the break); in a list it is an item (on an empty item, leaves the list); Shift-Enter is a
+  line break (`\\`); Tab and Shift-Tab nest and un-nest list items; Backspace and Delete remove a character,
   a whole `\ref`/`\cite` or formula, or join two paragraphs or items. Undo takes back a word at a
   time (in Chinese, Japanese, Thai…, one input-method commit). ⌘M opens a formula in the
   paragraph's source box, and typing `\` opens that box with the command begun (with its
@@ -73,10 +75,16 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 - The sidebar on the right (Visual mode; ⌘⌥\\ or its × hides it, remembered) shows the settings
   of what the caret is in or what is selected — a figure (width, placement, caption, label), an
   image, a table, a heading (level, numbered, short title, label), an equation (numbered,
-  environment, label), a list, or the document (class, font size, paper, margins) — common ones
+  environment, label), a list, or the document (class, font size, paper, orientation, columns, margins) — common ones
   first, the rest under Advanced. Changes apply as they are made, adding any package they need;
   a value that cannot go into the TeX (a width that is not a number, a label with a `#`) is
   kept out, with a note under the field saying what it takes.
+- With nothing selected the sidebar is the document's page setup: the paper drawn to scale with
+  its text area, a margin field for all sides and one per side (written as `geometry` options,
+  which are added when missing), landscape, and the packages the preamble loads — × stops
+  loading one, the field below adds one on Enter. Each change is one undo step. Custom macros
+  are not listed: they stay in the preamble, which opens as source from the strip above the
+  first page.
 - The window adapts to its width (down to 720 × 480): below 1100 px the project panel steps
   aside for the pages, below 940 px the sidebar too (⌘\\ or ⌘⌥\\ brings one back while the window
   stays narrow); the ribbon scrolls sideways when it does not fit (the styles sit in two rows, none hidden);
@@ -86,10 +94,27 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   shortcut. Every control has a name VoiceOver reads (icon buttons, swatches, styles), the
   ribbon, the sidebar and the pickers work from the keyboard (↑/↓ in the cross-reference and
   citation lists, a typed size for a table), and each page exposes its text to VoiceOver.
-- Formulas, TikZ and macros' text are edited as source: click a formula or a picture to select
-  it, double-click it (or a reference, a citation) to edit its block's source, with the caret at
-  the clicked character; Up on the first line or Down on the last moves to the neighbouring
-  block; Escape leaves it. Escape on the caret selects its block instead.
+- Formulas have their own editor: double-click one (`$…$`, `\(…\)`, `$$…$$`, `\[…\]` or an
+  equation environment), or type `$` at the caret, and a panel opens under it with the formula's
+  TeX and buttons for structures, Greek letters, operators, relations and arrows. The page keeps
+  the formula typeset in place and redraws it with each keystroke; the paragraph around it is
+  not turned into source. A second `$` or Escape closes the panel with the caret after the
+  formula (a formula left blank goes). `\$` in the source box still prints a dollar sign.
+- Tables have a cell editor: right-click a table → Edit Table (or double-click the table beside
+  its text) and a grid of inputs opens under it, one per cell, written into the `tabular` as you
+  type. Tab and Enter move between cells (past the last, a new row), ⇧Tab and ⇧Enter back, ↑ ↓
+  between rows; + Row, − Row, + Column and − Column act next to the focused cell. A cell keeps
+  its TeX (a `\multicolumn`, `\&`), and one holding an unescaped `&`, a `\\` or an open brace
+  waits until it is whole. Rows with a `\multicolumn` are left as they are when columns change.
+  Escape closes it.
+- TikZ pictures: Insert → TikZ starts one from a template (shapes, axes and a curve, a flowchart,
+  a graph, a grid; `tikz` is added to the preamble). Double-click a picture and its code opens in
+  a panel under it, the picture staying typeset above; it redraws when rtex has run the code
+  (TikZ is not on the millisecond path, so after a moment). Escape closes it.
+- Macros' text, references and citations are edited as source: double-click one to edit its
+  block's source, with the caret at the clicked character; Up on the first line or Down on the
+  last moves to the neighbouring block; Escape leaves it. Escape on the caret selects its block
+  instead. Right-click → Edit Source opens any block this way.
 - The source box shows the source in the font the document sets that text in (Latin Modern,
   Times, whatever fontspec loaded), at its size and the zoom; Settings → Source box font can name
   another family. TFM-based Latin Modern and Computer Modern fonts (`ec-lmr12`, `cmbx10`) show
@@ -110,7 +135,9 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 - The preamble (`\documentclass` … `\begin{document}`) and `\end{document}` print nothing, so
   they sit in thin strips above the first page and below the last; click one to edit it.
 - **Visual / Source** (right of the tab bar): edit on the typeset pages, or the whole file in a
-  code editor with LaTeX highlighting and line numbers. Edits in either show in the other.
+  code editor with LaTeX highlighting and line numbers. Edits in either show in the other. Switching
+  to Source opens it where you were: at the caret in the box being edited, else the caret, the
+  selection, or the first block on screen, scrolled into view.
 - Autocomplete, in the source box and in Source mode: `\` commands (with the caret placed in
   the first argument), environments after `\begin{` (inserting the matching `\end`) and
   `\end{`, labels after `\ref{`/`\eqref{`/`\cref{`, citation keys from the project's `.bib`
@@ -118,10 +145,10 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
   `\includegraphics{`. Enter accepts, Escape closes the menu.
 - Right-click a file or folder in the project panel: Open, Open in Default App, New File, New
   Folder, Reveal in Finder, Copy Path, Copy Relative Path, Rename… (in place; Enter renames,
-  Escape cancels; open tabs follow), Duplicate and Move to Trash. Right-click an outline heading:
+  Escape cancels; open tabs follow), Duplicate and Move to Trash. The outline marks the heading the pages are under and scrolls to it as you scroll or move. Right-click an outline heading:
   Go to Section, Edit Heading, Show in Source, Copy Title.
 - Files open in tabs from the project panel: `.tex` files typeset, other text files (`.bib`…)
-  open as source, PDFs and PNG/JPEG images open in a viewer (zoom and pinch work there too). Closing a tab or the window saves its edits.
+  open as source, PDFs and PNG/JPEG images open in a viewer (zoom and pinch work there too). Closing a tab or the window saves its edits. With Settings → Saving → Compile when quitting on, ⌘Q first saves and runs the full LaTeX compile on every open TeX file (1–5 runs, 2 by default, enough for references and the contents to settle; a failed run ends them) and quits when they are done, or after 45 s a run; ⌘Q again quits at once.
 - Zoom: pinch on the trackpad, ⌘= / ⌘- / ⌘0, or the controls at the right of the tab bar.
 
 | Shortcut | |
@@ -153,7 +180,8 @@ caret, ribbon and sidebar), Colors (every color of the theme on screen, the sour
 its syntax colors too, each changeable and kept per theme; Export theme writes the theme with
 those changes as a file in the themes folder, ready to share), Editor (the zoom files open at,
 Visual or Source, live formula preview, the `\` key, pinch to zoom, source fonts, line numbers,
-soft wrap, autocomplete, Find's match case), Files (hidden files, names to hide, outline depth),
+soft wrap, autocomplete, Find's match case), Saving (auto-save and its delay, compiling when
+quitting and how many full runs), Files (hidden files, names to hide, outline depth),
 Typesetting (the rtex binary and TeX folder, downloading rtex, the live paragraph time limit,
 picture reuse, a diagnostics folder, clearing the build cache) and Keyboard shortcuts. A change
 to the engine settings restarts the open documents' rtex. They are saved in
@@ -202,6 +230,8 @@ src/
     caret.rs           where a caret stands among glyphs; typing, Enter, Tab, Backspace as edits
     find.rs            find and replace over the printed text
     html.rs            rich text pasted from other apps (their HTML) as TeX
+    math.rs            which formula a spot is in, and the TeX inside its delimiters
+    table.rs           a tabular's cells, and the edits that change a cell, a row or a column
     format.rs          formatting as source edits: inline commands, sizes, colours, fonts, lists,
                        alignment, styles, packages
   render/              rasterizing (skrifa, tiny-skia, hayro)
@@ -224,6 +254,8 @@ src/
       formatting.rs    the ribbon's side: the state at the caret, formatting operations
       find_bar.rs      the Find and Replace bar and its highlights
       source_box.rs    the inline source box
+      formula.rs       the formula editor and the TikZ source panel: under the page, which stays typeset
+      table_panel.rs   the table editor: one input per cell, written into the tabular
       editing.rs       opening, typing in and leaving the box; insert spots; undo
       selection.rs     block selection and block commands
       navigation.rs    hit-testing, clicks, scrolling, zoom

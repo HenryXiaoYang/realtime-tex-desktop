@@ -64,6 +64,9 @@ pub struct AppSettings {
     pub live_preview: bool,
     /// A `\` typed on the pages opens the paragraph's source there; off, it is typed as text.
     pub backslash_opens_source: bool,
+    /// Enter in running text puts two line breaks (`\\\\`) in the same paragraph, so what
+    /// follows has no first-line indent; off, it starts a paragraph (a blank line).
+    pub enter_no_indent: bool,
     pub line_numbers: bool,
     pub soft_wrap: bool,
     /// The LaTeX completion menu opens as you type.
@@ -85,6 +88,9 @@ pub struct AppSettings {
     /// Save a file `autosave_delay` seconds after the last edit.
     pub autosave: bool,
     pub autosave_delay: f64,
+    /// Quitting saves and runs the full LaTeX compile `compile_runs` times first.
+    pub compile_on_quit: bool,
+    pub compile_runs: u32,
     /// Open an exported PDF in the default viewer.
     pub open_after_export: bool,
     /// rtex's fast-path budget per paragraph, in ms (`--fast-budget-ms`).
@@ -169,6 +175,7 @@ impl Default for AppSettings {
             pinch_zoom: true,
             live_preview: true,
             backslash_opens_source: true,
+            enter_no_indent: true,
             line_numbers: true,
             soft_wrap: true,
             autocomplete: true,
@@ -181,6 +188,8 @@ impl Default for AppSettings {
             outline_depth: OutlineDepth::Subsubsections,
             autosave: false,
             autosave_delay: 1.0,
+            compile_on_quit: false,
+            compile_runs: 2,
             open_after_export: false,
             fast_budget_ms: 50.0,
             picture_cache: true,
@@ -1224,6 +1233,19 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                     ),
                 )
                 .disabled(!s.autosave),
+                SettingItem::new(
+                    "Compile when quitting",
+                    switch(|s| s.compile_on_quit, |s, v| s.compile_on_quit = v),
+                ),
+                SettingItem::new(
+                    "Compile runs when quitting",
+                    number(
+                        (1.0, 5.0, 1.0),
+                        |s| s.compile_runs as f64,
+                        |s, v| s.compile_runs = (v.round() as u32).clamp(1, 5),
+                    ),
+                )
+                .disabled(!s.compile_on_quit),
             ]),
         )
         .group(group(cx).title("Export").item(SettingItem::new(
@@ -1343,6 +1365,10 @@ fn pages(cx: &App) -> Vec<SettingPage> {
                 SettingItem::new(
                     "Live formula preview",
                     switch(|s| s.live_preview, |s, v| s.live_preview = v),
+                ),
+                SettingItem::new(
+                    "Enter makes a gap with \\\\\\\\ (no first-line indent), not a paragraph",
+                    switch(|s| s.enter_no_indent, |s, v| s.enter_no_indent = v),
                 ),
                 SettingItem::new(
                     "Typing \\ opens the source",
@@ -1604,6 +1630,8 @@ mod tests {
         let old: AppSettings = serde_json::from_str(r#"{"autosave":true}"#).unwrap();
         assert_eq!(old.autosave_delay, 1.0);
         assert!(old.picture_cache);
+        assert!(!old.compile_on_quit);
+        assert_eq!(old.compile_runs, 2);
     }
 
     /// The last version's file: its zoom a number; the settings added since at their defaults.

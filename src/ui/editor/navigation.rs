@@ -140,7 +140,15 @@ impl Doc {
         };
         let caret = glyphmap::char_at(&gt, x, y)
             .and_then(|(i, after)| glyphmap::source_offset(&gt, i, after, src));
-        self.activate(bi, caret.unwrap_or(0), window, cx);
+        // a formula opens in the formula editor, anything else as source
+        let at = self.blocks[bi].range.start + caret.unwrap_or(0);
+        self.checkpoint();
+        if !self.open_formula(at, at, false, window, cx)
+            && !self.open_table(bi, window, cx)
+            && !self.open_source_panel(bi, window, cx)
+        {
+            self.activate(bi, caret.unwrap_or(0), window, cx);
+        }
     }
 
     /// Where in this file a problem is: the start of its line, when it names this file (LaTeX
@@ -203,6 +211,26 @@ impl Doc {
         self.scroll_to(offset, false, cx);
     }
 
+    /// Where the reader is in the source: the start of the last block that has begun by the top of
+    /// the view (a block an outline jump put there counts, as it sits `MARGIN` down); above the
+    /// first block, that one.
+    pub fn reading_offset(&self) -> Option<usize> {
+        let line = -f32::from(self.scroll.offset().y) + MARGIN + 1.0;
+        let top = |b: &document::Block| {
+            b.rows
+                .first()
+                .map(|r| self.page_y(r.page) + page_px(r.bbox[1], self.zoom))
+        };
+        let mut begun = self
+            .blocks
+            .iter()
+            .filter(|b| top(b).is_some_and(|t| t <= line));
+        begun
+            .next_back()
+            .or_else(|| self.blocks.iter().find(|b| top(b).is_some()))
+            .map(|b| b.range.start)
+    }
+
     /// Bring the block at `offset` into view. Without `if_hidden` (a jump from the outline) its
     /// top goes near the view's top. With it, the view moves only if what is at hand is out of
     /// sight (the caret's line when the caret is at `offset`, else any of the block), and then
@@ -253,7 +281,7 @@ impl Doc {
     }
 
     /// Where page `page`'s top is in the column, in px.
-    fn page_y(&self, page: u32) -> f32 {
+    pub(super) fn page_y(&self, page: u32) -> f32 {
         let mut y = PAGES_TOP;
         for (&n, dl) in &self.preview.pages {
             if n == page {

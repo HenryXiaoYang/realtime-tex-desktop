@@ -3,9 +3,15 @@
 // #[ignore]d (they need a TeX installation): `cargo test --release <name> -- --ignored
 // --nocapture`, with RTD_TYPE=/abs/copy.tex for those that take a document (use a copy: rtex
 // writes beside it).
+mod formula;
+mod image;
 mod insert;
+mod page_setup;
 mod perf;
+mod quit;
 mod sidebar;
+mod source_mode;
+mod table;
 mod typing;
 
 use super::Doc;
@@ -47,7 +53,10 @@ pub(super) fn open<'a>(
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.set_global(AppSettings::default());
+        cx.set_global(AppSettings {
+            enter_no_indent: false,
+            ..AppSettings::default()
+        });
     });
     engine::configure("", "/Library/TeX/texbin");
     let main = main.to_string();

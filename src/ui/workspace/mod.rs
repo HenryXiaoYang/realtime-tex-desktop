@@ -6,6 +6,7 @@ mod insert_tab;
 mod inspector;
 mod layout;
 mod notices;
+mod page_setup;
 pub use layout::MIN_WINDOW;
 pub use notices::place_notifications;
 mod project_panel;
@@ -101,6 +102,8 @@ pub struct Workspace {
     /// The project panel's file tree and outline, scrolled sideways to names too long for it.
     files_scroll: ScrollHandle,
     outline_scroll: ScrollHandle,
+    /// The heading the outline last marked as the one the pages are under (its offset).
+    outline_seen: Option<usize>,
     /// The tree entry being renamed in place (its path) and its name field, and why the name
     /// typed cannot be (shown under the field, which stays open).
     rename: Option<(String, Entity<InputState>)>,
@@ -148,6 +151,7 @@ impl Workspace {
             expanded: Default::default(),
             files_scroll: ScrollHandle::new(),
             outline_scroll: ScrollHandle::new(),
+            outline_seen: None,
             _subs: vec![],
             _rename_sub: None,
             _dialog_subs: vec![],
@@ -233,6 +237,20 @@ impl Workspace {
         for d in &self.tabs {
             d.update(cx, |d, cx| d.restart_engine(window, cx));
         }
+    }
+
+    /// The app is quitting: every TeX document saved and compiled `runs` times; whether any is.
+    pub fn compile_for_quit(&mut self, runs: u32, cx: &mut Context<Self>) -> bool {
+        let mut any = false;
+        for d in &self.tabs {
+            any |= d.update(cx, |d, cx| d.compile_for_quit(runs, cx));
+        }
+        any
+    }
+
+    /// Whether a document is still making the compile runs of a quit.
+    pub fn quit_compiling(&self, cx: &App) -> bool {
+        self.tabs.iter().any(|d| d.read(cx).quit_compiling())
     }
 
     /// The open documents' build folders.

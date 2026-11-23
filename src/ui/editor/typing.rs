@@ -29,8 +29,10 @@ pub(super) struct Overlay {
     units: Vec<(String, usize)>,
     /// The source offset after it.
     end: usize,
-    /// A typeset update came in since the last of it was typed.
+    /// A typeset update with the last of it came in.
     seen: bool,
+    /// The source revision rtex gives the edit that made the last of it: the update it waits for.
+    need: u64,
 }
 
 /// The undo step typing is in.
@@ -87,7 +89,7 @@ impl Doc {
                 .any(|p| self.map_of(bi, p).is_some_and(|m| !m.stops.is_empty()))
     }
 
-    fn pages_of(&self, bi: usize) -> impl Iterator<Item = u32> + '_ {
+    pub(super) fn pages_of(&self, bi: usize) -> impl Iterator<Item = u32> + '_ {
         let set: BTreeSet<u32> = self.blocks[bi].rows.iter().map(|r| r.page).collect();
         set.into_iter()
     }
@@ -707,11 +709,13 @@ impl Doc {
         if let Some(t) = self.typing.as_mut() {
             t.end = end;
         }
+        let need = self.expected_revision();
         match self.overlay.as_mut().filter(|o| o.end == off) {
             Some(o) => {
                 o.units.push((text.to_string(), esc.len()));
                 o.end = end;
                 o.seen = false;
+                o.need = need;
             }
             None => {
                 self.overlay = at.map(|(page, x, y, size)| Overlay {
@@ -723,6 +727,7 @@ impl Doc {
                     units: vec![(text.to_string(), esc.len())],
                     end,
                     seen: false,
+                    need,
                 })
             }
         }
@@ -773,6 +778,10 @@ impl Doc {
             o.seen = false;
             self.step("", true, false);
             self.replace(off - n..off, "", cx);
+            let need = self.expected_revision();
+            if let Some(o) = self.overlay.as_mut() {
+                o.need = need;
+            }
             if let Some(c) = self.caret.as_mut() {
                 c.off = off - n;
             }
@@ -819,6 +828,19 @@ impl Doc {
                     m.deletion(j, back, &self.source)
                 });
             if let Some(r) = gone {
+                // until the page catches up the old glyphs no longer match the source, so the
+                // caret is held where the removed text began: not thrown back to a word's start
+                let held = m.stops.iter().find(|s| s.off == r.start).map(|s| Overlay {
+                    page,
+                    x: s.x,
+                    y: s.y,
+                    size: s.size,
+                    font: self.caret_font(),
+                    units: vec![],
+                    end: r.start,
+                    seen: false,
+                    need: 0,
+                });
                 self.overlay = None;
                 self.step("", true, false);
                 self.replace(r.clone(), "", cx);
@@ -828,6 +850,8 @@ impl Doc {
                     self.replace(g.clone(), "", cx);
                     at = g.start;
                 }
+                let need = self.expected_revision();
+                self.overlay = held.filter(|o| o.end == at).map(|o| Overlay { need, ..o });
                 if let Some(c) = self.caret.as_mut() {
                     c.off = at;
                     c.goal_x = None;
@@ -898,8 +922,8 @@ impl Doc {
         }
     }
 
-    /// Enter: a new list item, or a paragraph break; Shift-Enter (`line`): a line break. Not
-    /// in a table's cells (rows come with table editing).
+    /// Enter: a new list item, or a paragraph break (two line breaks, `\\\\`, by the settings);
+    /// Shift-Enter (`line`): a line break. Not in a table's cells (rows come with table editing).
     pub(super) fn enter(&mut self, line: bool, cx: &mut Context<Self>) {
         self.delete_selection(cx);
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
@@ -918,7 +942,8 @@ impl Doc {
                 if line {
                     caret::line_break(&self.source, b, off)
                 } else {
-                    caret::enter_in_paragraph(&self.source, b, off)
+                    let soft = AppSettings::get(cx).enter_no_indent;
+                    caret::enter_in_paragraph(&self.source, b, off, soft)
                 }
             }),
         };
@@ -1032,15 +1057,25 @@ impl Doc {
             .is_some_and(|im| im.key.0 == self.versions.get(&o.page).copied().unwrap_or(0));
         // the page shows the typed text once its paragraph is typeset, even while a full run
         // (a heading's, for the contents) is still going
-        if o.seen && self.spans_pending == 0 && fresh {
+        // (rtex that has not said so in a while is not going to: never leave text drawn twice)
+        let answered = o.seen || self.edited_at.elapsed() > Duration::from_secs(2);
+        if answered && self.spans_pending == 0 && fresh {
             self.overlay = None;
         }
     }
 
-    pub(super) fn overlay_seen(&mut self) {
-        if let Some(o) = self.overlay.as_mut() {
+    /// A typeset update at source revision `rev` came in: the overlay's text is in it once it has
+    /// the revision of the edit that typed it (an older reply, still on its way, does not).
+    pub(super) fn overlay_seen(&mut self, rev: u64) {
+        if let Some(o) = self.overlay.as_mut().filter(|o| rev >= o.need) {
             o.seen = true;
         }
+    }
+
+    /// The revision rtex gives the last edit sent, once the first reply has told where its count
+    /// began; 0 until then (any update counts).
+    pub(super) fn expected_revision(&self) -> u64 {
+        self.first_revision.map_or(0, |r| r + self.edits_sent)
     }
 
     /// Width in px of `text` in `face` at `size` px.
@@ -1053,6 +1088,19 @@ impl Doc {
                     .map_or(size * 0.5, |a| f32::from(a.width))
             })
             .sum()
+    }
+
+    /// Where the caret is drawn: page, x, baseline y, size (sp) and font. At the overlay that
+    /// holds it while the page catches up with an edit, else at its stop.
+    pub(super) fn caret_spot(&self) -> Option<(u32, f64, f64, f64, Option<engine::FontDesc>)> {
+        let off = self.caret.as_ref()?.off;
+        match self.overlay.as_ref().filter(|o| o.end == off) {
+            Some(o) => Some((o.page, o.x, o.y, o.size, o.font.clone())),
+            None => {
+                let (p, x, y, s) = self.caret_at()?;
+                Some((p, x, y, s, self.caret_font()))
+            }
+        }
     }
 
     /// The caret on page `n`, with typed text not typeset yet and an input method's text being
@@ -1068,13 +1116,7 @@ impl Doc {
             return None;
         }
         let overlay = self.overlay.as_ref().filter(|o| o.end == c.off);
-        let (page, x, y, size, desc) = match overlay {
-            Some(o) => (o.page, o.x, o.y, o.size, o.font.clone()),
-            None => {
-                let (p, x, y, s) = self.caret_at()?;
-                (p, x, y, s, self.caret_font())
-            }
-        };
+        let (page, x, y, size, desc) = self.caret_spot()?;
         if page != n {
             return None;
         }
@@ -1259,6 +1301,10 @@ impl EntityInputHandler for Doc {
             self.delete_selection(cx);
             let text = format!("{text}{}", complete::MARK);
             return self.edit_tex_at_caret(&text, window, cx);
+        }
+        // a dollar sign opens a formula, closed by the next one
+        if text == "$" && range.is_none() {
+            return self.type_dollar(window, cx);
         }
         // a range other than the caret: the accent menu replacing the char before it
         if let Some(r) = range {

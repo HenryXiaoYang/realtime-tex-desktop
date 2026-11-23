@@ -4,7 +4,25 @@ use crate::ui::Tip;
 use gpui_kit::component::scroll::{ScrollableElement, ScrollbarAxis};
 
 impl Workspace {
-    pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Scroll the outline so row `i` is in view, moving it only as far as it must.
+    fn show_outline_row(&self, i: usize) {
+        let (top, bottom) = (i as f32 * OUTLINE_ROW, (i + 1) as f32 * OUTLINE_ROW);
+        let (offset, height) = (
+            self.outline_scroll.offset(),
+            f32::from(self.outline_scroll.bounds().size.height),
+        );
+        let from = -f32::from(offset.y);
+        let to = if top < from {
+            top
+        } else if bottom > from + height {
+            bottom - height
+        } else {
+            return;
+        };
+        self.outline_scroll.set_offset(point(offset.x, px(-to)));
+    }
+
+    pub(super) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let icon_button = |id: &'static str, icon: &'static str, tip: &'static str| {
             Button::new(id)
@@ -133,6 +151,17 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
+        // the heading the pages are under is marked, and the outline scrolls to it when the
+        // reader moves on to another
+        let reading = self.doc().and_then(|d| d.read(cx).reading_offset());
+        let current =
+            reading.and_then(|at| crate::document::heading_at(outline.iter().map(|h| h.0), at));
+        if current != self.outline_seen {
+            self.outline_seen = current;
+            if let Some(i) = current.and_then(|c| outline.iter().position(|h| h.0 == c)) {
+                self.show_outline_row(i);
+            }
+        }
         // each heading's line runs down beside the headings under it, at the start of its
         // number, as the file tree's do under a folder
         let mut open: Vec<usize> = vec![];
@@ -156,9 +185,13 @@ impl Workspace {
                     .gap_2()
                     .text_sm()
                     .pl(px(12.0 + level as f32 * OUTLINE_INDENT))
-                    .py_0p5()
+                    .h(px(OUTLINE_ROW))
+                    .items_center()
                     .rounded_md()
                     .hover(|s| s.bg(theme.sidebar_accent))
+                    .when(current == Some(off), |d| {
+                        d.bg(theme.sidebar_accent).font_weight(FontWeight::MEDIUM)
+                    })
                     .cursor_pointer()
                     .children(number.map(|n| div().text_color(theme.link).child(n)))
                     .child(title)
@@ -336,6 +369,9 @@ fn indent_guides(depth: usize, cx: &App) -> Vec<AnyElement> {
         .collect()
 }
 
+/// How tall each outline row is, in px.
+const OUTLINE_ROW: f32 = 24.0;
+
 /// How much deeper each level of the outline sits, in px.
 const OUTLINE_INDENT: f32 = 20.0;
 
@@ -448,5 +484,77 @@ mod e2e {
         println!("short: tree x {tree_x:?}, outline x {outline_x:?}");
         assert_eq!(tree_x, px(0.0));
         assert_eq!(outline_x, px(0.0));
+    }
+
+    /// The outline marks the heading the pages are under and scrolls to it as they move: a
+    /// jump to a section far down brings its row into view. `cargo test --release
+    /// outline_follows_the_pages -- --ignored --nocapture`.
+    #[gpui_kit::test]
+    #[ignore]
+    fn outline_follows_the_pages(cx: &mut TestAppContext) {
+        let mut main = String::from("\\documentclass{article}\n\\begin{document}\n");
+        for i in 0..40 {
+            main.push_str(&format!(
+                "\\section{{Part {i}}}\n{}\n\n",
+                "Some text. ".repeat(60)
+            ));
+        }
+        main.push_str("\\end{document}\n");
+        let dir = std::env::temp_dir().join(format!("rtd-outline-follow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.tex"), &main).unwrap();
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        engine::configure("", "/Library/TeX/texbin");
+        let (ws, cx) = cx.add_window_view(|window: &mut Window, cx| {
+            Workspace::new(dir.clone(), Some("main.tex".into()), window, cx)
+        });
+        cx.simulate_resize(size(px(1460.0), px(900.0)));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let doc = loop {
+            cx.run_until_parked();
+            let doc = cx.read(|cx| ws.read(cx).doc().cloned());
+            if let Some(d) = doc
+                && cx.read(|cx| d.read(cx).page_position().1 >= 3)
+            {
+                break d;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "timed out waiting for the layout"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let heading = |cx: &mut gpui_kit::VisualTestContext, i: usize| {
+            cx.read(|cx| doc.read(cx).outline[i].offset)
+        };
+        for _ in 0..3 {
+            cx.run_until_parked();
+        }
+        let first = heading(cx, 0);
+        assert_eq!(cx.read(|cx| ws.read(cx).outline_seen), Some(first));
+
+        let target = heading(cx, 30);
+        doc.update(cx, |d, cx| d.jump_to(target, cx));
+        for _ in 0..3 {
+            cx.run_until_parked();
+        }
+        cx.read(|cx| {
+            let ws = ws.read(cx);
+            assert_eq!(ws.outline_seen, Some(target), "marked");
+            let (y, h) = (
+                -f32::from(ws.outline_scroll.offset().y),
+                f32::from(ws.outline_scroll.bounds().size.height),
+            );
+            assert!(
+                y <= 30.0 * super::OUTLINE_ROW && 31.0 * super::OUTLINE_ROW <= y + h,
+                "row 30 in view: scrolled {y} of {h}"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

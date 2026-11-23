@@ -4,6 +4,31 @@
 use super::caret::{MARK, group_close};
 use std::path::Path;
 
+/// TikZ pictures to start from, for the Insert tab: a name and the TeX, its caret at MARK. Plain
+/// TikZ, no libraries, so only `\usepackage{tikz}` is needed.
+pub const TIKZ: &[(&str, &str)] = &[
+    (
+        "Shapes and arrows",
+        "\\begin{center}\n\\begin{tikzpicture}\n  \\draw[thick] (0,0) rectangle (2,1);\n  \\draw[->, thick] (2,0.5) -- (3.5,0.5);\n  \\draw[thick] (4,0.5) circle (0.5);\u{E001}\n\\end{tikzpicture}\n\\end{center}",
+    ),
+    (
+        "Axes and curve",
+        "\\begin{center}\n\\begin{tikzpicture}\n  \\draw[->] (-0.2,0) -- (4,0) node[right] {$x$};\n  \\draw[->] (0,-0.2) -- (0,3) node[above] {$y$};\n  \\draw[thick, blue, domain=0:3.4, samples=60] plot (\\x, {0.25*\\x*\\x});\u{E001}\n\\end{tikzpicture}\n\\end{center}",
+    ),
+    (
+        "Flowchart",
+        "\\begin{center}\n\\begin{tikzpicture}\n  \\node[draw, rounded corners] (a) at (0,0) {Start};\n  \\node[draw] (b) at (3,0) {Step};\n  \\node[draw, rounded corners] (c) at (6,0) {End};\u{E001}\n  \\draw[->] (a) -- (b);\n  \\draw[->] (b) -- (c);\n\\end{tikzpicture}\n\\end{center}",
+    ),
+    (
+        "Graph",
+        "\\begin{center}\n\\begin{tikzpicture}\n  \\node[draw, circle] (1) at (0,0) {1};\n  \\node[draw, circle] (2) at (2,1) {2};\n  \\node[draw, circle] (3) at (2,-1) {3};\u{E001}\n  \\draw (1) -- (2) -- (3) -- (1);\n\\end{tikzpicture}\n\\end{center}",
+    ),
+    (
+        "Grid",
+        "\\begin{center}\n\\begin{tikzpicture}\n  \\draw[help lines] (0,0) grid (4,3);\n  \\draw[->] (0,0) -- (4,0);\n  \\draw[->] (0,0) -- (0,3);\u{E001}\n\\end{tikzpicture}\n\\end{center}",
+    ),
+];
+
 /// A figure showing `file` (relative to the document), its caption the caret's place.
 pub fn figure(file: &str, label: &str, caption: &str) -> String {
     format!(
@@ -458,6 +483,15 @@ pub fn save_into_figures(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Resul
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_tikz_templates_are_whole_pictures_with_a_caret() {
+        for (name, tex) in super::TIKZ {
+            assert_eq!(tex.matches(super::MARK).count(), 1, "{name}");
+            assert!(crate::document::caret::balanced(tex), "{name}");
+            assert!(tex.contains("\\begin{tikzpicture}") && tex.contains("\\end{tikzpicture}"));
+        }
+    }
+
     use super::*;
 
     #[test]

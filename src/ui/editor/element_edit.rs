@@ -2,6 +2,7 @@
 // its fields, and setting one as an undo step, with the packages it needs.
 use super::*;
 use document::element::{self, Element, Field};
+use document::preamble;
 
 impl Doc {
     /// The element the sidebar shows: the selected block's, the caret's, else the document.
@@ -68,6 +69,35 @@ impl Doc {
         // the selection and caret stay on the element (they follow the edit)
         self.replace(change.range.clone(), &change.text, cx);
         self.add_packages(&change.packages, cx);
+        cx.notify();
+    }
+
+    /// The packages the preamble loads.
+    pub fn packages(&self) -> Vec<String> {
+        preamble::packages(&self.source)
+    }
+
+    /// Load package `name` (already loaded: nothing), as an undo step.
+    pub fn add_package(&mut self, name: &str, cx: &mut Context<Self>) {
+        if !preamble::is_package_name(name) {
+            return;
+        }
+        self.checkpoint();
+        self.typing = None;
+        self.overlay = None;
+        self.add_packages(&[name], cx);
+        cx.notify();
+    }
+
+    /// Stop loading package `name`, as an undo step.
+    pub fn remove_package(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(change) = preamble::remove_package(&self.source, name) else {
+            return;
+        };
+        self.checkpoint();
+        self.typing = None;
+        self.overlay = None;
+        self.replace(change.range, &change.text, cx);
         cx.notify();
     }
 }

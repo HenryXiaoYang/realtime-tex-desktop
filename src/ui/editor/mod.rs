@@ -9,6 +9,8 @@ mod element_edit;
 mod file_view;
 mod find_bar;
 mod formatting;
+mod formula;
+mod image_resize;
 mod inserting;
 mod menu;
 mod navigation;
@@ -16,7 +18,9 @@ mod pages;
 mod selection;
 mod session;
 mod source_box;
+mod table_panel;
 mod text_selection;
+mod tikz_points;
 mod typing;
 
 use crate::document::{self, glyphmap};
@@ -315,6 +319,17 @@ type PageBounds = (u32, Bounds<Pixels>);
 /// A right-click: page, y (sp) and the start of the block there.
 type MenuTarget = (u32, f64, Option<usize>);
 
+/// What a panel under the page edits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Panel {
+    /// A formula's TeX, with symbols to click (`range` is inside its delimiters).
+    Formula,
+    /// A table's cells, in their own inputs.
+    Table,
+    /// A block's TeX (a TikZ picture) in an editor, the picture above it.
+    Source,
+}
+
 /// The block being edited as source.
 struct Active {
     span: u64,
@@ -324,6 +339,9 @@ struct Active {
     frame: bool,
     /// New text typed into empty space on a page, until it typesets as a block of its own.
     gap: Option<Gap>,
+    /// Edited in a panel under the page, which stays typeset, rather than a box in place of
+    /// its lines.
+    panel: Option<Panel>,
     /// Where the box was last drawn (page, box in sp): it stays there while the text has no
     /// typeset lines (a lone `\`, an error). A box that is not drawn loses focus and closes.
     last: Cell<Option<BoxSpot>>,
@@ -336,8 +354,14 @@ impl Active {
             range,
             frame,
             gap,
+            panel: None,
             last: Cell::new(None),
         }
+    }
+
+    /// Edited in a panel under the page rather than a box in place of its lines.
+    fn in_panel(&self) -> bool {
+        self.panel.is_some()
     }
 }
 
@@ -391,6 +415,8 @@ pub struct Doc {
     pub status: String,
     /// A full compile is under way for an edit the live path could not take.
     pub compiling: bool,
+    /// Full compile runs still to make before the app quits (see `compile_for_quit`).
+    quit_runs: u32,
     /// rtex's events and stderr, oldest first.
     pub log: String,
     /// The last full run's errors and warnings.
@@ -428,6 +454,10 @@ pub struct Doc {
     box_cut: Cell<Option<(u32, f32)>>,
     /// What the source box was last sized with.
     box_fit: Rc<Cell<BoxFit>>,
+    /// The formula editor's symbol tab.
+    formula_tab: usize,
+    /// The table editor's cells, while it is open.
+    table: Option<table_panel::TableEdit>,
     /// Document fonts registered for the source box: file to family (None: unusable).
     doc_fonts: std::cell::RefCell<HashMap<String, Option<Font>>>,
     /// The insert line under the pointer: its page, height (sp) and where a new block goes.
@@ -473,8 +503,18 @@ pub struct Doc {
     caret_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// A drag that began on text is under way: moving the pointer selects.
     dragging: bool,
+    /// A drag of the selected figure's picture handle under way.
+    resizing: Option<image_resize::Resizing>,
+    /// A dot of the TikZ editor's canvas held, being dragged.
+    pointing: Option<tikz_points::Pointing>,
     /// The Find and Replace bar, while open.
     find: Option<find_bar::Find>,
+    /// Edits sent to rtex, and the source revision it began at (what its first reply had): the
+    /// revision of the last edit is their sum.
+    edits_sent: u64,
+    first_revision: Option<u64>,
+    /// When the last edit was made.
+    edited_at: Instant,
     /// What the last edit made: the bytes it wrote.
     last_edit: Range<usize>,
     _tasks: Vec<Task<()>>,
@@ -547,6 +587,7 @@ impl Doc {
             dirty: false,
             status: String::new(),
             compiling: false,
+            quit_runs: 0,
             log: String::new(),
             problems: vec![],
             notices: vec![],
@@ -580,6 +621,11 @@ impl Doc {
             hover_gap: None,
             doc_fonts: Default::default(),
             box_fit: Default::default(),
+            formula_tab: 0,
+            edits_sent: 0,
+            first_revision: None,
+            edited_at: Instant::now(),
+            table: None,
             menu_target: Default::default(),
             selected: None,
             undo: vec![],
@@ -600,6 +646,8 @@ impl Doc {
             blink: None,
             caret_bounds: Default::default(),
             dragging: false,
+            resizing: None,
+            pointing: None,
             find: None,
             last_edit: 0..0,
             _tasks: vec![],
@@ -646,6 +694,7 @@ impl Doc {
             Ok(mut r) => {
                 r.request_spans();
                 self.spans_pending = 1;
+                (self.edits_sent, self.first_revision) = (0, None);
                 self.rtex = Some(r);
                 self.status = "Typesetting…".into();
                 if std::mem::take(&mut self.engine_failed) {
@@ -724,6 +773,43 @@ impl Doc {
             None => {}
         }
         cx.notify();
+    }
+
+    /// The app is quitting: the file saved, then `runs` full LaTeX runs made one after another
+    /// (a failed run ends them). False when there is no engine to run them.
+    pub fn compile_for_quit(&mut self, runs: u32, cx: &mut Context<Self>) -> bool {
+        if !self.tex || self.rtex.is_none() {
+            return false;
+        }
+        self.save(cx);
+        if let Some(r) = self.rtex.as_mut() {
+            r.request_layout();
+        }
+        self.compiling = true;
+        self.quit_runs = runs;
+        self.status = "Compiling before quitting… (⌘Q again quits now)".into();
+        cx.notify();
+        true
+    }
+
+    /// Whether the runs asked for by `compile_for_quit` are not all made yet.
+    pub fn quit_compiling(&self) -> bool {
+        self.quit_runs > 0
+    }
+
+    /// A full run came back: the next of the quit's runs asked for, if there is one.
+    fn quit_run_done(&mut self) {
+        if self.quit_runs == 0 {
+            return;
+        }
+        self.quit_runs -= 1;
+        match self.rtex.as_mut() {
+            Some(r) if self.quit_runs > 0 => {
+                r.request_layout();
+                self.compiling = true;
+            }
+            _ => self.quit_runs = 0,
+        }
     }
 
     /// rtex stopped and started again (a TeX file only), on the file saved first: rtex reads
