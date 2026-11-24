@@ -1,6 +1,6 @@
 // The formula editor and Enter's line breaks on a real document: `cargo test --release
 // the_formula_editor -- --ignored --nocapture`.
-use super::{open, scratch, wait};
+use super::{calm, open, scratch, wait};
 use crate::ui::settings::AppSettings;
 use gpui_kit::{EntityInputHandler, TestAppContext};
 
@@ -202,4 +202,80 @@ fn the_tikz_points(cx: &mut TestAppContext) {
     doc.update_in(cx, |d, window, cx| d.undo(window, cx));
     cx.run_until_parked();
     assert_eq!(src(cx), before);
+}
+
+const SHAPES_DOC: &str = "\\documentclass{article}\n\\usepackage{tikz}\n\\begin{document}\nBefore.\n\n\
+\\begin{tikzpicture}\n  \\draw (0,0) rectangle (2,1);\n  \\draw (3,1) circle (0.5);\n  \\node at (1,1.5) {Title};\n\\end{tikzpicture}\n\nAfter.\n\\end{document}\n";
+
+/// Labels, shapes and their styles on the canvas: a label edited, a circle's radius dragged, a
+/// shape restyled and new ones placed; the picture typesets and the panel's edits undo.
+/// `cargo test --release the_tikz_shapes -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn the_tikz_shapes(cx: &mut TestAppContext) {
+    use crate::document::tikz::{Shape, Style};
+    let (doc, cx) = open(cx, scratch("tikz-shapes", SHAPES_DOC), "main.tex", 2);
+    let panel = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.read(|cx| doc.read(cx).input.read(cx).value().to_string())
+    };
+    let bi = cx.read(|cx| {
+        let d = doc.read(cx);
+        d.blocks
+            .iter()
+            .position(|b| d.source[b.range.clone()].contains("tikzpicture"))
+            .unwrap()
+    });
+    doc.update_in(cx, |d, window, cx| {
+        assert!(d.open_source_panel(bi, window, cx))
+    });
+    cx.run_until_parked();
+    // the label is edited in its own input
+    doc.update_in(cx, |d, window, cx| {
+        d.tikz_label(0, window, cx);
+        let input = d.tikz_ui_label_input().unwrap();
+        input.update(cx, |s, cx| {
+            s.set_value(String::new(), window, cx);
+            s.replace_text_in_range(None, "Heading", window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(panel(cx).contains("{Heading};"), "{}", panel(cx));
+    // the picked statement (the label's) drawn red, thick, with an arrow
+    doc.update_in(cx, |d, window, cx| {
+        d.tikz_style(Style::Stroke(Some("red")), window, cx);
+        d.tikz_style(Style::Width(Some("thick")), window, cx);
+        d.tikz_style(Style::Arrow, window, cx);
+    });
+    assert!(
+        panel(cx).contains("\\node [draw=red, thick, ->] at (1,1.5)"),
+        "{}",
+        panel(cx)
+    );
+    // the circle's radius pulled out: 0.5 to 1.0 is half a unit, `scale` px a unit
+    doc.update_in(cx, |d, window, cx| {
+        d.tikz_pick_circle(0, 600.0, cx);
+        d.radius_to(1000.0, window, cx);
+    });
+    assert!(panel(cx).contains("circle ("), "{}", panel(cx));
+    assert!(!panel(cx).contains("circle (0.5)"), "{}", panel(cx));
+    // shapes placed
+    doc.update_in(cx, |d, window, cx| {
+        d.tikz_add(Shape::Rectangle, 4.0, 2.0, window, cx);
+        d.tikz_add(Shape::Text, 5.0, 2.0, window, cx);
+        d.tikz_style(Style::Fill(Some("yellow!40")), window, cx);
+    });
+    let p = panel(cx);
+    assert!(p.contains("\\draw (4,2) rectangle (5,2.5);"), "{p}");
+    assert!(
+        p.contains("\\node [fill=yellow!40] at (5,2) {Text};"),
+        "{p}"
+    );
+    // closed, it typesets without a LaTeX error
+    doc.update_in(cx, |d, window, cx| {
+        d.on_box_key(&gpui_kit::Keystroke::parse("escape").unwrap(), window, cx)
+    });
+    calm(cx, &doc);
+    let status = cx.read(|cx| doc.read(cx).status.clone());
+    assert!(!status.contains("LaTeX"), "{status}");
+    assert!(cx.read(|cx| doc.read(cx).source.contains("{Heading}")));
 }

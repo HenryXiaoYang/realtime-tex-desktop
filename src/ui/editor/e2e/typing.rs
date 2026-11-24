@@ -981,9 +981,9 @@ fn a_main_of_inputs_names_them(cx: &mut TestAppContext) {
     assert_eq!(named, ["part.tex"], "the missing gone.tex is not offered");
 }
 
-/// Alignment and a font change what is typeset, not only the source: a centred line moves, a
-/// sans word is not the width it was. `cargo test --release format_changes_the_pages -- --ignored
-/// --nocapture`.
+/// Alignment and a font change what is typeset, not only the source: a centred line starts
+/// further across, a sans word is in another font; over text that has its own, the new one wins.
+/// `cargo test --release format_changes_the_pages -- --ignored --nocapture`.
 #[gpui_kit::test]
 #[ignore]
 fn format_changes_the_pages(cx: &mut TestAppContext) {
@@ -991,7 +991,8 @@ fn format_changes_the_pages(cx: &mut TestAppContext) {
     use crate::document::format::{Align, Font};
     let tex = "\\documentclass{article}\n\\begin{document}\nFirst paragraph of plain text that is long enough to fill a line of the page and then wrap onto a second one.\n\nSecond short one.\n\nThird one, to set in another font.\n\\end{document}\n";
     let (doc, cx) = open(cx, scratch("format-pages", tex), "main.tex", 2);
-    let rows = |cx: &mut gpui_kit::VisualTestContext, start: &str| {
+    // the first glyph of the block holding `start`: its font and where it starts across the page
+    let first = |cx: &mut gpui_kit::VisualTestContext, start: &str| {
         cx.read(|cx| {
             let d = doc.read(cx);
             let b = d
@@ -999,25 +1000,9 @@ fn format_changes_the_pages(cx: &mut TestAppContext) {
                 .iter()
                 .find(|b| d.source[b.range.clone()].contains(start))
                 .unwrap();
-            b.rows
-                .iter()
-                .map(|r| {
-                    let l = &r.row.dl.lines[r.row.line];
-                    println!(
-                        "  gsign {} x {} w {} items {}",
-                        l.gsign,
-                        l.x,
-                        l.w,
-                        l.items
-                            .iter()
-                            .take(3)
-                            .map(|v| v.to_string())
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    );
-                    r.bbox
-                })
-                .collect::<Vec<_>>()
+            let l = &b.rows[0].row.dl.lines[b.rows[0].row.line];
+            let g = l.items[0].as_array().unwrap();
+            (g[1].as_i64().unwrap(), g[4].as_f64().unwrap())
         })
     };
     let at = |cx: &mut gpui_kit::VisualTestContext, start: &str| {
@@ -1025,85 +1010,48 @@ fn format_changes_the_pages(cx: &mut TestAppContext) {
             let d = doc.read(cx);
             d.blocks
                 .iter()
-                .find(|b| d.source[b.range.clone()].starts_with(start))
+                .find(|b| d.source[b.range.clone()].contains(start))
                 .unwrap()
                 .range
                 .start
                 + 2
         })
     };
-    let shot = |cx: &mut gpui_kit::VisualTestContext, name: &str| {
-        cx.read(|cx| {
-            let d = doc.read(cx);
-            let dl = d.preview.pages.get(&1).unwrap().clone();
-            let (own, live, _) = d.preview.page_parts(1);
-            let job = crate::render::Job {
-                rows: own.into_iter().chain(live).collect(),
-                other: Some(dl.clone()),
-                region: [0.0, 0.0, dl.page_width.unwrap(), dl.page_height.unwrap()],
-                scale: 1.5 / 65781.76,
-                pdf: None,
-                clear: vec![],
-                dark: None,
-            };
-            let (w, h, mut px) = crate::render::render(
-                &mut d.resources.lock().unwrap_or_else(|e| e.into_inner()),
-                &job,
-            );
-            px.chunks_mut(4).for_each(|c| c.swap(0, 2));
-            image::RgbaImage::from_raw(w, h, px)
-                .unwrap()
-                .save(format!("/tmp/rtd-fmt-{name}.png"))
-                .unwrap();
-        })
-    };
-    shot(cx, "0-before");
-    let before = rows(cx, "Second short");
+    let (_, x0) = first(cx, "Second short");
     let off = at(cx, "Second short");
     doc.update_in(cx, |d, window, cx| {
         d.set_caret(off, cx);
         d.format(FormatOp::Align(Align::Center), window, cx);
     });
     calm(cx, &doc);
-    let src = cx.read(|cx| doc.read(cx).source.clone());
-    println!("{src}");
-    shot(cx, "1-centre");
-    let after = rows(cx, "begin{center}");
-    println!("centre: {before:?} -> {after:?}");
-    let before = rows(cx, "to set in another");
-    let off = at(cx, "Third one");
+    let (_, x1) = first(cx, "begin{center}");
+    assert!(
+        x1 - x0 > 2_000_000.0,
+        "the centred line starts further across: {x0} -> {x1}"
+    );
+    let (f0, _) = first(cx, "to set in another");
+    let off = at(cx, "to set in another");
     doc.update_in(cx, |d, window, cx| {
         d.set_caret(off, cx);
         d.format(FormatOp::Font(Font::Sans), window, cx);
     });
     calm(cx, &doc);
-    let src = cx.read(|cx| doc.read(cx).source.clone());
-    println!("{src}");
-    shot(cx, "2-sans");
-    let after = rows(cx, "to set in another");
-    println!("sans: {before:?} -> {after:?}");
-    // a selection across paragraphs
+    let (f1, _) = first(cx, "to set in another");
+    assert_ne!(f0, f1, "the word is in another font");
+    // the whole text, set right then mono: what each paragraph had of its own gives way
     doc.update_in(cx, |d, window, cx| {
         d.select_all_text(cx);
-        println!(
-            "selection {:?} caret {:?}",
-            d.selection_range(),
-            d.caret.as_ref().map(|c| (c.off, c.anchor))
-        );
         d.format(FormatOp::Font(Font::Mono), window, cx);
-    });
-    calm(cx, &doc);
-    println!("{}", cx.read(|cx| doc.read(cx).source.clone()));
-    println!("status: {}", cx.read(|cx| doc.read(cx).status.clone()));
-    shot(cx, "3-all-mono");
-    doc.update_in(cx, |d, window, cx| {
         d.select_all_text(cx);
         d.format(FormatOp::Align(Align::Right), window, cx);
     });
     calm(cx, &doc);
-    println!("{}", cx.read(|cx| doc.read(cx).source.clone()));
-    println!("status: {}", cx.read(|cx| doc.read(cx).status.clone()));
-    shot(cx, "4-all-right");
+    let src = cx.read(|cx| doc.read(cx).source.clone());
+    assert!(
+        !src.contains("\\begin{center}") && !src.contains("\\textsf"),
+        "{src}"
+    );
+    assert!(src.contains("\\begin{flushright}"), "{src}");
     // whole blocks selected (no caret): the ribbon acts on them too
     doc.update_in(cx, |d, window, cx| {
         d.set_selection(0, 0, cx);
@@ -1115,9 +1063,8 @@ fn format_changes_the_pages(cx: &mut TestAppContext) {
     });
     calm(cx, &doc);
     let src = cx.read(|cx| doc.read(cx).source.clone());
-    assert!(src.contains("\\begin{flushleft}"), "{src}");
     assert!(
-        !src.contains("\\begin{flushright}") && !src.contains("\\begin{center}"),
+        src.contains("\\begin{flushleft}") && !src.contains("\\begin{flushright}"),
         "{src}"
     );
 }

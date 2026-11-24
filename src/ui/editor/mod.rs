@@ -507,6 +507,7 @@ pub struct Doc {
     resizing: Option<image_resize::Resizing>,
     /// A dot of the TikZ editor's canvas held, being dragged.
     pointing: Option<tikz_points::Pointing>,
+    tikz_ui: tikz_points::Ui,
     /// The Find and Replace bar, while open.
     find: Option<find_bar::Find>,
     /// Edits sent to rtex, and the source revision it began at (what its first reply had): the
@@ -648,6 +649,7 @@ impl Doc {
             dragging: false,
             resizing: None,
             pointing: None,
+            tikz_ui: Default::default(),
             find: None,
             last_edit: 0..0,
             _tasks: vec![],

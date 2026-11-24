@@ -332,6 +332,7 @@ impl Doc {
         self.active = None;
         self.table = None;
         self.pointing = None;
+        self.tikz_ui = Default::default();
         // a hidden box keeps focus otherwise and takes ⌘Z; the pages take it (and its actions)
         if self.input.focus_handle(cx).is_focused(window) {
             self.focus.focus(window, cx);
