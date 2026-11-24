@@ -226,6 +226,17 @@ fn wrap(
     open: &str,
     close: &str,
 ) -> Option<(Range<usize>, String, Range<usize>)> {
+    wrap_with(src, sel, open, close, |s| s.to_string())
+}
+
+/// `wrap`, with `inside` made of each wrapped piece first.
+fn wrap_with(
+    src: &str,
+    sel: Range<usize>,
+    open: &str,
+    close: &str,
+    inside: impl Fn(&str) -> String,
+) -> Option<(Range<usize>, String, Range<usize>)> {
     let segs = segments(src, sel.clone());
     let (first, last) = (segs.first()?.start, segs.last()?.end);
     let mut text = String::new();
@@ -233,7 +244,7 @@ fn wrap(
     for r in segs {
         text.push_str(&src[at..r.start]);
         text.push_str(open);
-        text.push_str(&src[r.clone()]);
+        text.push_str(&inside(&src[r.clone()]));
         text.push_str(close);
         at = r.end;
     }
@@ -453,13 +464,56 @@ pub fn set_font(src: &str, block: Range<usize>, sel: Range<usize>, font: &Font) 
             packages: vec![],
         });
     }
-    let (range, text, select) = wrap(src, sel, &format!("\\{cmd}{{"), "}")?;
+    // a family set over text that has one of its own replaces it, as in Word
+    let (range, text, select) = wrap_with(src, sel, &format!("\\{cmd}{{"), "}", |t| {
+        unwrap_commands(t, &["textrm", "textsf", "texttt"])
+    })?;
     Some(Fmt {
         range,
         text,
         select,
         packages: vec![],
     })
+}
+
+/// `text` with the commands `names` (`\textsf{x}`) replaced by their argument.
+fn unwrap_commands(text: &str, names: &[&str]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    'scan: while i < text.len() {
+        let rest = &text[i..];
+        for n in names {
+            let head = format!("\\{n}{{");
+            if rest.starts_with(&head) {
+                // the matching brace
+                let (mut depth, mut j) = (1, i + head.len());
+                let bytes = text.as_bytes();
+                while j < text.len() {
+                    match bytes[j] {
+                        b'\\' => j += 1,
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth == 0 {
+                    out.push_str(&unwrap_commands(&text[i + head.len()..j], names));
+                    i = j + 1;
+                    continue 'scan;
+                }
+            }
+        }
+        let c = rest.chars().next().unwrap();
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
 }
 
 /// The colour taken off the selection (Automatic): the `\\textcolor` around it unwrapped.
@@ -671,9 +725,11 @@ pub fn align(src: &str, blocks: Range<usize>, a: Align) -> Option<Fmt> {
     // the blocks are an alignment environment's whole body, or the environment itself
     let around = alignment_env(src, blocks.clone());
     if let Some((outer, _, inner)) = around {
+        // an alignment set inside it would still win
+        let body = strip_alignment(&src[inner.clone()]);
         let text = match env {
-            Some(e) => format!("\\begin{{{e}}}{}\\end{{{e}}}", &src[inner.clone()]),
-            None => src[inner.clone()].trim().to_string(),
+            Some(e) => format!("\\begin{{{e}}}{body}\\end{{{e}}}"),
+            None => body.trim().to_string(),
         };
         let select = outer.start..outer.start + text.len();
         return Some(Fmt {
@@ -684,7 +740,10 @@ pub fn align(src: &str, blocks: Range<usize>, a: Align) -> Option<Fmt> {
         });
     }
     let e = env?;
-    let text = format!("\\begin{{{e}}}\n{}\n\\end{{{e}}}", &src[blocks.clone()]);
+    let text = format!(
+        "\\begin{{{e}}}\n{}\n\\end{{{e}}}",
+        strip_alignment(&src[blocks.clone()]).trim()
+    );
     let select = blocks.start..blocks.start + text.len();
     Some(Fmt {
         range: blocks,
@@ -692,6 +751,25 @@ pub fn align(src: &str, blocks: Range<usize>, a: Align) -> Option<Fmt> {
         select,
         packages: vec![],
     })
+}
+
+/// `text` without alignment of its own: the environments and declarations that would win over
+/// one set around it.
+fn strip_alignment(text: &str) -> String {
+    let mut t = text.to_string();
+    for env in ALIGN_ENVS {
+        for tag in [format!("\\begin{{{env}}}"), format!("\\end{{{env}}}")] {
+            t = t.replace(&tag, "");
+        }
+    }
+    for decl in ["\\centering", "\\raggedright", "\\raggedleft"] {
+        t = t.replace(decl, "");
+    }
+    // the blank lines the removed tags leave
+    while t.contains("\n\n\n") {
+        t = t.replace("\n\n\n", "\n\n");
+    }
+    t
 }
 
 /// The alignment environment `blocks` are: itself (when they begin with it) or its body: the
@@ -1033,6 +1111,27 @@ mod tests {
         assert_eq!(r.text, "\\begin{flushright}\nSome text.\n\\end{flushright}");
         let j = align(&centred, blk, Align::Justify).unwrap();
         assert_eq!(j.text, "Some text.");
+    }
+
+    #[test]
+    fn alignment_over_text_that_has_its_own_replaces_it() {
+        let src = "One.\n\n\\begin{center}\nTwo.\n\\end{center}\n\nThree. \\centering";
+        let r = align(src, 0..src.len(), Align::Right).unwrap();
+        assert_eq!(
+            r.text,
+            "\\begin{flushright}\nOne.\n\nTwo.\n\nThree.\n\\end{flushright}"
+        );
+        assert!(!r.text.contains("center") && !r.text.contains("centering"));
+    }
+
+    #[test]
+    fn a_family_over_text_that_has_one_replaces_it() {
+        let src = "Plain \\textsf{sans \\emph{in {braces}}} and \\texttt{mono} end";
+        let f = set_font(src, 0..src.len(), 0..src.len(), &Font::Serif).unwrap();
+        assert_eq!(
+            f.text,
+            "\\textrm{Plain sans \\emph{in {braces}} and mono end}"
+        );
     }
 
     #[test]

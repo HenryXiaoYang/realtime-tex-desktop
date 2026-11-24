@@ -73,3 +73,80 @@ fn the_image_handle(cx: &mut TestAppContext) {
     doc.update_in(cx, |d, window, cx| d.undo(window, cx));
     assert_eq!(src(cx), DOC);
 }
+
+/// The sides and the other corners scale the picture too: the pointer on the picture's left edge,
+/// its top edge or its top left corner asks for a width, and the shape is kept.
+#[gpui_kit::test]
+#[ignore]
+fn the_image_grips(cx: &mut TestAppContext) {
+    use super::super::image_resize::{Grip, ImageBox, Resizing};
+    let (doc, cx) = open(cx, scratch("image-grips", DOC), "main.tex", 2);
+    let src = |cx: &mut gpui_kit::VisualTestContext| cx.read(|cx| doc.read(cx).source.clone());
+    // the figure selected as it stands now (the float may sit elsewhere after an undo), `ask`
+    // working out where the pointer goes from its box, then the drag and its release
+    let drag = |cx: &mut gpui_kit::VisualTestContext,
+                grip: Grip,
+                ask: &dyn Fn(&ImageBox) -> (f64, f64)| {
+        let off = cx.read(|cx| {
+            let d = doc.read(cx);
+            d.blocks
+                .iter()
+                .position(|b| d.source[b.range.clone()].contains("figure"))
+                .unwrap()
+        });
+        doc.update(cx, |d, cx| d.set_selection(off, off, cx));
+        let img = cx.read(|cx| doc.read(cx).image_box()).unwrap();
+        let (x, y) = ask(&img);
+        let (origin, zoom) = cx.read(|cx| {
+            let d = doc.read(cx);
+            let bounds = d.page_bounds.take();
+            let o = bounds
+                .iter()
+                .find(|(n, _)| *n == img.page)
+                .map(|(_, b)| b.origin)
+                .unwrap();
+            d.page_bounds.set(bounds);
+            (o, d.zoom)
+        });
+        let at = |v: f64| px(crate::ui::editor::page_px(v, zoom));
+        let pos = point(origin.x + at(x), origin.y + at(y));
+        doc.update(cx, |d, cx| {
+            d.resizing = Some(Resizing::held(img.clone(), grip));
+            d.resize_to(img.page, pos, cx);
+            d.resize_end(cx);
+        });
+    };
+    let undo = |cx: &mut gpui_kit::VisualTestContext| {
+        doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+        calm(cx, &doc);
+    };
+    // the left edge, pulled out to where an 80% picture's would be
+    drag(cx, Grip::new(-1, 0), &|i| {
+        (i.at(80.0)[0], (i.rect[1] + i.rect[3]) / 2.0)
+    });
+    assert!(
+        src(cx).contains("width=0.8\\linewidth"),
+        "left: {}",
+        src(cx)
+    );
+    undo(cx);
+    // the top edge, the picture's height asked for: its width follows
+    drag(cx, Grip::new(0, -1), &|i| {
+        let w = i.at(80.0);
+        ((i.rect[0] + i.rect[2]) / 2.0, i.rect[3] - (w[3] - w[1]))
+    });
+    assert!(src(cx).contains("width=0.8\\linewidth"), "top: {}", src(cx));
+    undo(cx);
+    // the top left corner, the way a 30% picture's would be
+    drag(cx, Grip::new(-1, -1), &|i| {
+        let w = i.at(30.0);
+        (w[0], i.rect[3] - (w[3] - w[1]))
+    });
+    assert!(
+        src(cx).contains("width=0.3\\linewidth"),
+        "corner: {}",
+        src(cx)
+    );
+    undo(cx);
+    assert_eq!(src(cx), DOC);
+}

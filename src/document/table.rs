@@ -357,23 +357,121 @@ pub enum Borders {
 }
 
 impl Table {
-    /// Column `col`'s alignment: `l`, `c` or `r` (a `p{3cm}` column has none).
+    /// Column `col`'s alignment: `l`, `c` or `r` (a plain `p{3cm}` column has none; one set in
+    /// `>{\\centering\\arraybackslash}p{3cm}` has it).
     pub fn align(&self, src: &str, col: usize) -> Option<char> {
-        let t = spec_tokens(&src[self.spec.clone()]).get(col)?.clone();
+        let (prefix, t) = spec_cols(&src[self.spec.clone()]).into_iter().nth(col)?;
         let text = &src[self.spec.start + t.start..self.spec.start + t.end];
-        text.chars()
-            .next()
-            .filter(|c| text.len() == 1 && "lcr".contains(*c))
+        if text.len() == 1 {
+            return text.chars().next().filter(|c| "lcr".contains(*c));
+        }
+        let prefix = prefix?;
+        prefix_align(&src[self.spec.start + prefix.start..self.spec.start + prefix.end])
     }
 
     /// Column `col` made `l`, `c` or `r`; none for a column that is not one of those.
     pub fn set_align(&self, src: &str, col: usize, to: char) -> Option<Change> {
-        self.align(src, col)?;
-        let t = spec_tokens(&src[self.spec.clone()]).get(col)?.clone();
+        let (prefix, t) = spec_cols(&src[self.spec.clone()]).into_iter().nth(col)?;
+        let at = |r: &Range<usize>| self.spec.start + r.start..self.spec.start + r.end;
+        let text = &src[at(&t)];
+        if text.len() == 1 {
+            self.align(src, col)?;
+            return Some(Change {
+                range: at(&t),
+                text: to.to_string(),
+            });
+        }
+        // a fixed width keeps it: only the prefix changes
+        if !text.starts_with(['p', 'm', 'b']) {
+            return None;
+        }
+        let start = prefix.as_ref().map_or(t.start, |p| p.start);
         Some(Change {
-            range: self.spec.start + t.start..self.spec.start + t.end,
-            text: to.to_string(),
+            range: self.spec.start + start..self.spec.start + t.start,
+            text: align_prefix(to).to_string(),
         })
+    }
+
+    /// Column `col`'s fixed width in points, when it has one in a unit TeX counts in.
+    pub fn col_width(&self, src: &str, col: usize) -> Option<f64> {
+        let (_, t) = spec_cols(&src[self.spec.clone()]).into_iter().nth(col)?;
+        let text = &src[self.spec.start + t.start..self.spec.start + t.end];
+        if !text.starts_with(['p', 'm', 'b']) || text.len() < 3 {
+            return None;
+        }
+        length_pt(&text[2..text.len() - 1])
+    }
+
+    /// Column `col` made `pt` wide (a fixed width keeps its alignment); the packages it needs.
+    pub fn set_col_width(
+        &self,
+        src: &str,
+        col: usize,
+        pt: f64,
+    ) -> Option<(Change, Vec<&'static str>)> {
+        let (prefix, t) = spec_cols(&src[self.spec.clone()]).into_iter().nth(col)?;
+        let abs = |r: &Range<usize>| self.spec.start + r.start..self.spec.start + r.end;
+        let text = &src[abs(&t)];
+        let w = show_pt(pt.max(10.0));
+        if text.starts_with(['p', 'm', 'b']) && text.len() >= 3 {
+            return Some((
+                Change {
+                    range: abs(&t),
+                    text: format!("{}{{{w}}}", &text[..1]),
+                },
+                vec![],
+            ));
+        }
+        let letter = text.chars().next().filter(|c| "lcr".contains(*c))?;
+        let from = prefix.as_ref().map_or(t.start, |p| p.start);
+        Some((
+            Change {
+                range: self.spec.start + from..self.spec.start + t.end,
+                text: format!("{}p{{{w}}}", align_prefix(letter)),
+            },
+            vec!["array"],
+        ))
+    }
+
+    /// Column `col` back to the width its text asks for, its alignment kept.
+    pub fn auto_col(&self, src: &str, col: usize) -> Option<Change> {
+        let letter = self.align(src, col)?;
+        let (prefix, t) = spec_cols(&src[self.spec.clone()]).into_iter().nth(col)?;
+        if src[self.spec.start + t.start..self.spec.start + t.end].len() == 1 {
+            return None;
+        }
+        let from = prefix.as_ref().map_or(t.start, |p| p.start);
+        Some(Change {
+            range: self.spec.start + from..self.spec.start + t.end,
+            text: letter.to_string(),
+        })
+    }
+
+    /// Room kept under row `row` beyond its text, in points (`\\[6pt]`).
+    pub fn row_space(&self, src: &str, row: usize) -> f64 {
+        let Some(e) = self.rows.get(row).and_then(|r| r.end.clone()) else {
+            return 0.0;
+        };
+        let t = &src[e];
+        t.find('[')
+            .and_then(|i| length_pt(t[i + 1..].trim_end_matches(']')))
+            .unwrap_or(0.0)
+    }
+
+    /// Row `row` given `pt` of room under it; none for the last row when it has no `\\`.
+    pub fn set_row_space(&self, src: &str, row: usize, pt: f64) -> Option<Change> {
+        let e = self.rows.get(row)?.end.clone()?;
+        let star = if src[e.clone()].starts_with("\\\\*") {
+            "*"
+        } else {
+            ""
+        };
+        let text = if pt < 0.5 {
+            format!("\\\\{star}")
+        } else {
+            format!("\\\\{star}[{}]", show_pt(pt))
+        };
+        Some(Change { range: e, text })
     }
 
     /// The ruling the table has now, as near as the four styles tell it.
@@ -501,6 +599,81 @@ impl Table {
     }
 }
 
+/// `cell` with its whole text in `\\cmd{…}` (a bold or italic cell), or out of it again.
+pub fn toggle_cell(cell: &str, cmd: &str) -> String {
+    let (shade, text) = split_shade(cell);
+    let open = format!("\\{cmd}{{");
+    let text = text.trim();
+    let inner = text
+        .strip_prefix(&open)
+        .and_then(|t| t.strip_suffix('}'))
+        .filter(|i| crate::document::caret::balanced(i));
+    let body = match inner {
+        Some(i) => i.to_string(),
+        None => format!("{open}{text}}}"),
+    };
+    format!("{shade}{body}")
+}
+
+/// `cell` shaded `color` (`yellow!30`), or not shaded with none.
+pub fn shade_cell(cell: &str, color: Option<&str>) -> String {
+    let (_, text) = split_shade(cell);
+    match color {
+        Some(c) => format!("\\cellcolor{{{c}}}{}", text.trim_start()),
+        None => text.trim_start().to_string(),
+    }
+}
+
+/// `cell`'s text in `\\textcolor{color}{…}`, or plain again with none.
+pub fn colour_cell(cell: &str, color: Option<&str>) -> String {
+    let (shade, text) = split_shade(cell);
+    let text = text.trim();
+    let plain = text
+        .strip_prefix("\\textcolor{")
+        .and_then(|t| t.split_once("}{").map(|(_, r)| r))
+        .and_then(|r| r.strip_suffix('}'))
+        .filter(|i| crate::document::caret::balanced(i))
+        .unwrap_or(text);
+    match color {
+        Some(c) => format!("{shade}\\textcolor{{{c}}}{{{plain}}}"),
+        None => format!("{shade}{plain}"),
+    }
+}
+
+/// A cell's `\\cellcolor{…}` (with the space after it) and the rest.
+fn split_shade(cell: &str) -> (&str, &str) {
+    if let Some(rest) = cell.strip_prefix("\\cellcolor{")
+        && let Some(close) = rest.find('}')
+    {
+        let at = "\\cellcolor{".len() + close + 1;
+        let tail = &cell[at..];
+        return (
+            &cell[..at + (tail.len() - tail.trim_start().len())],
+            tail.trim_start(),
+        );
+    }
+    ("", cell)
+}
+
+/// What a cell is shaded, and whether its text is bold, italic or coloured.
+pub fn cell_look(cell: &str) -> (Option<String>, bool, bool, Option<String>) {
+    let shade = cell
+        .strip_prefix("\\cellcolor{")
+        .and_then(|r| r.split_once('}'))
+        .map(|(c, _)| c.to_string());
+    let (_, text) = split_shade(cell);
+    let text = text.trim();
+    let is = |cmd: &str| {
+        text.strip_prefix(&format!("\\{cmd}{{"))
+            .is_some_and(|t| t.ends_with('}'))
+    };
+    let colour = text
+        .strip_prefix("\\textcolor{")
+        .and_then(|r| r.split_once('}'))
+        .map(|(c, _)| c.to_string());
+    (shade, is("textbf"), is("textit"), colour)
+}
+
 /// `x` of `\textbf{x}` when the whole cell is that.
 fn bold_inner(cell: &str) -> Option<&str> {
     let inner = cell.strip_prefix("\\textbf{")?.strip_suffix('}')?;
@@ -540,7 +713,13 @@ fn ruled_spec(spec: &str, bars: bool) -> String {
 
 /// The column letters of a spec (`|l|p{3cm}|c|`: three), each with its arguments.
 fn spec_tokens(spec: &str) -> Vec<Range<usize>> {
+    spec_cols(spec).into_iter().map(|(_, t)| t).collect()
+}
+
+/// Each column of a spec: the `>{…}` before it, if it has one, and its letter with arguments.
+fn spec_cols(spec: &str) -> Vec<(Option<Range<usize>>, Range<usize>)> {
     let mut out = vec![];
+    let mut prefix = None;
     let mut i = 0;
     while i < spec.len() {
         let c = spec[i..].chars().next().unwrap_or(' ');
@@ -555,13 +734,62 @@ fn spec_tokens(spec: &str) -> Vec<Range<usize>> {
         {
             end = close + 1;
         }
-        // `@{…}` and `!{…}` are not columns
-        if !matches!(c, '@' | '!' | '<' | '>') {
-            out.push(i..end);
+        match c {
+            '>' => prefix = Some(i..end),
+            // `@{…}` and `!{…}` are not columns
+            '@' | '!' | '<' => {}
+            _ => out.push((prefix.take(), i..end)),
         }
         i = end;
     }
     out
+}
+
+/// The alignment a `>{…}` prefix sets: `l`, `c` or `r`.
+fn prefix_align(prefix: &str) -> Option<char> {
+    [
+        ("\\centering", 'c'),
+        ("\\raggedleft", 'r'),
+        ("\\raggedright", 'l'),
+    ]
+    .into_iter()
+    .find(|(cmd, _)| prefix.contains(cmd))
+    .map(|(_, a)| a)
+}
+
+/// The `>{…}` that sets alignment `a` (and ends the cell's lines properly).
+fn align_prefix(a: char) -> &'static str {
+    match a {
+        'c' => ">{\\centering\\arraybackslash}",
+        'r' => ">{\\raggedleft\\arraybackslash}",
+        _ => ">{\\raggedright\\arraybackslash}",
+    }
+}
+
+/// A TeX length in points: `3cm`, `72pt`, `1.5 in`.
+fn length_pt(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let split = s.find(|c: char| c.is_alphabetic())?;
+    let (num, unit) = s.split_at(split);
+    let k = match unit.trim() {
+        "pt" => 1.0,
+        "bp" => 1.00375,
+        "cm" => 28.452_756,
+        "mm" => 2.845_275_6,
+        "in" => 72.27,
+        _ => return None,
+    };
+    Some(num.trim().parse::<f64>().ok()? * k)
+}
+
+/// A length in points as TeX writes it: no zero decimals.
+fn show_pt(v: f64) -> String {
+    let v = (v * 10.0).round() / 10.0;
+    if v.fract() == 0.0 {
+        format!("{v:.0}pt")
+    } else {
+        format!("{v:.1}pt")
+    }
 }
 
 fn line_start(src: &str, at: usize) -> usize {
@@ -694,9 +922,11 @@ mod tests {
         );
         let r = apply(s, vec![t.set_align(s, 2, 'r').unwrap()]);
         assert!(r.contains("{|l|p{3cm}|r|}"), "{r}");
+        // a fixed width keeps it, the alignment goes in front of it
+        let c = apply(s, vec![t.set_align(s, 1, 'c').unwrap()]);
         assert!(
-            t.set_align(s, 1, 'c').is_none(),
-            "a p column keeps its width"
+            c.contains("{|l|>{\\centering\\arraybackslash}p{3cm}|c|}"),
+            "{c}"
         );
     }
 
@@ -761,5 +991,67 @@ mod tests {
         let s = "|l|p{3cm}|@{}c|";
         let got: Vec<&str> = spec_tokens(s).into_iter().map(|r| &s[r]).collect();
         assert_eq!(got, vec!["l", "p{3cm}", "c"]);
+    }
+
+    #[test]
+    fn a_column_gets_a_width_and_keeps_its_alignment() {
+        let s = "\\begin{tabular}{|l|c|}\nA & B \\\\\n\\end{tabular}";
+        let t = table(s);
+        let (c, pk) = t.set_col_width(s, 1, 72.0).unwrap();
+        assert_eq!(pk, vec!["array"]);
+        let w = apply(s, vec![c]);
+        assert!(
+            w.contains("{|l|>{\\centering\\arraybackslash}p{72pt}|}"),
+            "{w}"
+        );
+        let t = table(&w);
+        assert_eq!(t.col_width(&w, 1), Some(72.0));
+        assert_eq!(t.align(&w, 1), Some('c'));
+        // narrower, then right aligned, then back to automatic
+        let (c, pk) = t.set_col_width(&w, 1, 40.5).unwrap();
+        assert!(pk.is_empty());
+        let w = apply(&w, vec![c]);
+        assert!(w.contains("p{40.5pt}"), "{w}");
+        let t = table(&w);
+        let w = apply(&w, vec![t.set_align(&w, 1, 'r').unwrap()]);
+        assert!(
+            w.contains(">{\\raggedleft\\arraybackslash}p{40.5pt}"),
+            "{w}"
+        );
+        let t = table(&w);
+        let w = apply(&w, vec![t.auto_col(&w, 1).unwrap()]);
+        assert!(w.contains("{|l|r|}"), "{w}");
+    }
+
+    #[test]
+    fn rows_keep_room_under_them() {
+        let t = table(T);
+        assert_eq!(t.row_space(T, 0), 0.0);
+        let w = apply(T, vec![t.set_row_space(T, 0, 6.0).unwrap()]);
+        assert!(w.contains("A & B \\\\[6pt]"), "{w}");
+        let t = table(&w);
+        assert_eq!(t.row_space(&w, 0), 6.0);
+        let w = apply(&w, vec![t.set_row_space(&w, 0, 0.0).unwrap()]);
+        assert_eq!(w, T);
+        // the last row has no `\\` to carry it
+        assert!(table(T).set_row_space(T, 5, 3.0).is_none());
+    }
+
+    #[test]
+    fn cells_are_bold_shaded_and_coloured_in_any_order() {
+        let c = toggle_cell("Total", "textbf");
+        assert_eq!(c, "\\textbf{Total}");
+        let c = shade_cell(&c, Some("yellow!30"));
+        assert_eq!(c, "\\cellcolor{yellow!30}\\textbf{Total}");
+        let c = colour_cell(&c, Some("red"));
+        assert_eq!(c, "\\cellcolor{yellow!30}\\textcolor{red}{\\textbf{Total}}");
+        assert_eq!(
+            cell_look(&c),
+            (Some("yellow!30".into()), false, false, Some("red".into()))
+        );
+        let c = colour_cell(&c, None);
+        let c = toggle_cell(&c, "textbf");
+        assert_eq!(c, "\\cellcolor{yellow!30}Total");
+        assert_eq!(shade_cell(&c, None), "Total");
     }
 }

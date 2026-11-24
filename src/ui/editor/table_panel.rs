@@ -11,8 +11,38 @@ pub(super) struct TableEdit {
     cells: Vec<Vec<Entity<InputState>>>,
     /// The cell last known to have focus.
     at: (usize, usize),
+    /// A column's or row's edge held, to size it.
+    drag: Option<Drag>,
     _subs: Vec<Subscription>,
 }
+
+/// An edge of the grid being dragged: what it sizes, where the pointer was, and the size then.
+#[derive(Clone, Copy)]
+enum Drag {
+    Col { col: usize, from: f32, width: f32 },
+    Row { row: usize, from: f32, space: f32 },
+}
+
+/// How a column is drawn when its width is not fixed, and the least and most it is drawn.
+const COL_PX: f32 = 112.0;
+const COL_LEAST: f32 = 40.0;
+const COL_MOST: f32 = 360.0;
+/// The most room under a row that is drawn.
+const ROW_MOST: f32 = 48.0;
+
+/// Colours the cell tools offer: shading and text.
+const SHADES: &[(&str, &str, u32)] = &[
+    ("yellow!35", "Yellow", 0xfde68a),
+    ("green!25", "Green", 0xbbf7d0),
+    ("cyan!25", "Blue", 0xbae6fd),
+    ("red!20", "Red", 0xfecaca),
+    ("gray!25", "Grey", 0xd4d4d8),
+];
+const INKS: &[(&str, &str, u32)] = &[
+    ("red", "Red", 0xdc2626),
+    ("blue", "Blue", 0x2563eb),
+    ("green!50!black", "Green", 0x15803d),
+];
 
 impl TableEdit {
     #[cfg(test)]
@@ -133,6 +163,7 @@ impl Doc {
         self.table = Some(TableEdit {
             cells,
             at: (r, c),
+            drag: None,
             _subs: subs,
         });
         cx.notify();
@@ -173,7 +204,12 @@ impl Doc {
         hit.or(Some(t.at))
     }
 
-    fn focus_cell(&mut self, at: (usize, usize), window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn focus_cell(
+        &mut self,
+        at: (usize, usize),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(t) = self.table.as_mut() else {
             return;
         };
@@ -255,6 +291,130 @@ impl Doc {
         self.replace(0..self.source.len(), &new, cx);
     }
 
+    /// Pixels the page draws a point as.
+    fn px_per_pt(&self) -> f32 {
+        page_px(65536.0, self.zoom)
+    }
+
+    /// An edge taken at pointer position `at` (`col` or `row` sized): one undo step for the drag.
+    pub(super) fn table_drag_start(
+        &mut self,
+        col: Option<usize>,
+        row: Option<usize>,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(t) = self.live_table() else {
+            return;
+        };
+        let ppp = self.px_per_pt();
+        let drag = match (col, row) {
+            (Some(col), _) => {
+                let width = t
+                    .col_width(&self.source, col)
+                    .map_or(COL_PX, |w| (w as f32 * ppp).clamp(COL_LEAST, COL_MOST));
+                Drag::Col {
+                    col,
+                    from: f32::from(at.x),
+                    width,
+                }
+            }
+            (_, Some(row)) => Drag::Row {
+                row,
+                from: f32::from(at.y),
+                space: t.row_space(&self.source, row) as f32,
+            },
+            _ => return,
+        };
+        self.checkpoint();
+        if let Some(e) = self.table.as_mut() {
+            e.drag = Some(drag);
+        }
+        cx.notify();
+    }
+
+    /// The pointer is at `at` with an edge held: its size follows, to the tenth of a point.
+    pub(super) fn table_drag_to(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(drag) = self.table.as_ref().and_then(|e| e.drag) else {
+            return;
+        };
+        let Some(t) = self.live_table() else {
+            return;
+        };
+        let ppp = self.px_per_pt();
+        let change = match drag {
+            Drag::Col { col, from, width } => {
+                let px = (width + f32::from(at.x) - from).clamp(COL_LEAST, COL_MOST);
+                let pt = (f64::from(px / ppp) * 10.0).round() / 10.0;
+                t.set_col_width(&self.source, col, pt)
+            }
+            Drag::Row { row, from, space } => {
+                let pt = f64::from(space + (f32::from(at.y) - from) / ppp)
+                    .clamp(0.0, f64::from(ROW_MOST / ppp));
+                t.set_row_space(&self.source, row, (pt * 2.0).round() / 2.0)
+                    .map(|c| (c, vec![]))
+            }
+        };
+        let Some((ch, packages)) = change else {
+            return;
+        };
+        if self.source[ch.range.clone()] != ch.text {
+            self.replace(ch.range, &ch.text, cx);
+            self.add_packages(&packages, cx);
+        }
+    }
+
+    pub(super) fn table_drag_end(&mut self, cx: &mut Context<Self>) {
+        if let Some(e) = self.table.as_mut()
+            && e.drag.take().is_some()
+        {
+            cx.notify();
+        }
+    }
+
+    /// The focused column back to the width its text asks for.
+    fn table_auto_width(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some((_, c)) = self.focused_cell(window, cx) else {
+            return;
+        };
+        if let Some(ch) = self.live_table().and_then(|t| t.auto_col(&self.source, c)) {
+            self.checkpoint();
+            self.replace(ch.range, &ch.text, cx);
+        }
+    }
+
+    /// The focused cell's text made `f` of: bold, shaded… (its input takes it, the source follows).
+    pub(super) fn table_cell_format(
+        &mut self,
+        f: impl Fn(&str) -> String,
+        packages: &[&str],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((r, c)) = self.focused_cell(window, cx) else {
+            return;
+        };
+        let Some(state) = self
+            .table
+            .as_ref()
+            .and_then(|t| t.cells.get(r)?.get(c))
+            .cloned()
+        else {
+            return;
+        };
+        let now = state.read(cx).value().to_string();
+        let new = f(&now);
+        if new == now {
+            return;
+        }
+        self.checkpoint();
+        state.update(cx, |s, cx| s.set_value(new.clone(), window, cx));
+        // what typing does: the cell goes into the source
+        self.table_cell_changed(r, c, cx);
+        self.add_packages(packages, cx);
+        cx.notify();
+    }
+
     /// The table editor's keys: Tab and Enter move between cells (past the last, a new row),
     /// the arrows up and down between rows, Escape closes it.
     pub(super) fn on_table_key(
@@ -325,17 +485,94 @@ impl Doc {
         });
         let cols = edit.cells.iter().map(|l| l.len()).max().unwrap_or(1);
         let page_w = page_px(dl.page_width.unwrap_or(40258437.0), self.zoom);
-        let width = (cols as f32 * 118.0 + 20.0).clamp(300.0, 720.0);
+        let live = self.live_table();
+        let ppp = self.px_per_pt();
+        let col_px = |c: usize| {
+            live.as_ref()
+                .and_then(|t| t.col_width(&self.source, c))
+                .map_or(COL_PX, |w| (w as f32 * ppp).clamp(COL_LEAST, COL_MOST))
+        };
+        let total: f32 = (0..cols).map(col_px).sum::<f32>() + cols as f32 * 4.0;
+        let width = (total + 20.0).clamp(300.0, 760.0);
         let x = page_px(l.min(r), self.zoom).min((page_w - width).max(0.0));
         let top = page_px(last.bbox[3], self.zoom) + 6.0;
-        let grid = edit.cells.iter().map(|line| {
-            div().flex().gap_1().children(line.iter().map(|state| {
+        // above each column its width, with its edge to drag
+        let heads: Vec<_> = (0..cols)
+            .map(|c| {
+                let fixed = live.as_ref().and_then(|t| t.col_width(&self.source, c));
                 div()
-                    .w(px(112.0))
+                    .relative()
+                    .w(px(col_px(c)))
+                    .h(px(16.0))
                     .flex_none()
-                    .child(Input::new(state).small())
-            }))
-        });
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(fixed.map_or("auto".to_string(), |w| format!("{w:.0} pt")))
+                    .child(
+                        div()
+                            .id(("table-col-edge", c))
+                            .role(Role::Button)
+                            .aria_label("Resize the column")
+                            .absolute()
+                            .right(px(-4.0))
+                            .top_0()
+                            .w(px(6.0))
+                            .h_full()
+                            .rounded_sm()
+                            .bg(theme.border)
+                            .cursor_ew_resize()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.table_drag_start(Some(c), None, ev.position, cx);
+                                }),
+                            ),
+                    )
+            })
+            .collect();
+        let grid = edit
+            .cells
+            .iter()
+            .enumerate()
+            .map(|(ri, line)| {
+                let space = live
+                    .as_ref()
+                    .map_or(0.0, |t| t.row_space(&self.source, ri) as f32 * ppp)
+                    .min(ROW_MOST);
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(div().flex().gap_1().children(line.iter().enumerate().map(
+                        |(ci, state)| {
+                            div()
+                                .w(px(col_px(ci)))
+                                .flex_none()
+                                .child(Input::new(state).small())
+                        },
+                    )))
+                    // under the row: the room it keeps, with an edge to drag
+                    .child(
+                        div()
+                            .id(("table-row-edge", ri))
+                            .role(Role::Button)
+                            .aria_label("Resize the row")
+                            .h(px(4.0 + space))
+                            .w_full()
+                            .flex()
+                            .items_end()
+                            .cursor_ns_resize()
+                            .child(div().w_full().h(px(2.0)).rounded_sm().bg(theme.border))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.table_drag_start(None, Some(ri), ev.position, cx);
+                                }),
+                            ),
+                    )
+            })
+            .collect::<Vec<_>>();
         // a button of the tool rows, filled when what it sets is what the table has
         let chip = |id: &'static str, label: &'static str, on: bool| {
             div()
@@ -362,7 +599,6 @@ impl Doc {
                 }),
             )
         };
-        let live = self.live_table();
         let align = live.as_ref().and_then(|t| t.align(&self.source, edit.at.1));
         let borders = live.as_ref().map(|t| t.borders(&self.source));
         let header = live.as_ref().is_some_and(|t| t.header(&self.source));
@@ -388,6 +624,80 @@ impl Doc {
                 }),
             )
         };
+        let (shade, bold, italic, ink) = edit
+            .cells
+            .get(edit.at.0)
+            .and_then(|l| l.get(edit.at.1))
+            .map(|c| table::cell_look(c.read(cx).value().as_ref()))
+            .unwrap_or_default();
+        let swatch = |id: (&'static str, usize), name: &'static str, rgb: u32, on: bool| {
+            div()
+                .id(id)
+                .role(Role::Button)
+                .aria_label(name)
+                .size(px(18.0))
+                .flex_none()
+                .rounded_sm()
+                .border_1()
+                .border_color(if on { theme.primary } else { theme.border })
+                .bg(gpui::rgb(rgb))
+                .cursor_pointer()
+        };
+        let shades: Vec<_> = SHADES
+            .iter()
+            .enumerate()
+            .map(|(i, (tex, name, rgb))| {
+                swatch(
+                    ("table-shade", i),
+                    name,
+                    *rgb,
+                    shade.as_deref() == Some(*tex),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.table_cell_format(
+                            |t| table::shade_cell(t, Some(tex)),
+                            &["colortbl", "xcolor"],
+                            window,
+                            cx,
+                        );
+                    }),
+                )
+            })
+            .collect();
+        let inks: Vec<_> = INKS
+            .iter()
+            .enumerate()
+            .map(|(i, (tex, name, rgb))| {
+                swatch(("table-ink", i), name, *rgb, ink.as_deref() == Some(*tex)).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.table_cell_format(
+                            |t| table::colour_cell(t, Some(tex)),
+                            &["xcolor"],
+                            window,
+                            cx,
+                        );
+                    }),
+                )
+            })
+            .collect();
+        let cell_tool = |id: &'static str,
+                         label: &'static str,
+                         on: bool,
+                         cmd: &'static str,
+                         cx: &mut Context<Self>| {
+            chip(id, label, on).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.table_cell_format(|t| table::toggle_cell(t, cmd), &[], window, cx);
+                }),
+            )
+        };
         Some(
             div()
                 .id("table-editor")
@@ -406,6 +716,18 @@ impl Doc {
                 .text_color(theme.popover_foreground)
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                    if this.table.as_ref().is_some_and(|t| t.drag.is_some()) {
+                        match ev.pressed_button {
+                            Some(MouseButton::Left) => this.table_drag_to(ev.position, cx),
+                            _ => this.table_drag_end(cx),
+                        }
+                    }
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| this.table_drag_end(cx)),
+                )
                 .child(
                     div()
                         .flex()
@@ -422,7 +744,8 @@ impl Doc {
                         .overflow_scroll()
                         .flex()
                         .flex_col()
-                        .gap_1()
+                        .gap_0()
+                        .child(div().flex().gap_1().children(heads))
                         .children(grid),
                 )
                 .child(
@@ -478,6 +801,54 @@ impl Doc {
                             "Booktabs",
                             table::Borders::Booktabs,
                             cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child("Cell"),
+                        )
+                        .child(cell_tool("table-cell-b", "B", bold, "textbf", cx))
+                        .child(cell_tool("table-cell-i", "I", italic, "textit", cx))
+                        .children(shades)
+                        .child(chip("table-shade-none", "No fill", false).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.table_cell_format(
+                                    |t| table::shade_cell(t, None),
+                                    &[],
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ))
+                        .children(inks)
+                        .child(chip("table-ink-none", "Auto ink", false).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.table_cell_format(
+                                    |t| table::colour_cell(t, None),
+                                    &[],
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ))
+                        .child(chip("table-col-auto", "Auto width", false).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.table_auto_width(window, cx);
+                            }),
                         )),
                 )
                 .into_any_element(),

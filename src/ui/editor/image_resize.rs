@@ -33,10 +33,49 @@ impl ImageBox {
     }
 }
 
-/// A drag of the handle under way.
+/// Which of the eight handles is held: the side of the picture it is on, -1 left or top, 1 right
+/// or bottom, 0 in the middle of an edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Grip {
+    dx: i8,
+    dy: i8,
+}
+
+impl Grip {
+    /// The corner at the bottom right: what the picture had alone before the other seven.
+    pub(super) const SE: Grip = Grip { dx: 1, dy: 1 };
+    #[cfg(test)]
+    pub(super) fn new(dx: i8, dy: i8) -> Grip {
+        Grip { dx, dy }
+    }
+    const ALL: [Grip; 8] = [
+        Grip { dx: -1, dy: -1 },
+        Grip { dx: 0, dy: -1 },
+        Grip { dx: 1, dy: -1 },
+        Grip { dx: 1, dy: 0 },
+        Self::SE,
+        Grip { dx: 0, dy: 1 },
+        Grip { dx: -1, dy: 1 },
+        Grip { dx: -1, dy: 0 },
+    ];
+
+    /// Where on `rect` (left, top, right, bottom) the handle sits.
+    fn at(self, rect: [f32; 4]) -> (f32, f32) {
+        let [l, t, r, b] = rect;
+        let at = |d: i8, lo: f32, hi: f32| match d {
+            -1 => lo,
+            1 => hi,
+            _ => (lo + hi) / 2.0,
+        };
+        (at(self.dx, l, r), at(self.dy, t, b))
+    }
+}
+
+/// A drag of a handle under way.
 pub(super) struct Resizing {
     img: ImageBox,
     percent: f64,
+    grip: Grip,
 }
 
 /// The smallest a picture is dragged to, in percent of the line.
@@ -45,11 +84,21 @@ const LEAST: f64 = 5.0;
 impl Resizing {
     #[cfg(test)]
     pub(super) fn new(img: ImageBox) -> Self {
+        Self::held(img, Grip::SE)
+    }
+
+    #[cfg(test)]
+    pub(super) fn held(img: ImageBox, grip: Grip) -> Self {
         Self {
             percent: img.percent,
             img,
+            grip,
         }
     }
+}
+
+fn grip_id(g: Grip) -> usize {
+    ((g.dx + 1) * 3 + g.dy + 1) as usize
 }
 
 impl Doc {
@@ -130,31 +179,39 @@ impl Doc {
                             .child(format!("{percent:.0}%")),
                     )
                 })
-                .child(
-                    div()
-                        .id("image-handle")
+                .children(Grip::ALL.into_iter().map(|grip| {
+                    let (x, y) = grip.at([l, t, r, b]);
+                    let start = start.clone();
+                    let d = div()
+                        .id(("image-handle", grip_id(grip)))
                         .role(Role::Button)
                         .aria_label("Resize the picture")
                         .absolute()
-                        .left(px(r - size / 2.0))
-                        .top(px(b - size / 2.0))
+                        .left(px(x - size / 2.0))
+                        .top(px(y - size / 2.0))
                         .size(px(size))
                         .bg(accent)
                         .border_1()
-                        .border_color(gpui::white())
-                        .cursor_nwse_resize()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.resizing = Some(Resizing {
-                                    percent: start.percent,
-                                    img: start.clone(),
-                                });
-                                cx.notify();
-                            }),
-                        ),
-                )
+                        .border_color(gpui::white());
+                    let d = match (grip.dx, grip.dy) {
+                        (0, _) => d.cursor_ns_resize(),
+                        (_, 0) => d.cursor_ew_resize(),
+                        (a, b) if a == b => d.cursor_nwse_resize(),
+                        _ => d.cursor_nesw_resize(),
+                    };
+                    d.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.resizing = Some(Resizing {
+                                percent: start.percent,
+                                img: start.clone(),
+                                grip,
+                            });
+                            cx.notify();
+                        }),
+                    )
+                }))
                 .into_any_element(),
         )
     }
@@ -164,16 +221,41 @@ impl Doc {
         let Some(img) = self.resizing.as_ref().map(|r| r.img.clone()) else {
             return;
         };
-        let Some((x, _, _)) = self.hit(page, pos).filter(|_| page == img.page) else {
+        let Some((x, y, _)) = self.hit(page, pos).filter(|_| page == img.page) else {
             return;
         };
+        let grip = self.resizing.as_ref().map_or(Grip::SE, |r| r.grip);
         let (left, line) = img.line;
-        let w = if img.centered {
-            2.0 * (x - (left + line / 2.0))
-        } else {
-            x - left
+        let [_, top, right, bottom] = img.rect;
+        // the width the pointer asks for, and the height: each a percent of the line the picture
+        // would be, its shape kept
+        let by_width = (grip.dx != 0).then(|| {
+            let w = match (grip.dx, img.centered) {
+                (1, true) => 2.0 * (x - (left + line / 2.0)),
+                (1, false) => x - left,
+                (_, true) => 2.0 * ((left + line / 2.0) - x),
+                (_, false) => right - x,
+            };
+            w / line * 100.0
+        });
+        let by_height = (grip.dy != 0).then(|| {
+            let h = if grip.dy == 1 { y - top } else { bottom - y };
+            img.percent * h / (bottom - top)
+        });
+        // a corner follows whichever of the two the pointer has moved further
+        let far = |p: &f64| (p - img.percent).abs();
+        let want = match (by_width, by_height) {
+            (Some(a), Some(b)) => {
+                if far(&a) >= far(&b) {
+                    a
+                } else {
+                    b
+                }
+            }
+            (Some(a), None) | (None, Some(a)) => a,
+            _ => return,
         };
-        let percent = (w / line * 100.0).round().clamp(LEAST, 100.0);
+        let percent = want.round().clamp(LEAST, 100.0);
         if let Some(r) = self.resizing.as_mut()
             && r.percent != percent
         {

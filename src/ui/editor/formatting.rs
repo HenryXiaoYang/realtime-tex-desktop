@@ -50,9 +50,12 @@ impl RibbonState {
 }
 
 impl Doc {
-    /// The selection, or the caret as an empty one.
+    /// The selection, or the caret as an empty one; with whole blocks selected, their text.
     fn format_target(&self) -> Option<Range<usize>> {
-        let c = self.caret.as_ref()?;
+        let Some(c) = self.caret.as_ref() else {
+            let (lo, hi) = self.selection()?;
+            return Some(self.blocks.get(lo)?.range.start..self.blocks.get(hi)?.range.end);
+        };
         Some(self.selection_range().unwrap_or(c.off..c.off))
     }
 
@@ -105,6 +108,8 @@ impl Doc {
         self.leave(window, cx);
         self.focus.focus(window, cx);
         let Some(t) = self.format_target() else {
+            self.status = "Click in the text, or select some, to format it".into();
+            cx.notify();
             return;
         };
         let blocks = self.target_blocks(&t);
