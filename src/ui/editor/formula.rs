@@ -202,6 +202,13 @@ impl Doc {
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
+        // inside a formula already a dollar sign opens nothing (in math mode TeX would take it
+        // for the end of the formula, or an error)
+        if math::formula_at(&self.source, off).is_some_and(|f| f.start < off && off < f.end) {
+            self.status = "Already inside a formula: edit it there".into();
+            cx.notify();
+            return;
+        }
         self.checkpoint();
         self.typing = None;
         self.overlay = None;
@@ -249,11 +256,17 @@ impl Doc {
             .active
             .as_ref()
             .filter(|a| a.panel == Some(Panel::Formula))?;
-        let whole = math::formula_at(&self.source, a.range.start)?;
-        if self.source[a.range.clone()].trim().is_empty() {
-            self.replace(whole.clone(), "", cx);
-            return Some(whole.start);
+        if self.source.get(a.range.clone())?.trim().is_empty() {
+            // blank: it goes, and only it (never a formula with something in it)
+            return Some(match math::blank_formula(&self.source, a.range.clone()) {
+                Some(gone) => {
+                    self.replace(gone.clone(), "", cx);
+                    gone.start
+                }
+                None => a.range.start,
+            });
         }
+        let whole = math::formula_at(&self.source, a.range.start)?;
         Some(whole.end)
     }
 

@@ -36,12 +36,56 @@ pub fn body(src: &str, formula: Range<usize>) -> Option<Range<usize>> {
     (text.len() >= open + close).then(|| formula.start + open..formula.end - close)
 }
 
+/// What goes when the formula editor, open on `at` (a formula's inside), has nothing in it: the
+/// formula with its delimiters, and only when it holds nothing. Never an enclosing formula (a
+/// `$$` left by an emptied `$ $` inside an equation reads as a display delimiter, and the
+/// equation around it is not blank).
+pub fn blank_formula(src: &str, at: Range<usize>) -> Option<Range<usize>> {
+    if !src.get(at.clone())?.trim().is_empty() {
+        return None;
+    }
+    // the dollar signs on both sides
+    if src[..at.start].ends_with('$') && src[at.end..].starts_with('$') {
+        return Some(at.start - 1..at.end + 1);
+    }
+    // another delimiter (`\(`…`\)`, `\[`…`\]`, `$$`…`$$`): the formula found must be all delimiters
+    let whole = formula_at(src, at.start)?;
+    let inside = body(src, whole.clone())?;
+    src[inside].trim().is_empty().then_some(whole)
+}
+
 /// An empty inline formula, with a space to hold the editor open: removed again if it stays blank.
 pub const EMPTY_INLINE: &str = "$ $";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_blank_formula_goes_never_the_one_around_it() {
+        let eq = "\\begin{equation}\nF = m \\frac{d^2 $$x}{dt^2}\n\\end{equation}";
+        // the `$$` an emptied `$ $` left in an equation: the two signs go, the equation stays
+        let at = eq.find("$$").unwrap() + 1;
+        assert_eq!(blank_formula(eq, at..at), Some(at - 1..at + 1));
+        // a blank inline formula goes with its signs, spaces and all
+        let s = "a $ $ b";
+        assert_eq!(blank_formula(s, 3..4).map(|r| &s[r]), Some("$ $"));
+        // nothing blank, or no formula there: nothing goes
+        assert_eq!(blank_formula("a $x$ b", 3..4), None);
+        let e = "\\begin{equation}\nF = m\n\\end{equation}";
+        assert_eq!(blank_formula(e, 20..20), None);
+        // a display formula with nothing in it goes whole
+        let d = "a \\[ \\] b";
+        assert_eq!(blank_formula(d, 4..5).map(|r| &d[r]), Some("\\[ \\]"));
+    }
+
+    #[test]
+    fn an_inline_formula_inside_a_display_one_is_its_own() {
+        let src = "\\begin{equation}\nF = m \\frac{d^2 $ $x}{dt^2}\n\\end{equation}";
+        let off = src.find("$ $").unwrap() + 1;
+        let r = formula_at(src, off).unwrap();
+        assert_eq!(&src[r], "$ $");
+    }
 
     fn at(src: &str, marker: &str) -> Option<String> {
         let off = src.find(marker)?;

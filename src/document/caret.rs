@@ -160,6 +160,17 @@ impl CharMap {
     /// The source a Backspace (`back`) or Delete at stop `i` removes: the char beside it, or the
     /// whole macro or formula it is part of. None at the block's edge.
     pub fn deletion(&self, i: usize, back: bool, src: &str) -> Option<Range<usize>> {
+        let r = self.deletion_at(i, back, src)?;
+        // a display formula goes whole, as an inline one does: Backspace through its TeX piece by
+        // piece would leave `\frac{^}{dt^2}`, which no longer typesets
+        let shown = super::blocks::split_display_math(src, self.range.clone());
+        let hit = shown
+            .into_iter()
+            .find(|(m, math)| *math && r.start < m.end && r.end > m.start);
+        Some(hit.map_or(r, |(m, _)| m))
+    }
+
+    fn deletion_at(&self, i: usize, back: bool, src: &str) -> Option<Range<usize>> {
         let Stop { k, off, .. } = *self.stops.get(i)?;
         let at = if back { k.checked_sub(1)? } else { k };
         let c = self.chars.get(at)?;
@@ -229,8 +240,149 @@ impl CharMap {
             && !piece.contains("\\end")
             && !piece.contains("\\item")
             && !piece.is_empty();
-        whole.then_some(start..end)
+        if !whole {
+            return None;
+        }
+        // formulas side by side (what was between them deleted): the one beside the caret goes
+        let parts = inline_formulas(piece);
+        if parts.len() > 1 {
+            let p = if back { parts.last() } else { parts.first() }?;
+            return Some(start + p.start..start + p.end);
+        }
+        Some(start..end)
     }
+}
+
+/// Whether the range `r` a Backspace (`back`) or Delete at `off` is about to remove is what was
+/// beside the caret: touching it (only markup between), and no more than one visible character
+/// besides formulas. A page's map of the text can lag behind the source while TeX catches up,
+/// and a range from it may then be elsewhere, or far longer than a character.
+pub fn sane_deletion(src: &str, r: &Range<usize>, off: usize, back: bool) -> bool {
+    let Some(gone) = src.get(r.clone()) else {
+        return false;
+    };
+    let gap = if back {
+        src.get(r.end..off)
+    } else {
+        src.get(off..r.start)
+    };
+    if !gap.is_some_and(|g| !glyphmap::has_visible(g)) {
+        return false;
+    }
+    // formulas go whole; of the rest, a character
+    let (mut rest, mut chars) = (0, gone.chars().peekable());
+    let (mut in_math, mut display) = (false, 0);
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                let mut name = String::new();
+                while let Some(&n) = chars.peek() {
+                    if n.is_ascii_alphabetic() {
+                        name.push(n);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                match name.as_str() {
+                    "begin" | "end" => display += 1,
+                    "" => {
+                        // `\$`, `\%`, `\&`…: one visible character; `\'e`, `\"o`: an accent
+                        if let Some(n) = chars.next()
+                            && !in_math
+                            && !"'`^\"~=.".contains(n)
+                        {
+                            rest += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            '$' => in_math = !in_math,
+            '{' | '}' | '[' | ']' => {}
+            c if c.is_whitespace() => {}
+            _ if in_math || display > 0 => {}
+            _ => rest += 1,
+        }
+    }
+    rest <= 1
+}
+
+/// What a Backspace (`back`) or Delete at `off` removes judged by the source alone: the plain
+/// character beside the caret, or the `$…$` formula there. None where that is not plain
+/// (a command, a brace): nothing is removed rather than guessed at.
+pub fn source_deletion(src: &str, off: usize, back: bool) -> Option<Range<usize>> {
+    let plain = |c: char| {
+        !matches!(
+            c,
+            '\\' | '{' | '}' | '$' | '%' | '&' | '#' | '_' | '^' | '~'
+        )
+    };
+    // a letter of a command's name (`\alp|ha`) is not a char of the text: cutting it leaves
+    // `\alpa`, a command nobody wrote
+    let in_name = |at: usize| {
+        let head = &src[..at];
+        let run = head.len()
+            - head
+                .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+                .len();
+        let before = &head[..head.len() - run];
+        before.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
+    };
+    // inside a formula (an equation's TeX, `$…$`): never char by char
+    if super::math::formula_at(src, off).is_some_and(|f| f.start < off && off < f.end) {
+        return None;
+    }
+    if back {
+        let c = src.get(..off)?.chars().next_back()?;
+        let start = off - c.len_utf8();
+        if c == '$' && !src[..start].ends_with('\\') {
+            // the formula that ends here: back to its opening sign, in this paragraph
+            let para = src[..start].rfind("\n\n").map_or(0, |i| i + 2);
+            let open = src[para..start].rfind('$').map(|i| para + i)?;
+            return (!src[open..start].contains('\n')).then_some(open..off);
+        }
+        // (nor the space that ends a command's name: `\alpha y` would read `\alphay`)
+        let glues = c.is_whitespace()
+            && control_word_before(src, start).is_some()
+            && src[off..].starts_with(|n: char| n.is_alphabetic());
+        (plain(c) && c != '\n' && !glues && !(c.is_ascii_alphabetic() && in_name(off)))
+            .then_some(start..off)
+    } else {
+        let c = src.get(off..)?.chars().next()?;
+        if c == '$' && !src[..off].ends_with('\\') {
+            let end = src[off + 1..].find('$').map(|i| off + 1 + i + 1)?;
+            return (!src[off..end].contains('\n')).then_some(off..end);
+        }
+        let glues = c.is_whitespace()
+            && control_word_before(src, off).is_some()
+            && src[off + c.len_utf8()..].starts_with(|n: char| n.is_alphabetic());
+        (plain(c) && c != '\n' && !glues && !(c.is_ascii_alphabetic() && in_name(off + 1)))
+            .then_some(off..off + c.len_utf8())
+    }
+}
+
+/// `piece` as the `$…$` formulas it is made of, when it is nothing else (spaces between them
+/// aside): their ranges. Empty for anything but such a run.
+fn inline_formulas(piece: &str) -> Vec<Range<usize>> {
+    let (mut out, mut open) = (vec![], None);
+    let mut chars = piece.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match (c, open) {
+            ('\\', Some(_)) => {
+                chars.next();
+            }
+            ('$', None) => open = Some(i),
+            ('$', Some(a)) => {
+                out.push(a..i + 1);
+                open = None;
+            }
+            (c, None) if c.is_whitespace() => {}
+            (_, None) => return vec![],
+            _ => {}
+        }
+    }
+    if open.is_some() { vec![] } else { out }
 }
 
 /// The control word (`\\small`) that ends right at `end` in `src`, if one does (not `\\\\x`, a line
@@ -1206,6 +1358,27 @@ pub fn heading_title(block: &str, base: usize) -> Option<Range<usize>> {
     Some(base + i + 1..base + close)
 }
 
+/// What goes when the title of the heading that is `block` has been emptied: the heading alone,
+/// with the blank line after it, never the text that follows it in the same block (a heading
+/// is often followed by its text on the next line, and no blank line ends the block there).
+pub fn empty_heading_cut(src: &str, block: Range<usize>) -> Option<Range<usize>> {
+    let title = heading_title(&src[block.clone()], block.start)?;
+    if glyphmap::has_visible(&src[title.clone()]) {
+        return None;
+    }
+    // the heading ends at its closing brace
+    let head_end = title.end + 1;
+    let after = &src[head_end..];
+    // (what is left of the block after it, or the blank line after the block)
+    let ws = after.len() - after.trim_start().len();
+    let end = if head_end + ws >= block.end {
+        block.end + (src[block.end..].len() - src[block.end..].trim_start().len())
+    } else {
+        head_end + ws
+    };
+    Some(block.start..end)
+}
+
 /// Whether `src[r]` prints text, a picture's labels aside (a TikZ flowchart beside the text
 /// is not text the caret is after).
 fn shows_text(src: &str, r: Range<usize>) -> bool {
@@ -1903,6 +2076,80 @@ mod tests {
         assert_eq!(del("a |b \\begin{center}x\\end{center} c| d"), "a | d");
         assert!(balanced("\\textbf{a} \\begin{center}b\\end{center}"));
         assert!(!balanced("bo} x \\textbf{y"));
+    }
+
+    #[test]
+    fn an_emptied_heading_goes_alone_not_the_text_after_it() {
+        let cut = |src: &str, blk: Range<usize>| {
+            empty_heading_cut(src, blk.clone())
+                .map(|r| format!("{}{}", &src[..r.start], &src[r.end..]))
+        };
+        // the heading is the block: it goes with the blank line after it
+        let a = "\\section{}\n\nText.";
+        assert_eq!(cut(a, 0..10).unwrap(), "Text.");
+        // its text on the next line is in the block: that stays
+        let b = "\\section{}\nSnell's law $x$ holds.\n\nNext.";
+        assert_eq!(
+            cut(b, 0..b.find("\n\n").unwrap()).unwrap(),
+            "Snell's law $x$ holds.\n\nNext."
+        );
+        // a title with something in it is not empty
+        assert_eq!(cut("\\section{A}\nB", 0..13), None);
+    }
+
+    #[test]
+    fn a_deletion_is_what_was_beside_the_caret() {
+        let s = "The work is $W = \\int F$ and so on.";
+        let w = s.find("$W").unwrap();
+        let e = s.find(" and").unwrap();
+        // the char before the caret, and the formula before it
+        assert!(sane_deletion(s, &(e - 1..e), e, true));
+        assert!(sane_deletion(s, &(w..e), e, true));
+        // a range elsewhere, or with words in it: refused
+        assert!(!sane_deletion(s, &(0..3), e, true));
+        assert!(!sane_deletion(s, &(w..s.len()), e, true));
+        assert!(!sane_deletion(s, &(e..e + 4), e, true));
+        assert!(sane_deletion(s, &(e..e + 1), e, false));
+        // an escaped sign is one character; a whole equation goes whole
+        assert!(sane_deletion("a \\% b", &(2..4), 4, true));
+        let q = "x \\begin{equation}\nF = m a\n\\end{equation}";
+        assert!(sane_deletion(q, &(2..q.len()), q.len(), true));
+    }
+
+    #[test]
+    fn the_source_alone_gives_the_plain_char_or_the_formula() {
+        let s = "ab $x$ c";
+        assert_eq!(source_deletion(s, 2, true), Some(1..2));
+        assert_eq!(source_deletion(s, 6, true), Some(3..6));
+        assert_eq!(source_deletion(s, 3, false), Some(3..6));
+        // a command or brace is not guessed at
+        assert_eq!(source_deletion("a\\textbf{b}", 1, false), None);
+        assert_eq!(source_deletion("a}", 2, true), None);
+        // never across a line
+        assert_eq!(source_deletion("a\nb", 2, true), None);
+        // never from inside a formula, `$…$` or an equation
+        assert_eq!(source_deletion("a $x^2 y$ b", 6, true), None);
+        let q = "t\n\\begin{equation}\nF = m a\n\\end{equation}";
+        assert_eq!(source_deletion(q, q.find("m a").unwrap() + 1, true), None);
+        // never a letter of a command's name
+        assert_eq!(source_deletion("x \\alpha y", 6, true), None);
+        assert_eq!(source_deletion("x \\alpha y", 4, false), None);
+        assert_eq!(source_deletion("x \\\\alpha y", 7, true), Some(6..7));
+        assert_eq!(source_deletion("x \\alpha y", 9, true), None);
+        assert_eq!(source_deletion("x \\alpha y", 8, false), None);
+        assert_eq!(source_deletion("x \\alpha  y", 10, true), Some(9..10));
+        assert_eq!(source_deletion("x \\alpha 5", 9, true), Some(8..9));
+    }
+
+    #[test]
+    fn formulas_side_by_side_are_told_apart() {
+        let p = "$m$$v = \\frac{dx}{dt}$ $E$";
+        let parts: Vec<&str> = inline_formulas(p).into_iter().map(|r| &p[r]).collect();
+        assert_eq!(parts, ["$m$", "$v = \\frac{dx}{dt}$", "$E$"]);
+        // anything else in it: not a run of formulas
+        assert!(inline_formulas("$a$ and $b$").is_empty());
+        assert!(inline_formulas("$a$ \\$ $b$").is_empty());
+        assert_eq!(inline_formulas("$a\\$b$").len(), 1);
     }
 
     #[test]

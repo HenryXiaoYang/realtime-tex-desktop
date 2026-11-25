@@ -9,6 +9,7 @@ use super::super::FormatOp;
 use super::*;
 use crate::document::caret::balanced;
 use crate::document::format::{Align, Font, Size, Style};
+use gpui_kit::EntityInputHandler;
 
 struct Rng(u64);
 
@@ -339,4 +340,488 @@ fn stress_editing(cx: &mut TestAppContext) {
         log.join("\n"),
         replay.join(",")
     );
+}
+
+/// What a press removed was one whole `\begin{equation}…\end{equation}` and nothing else.
+fn gone_whole_equation(before: &str, after: &str) -> bool {
+    let p = before
+        .bytes()
+        .zip(after.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let end = before.len() - after.len() + p;
+    before.get(p..end).is_some_and(|g| {
+        g.starts_with("\\begin{equation}")
+            && g.ends_with("\\end{equation}")
+            && g.matches("\\begin").count() == 1
+    })
+}
+
+const NOTES: &str = "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\\section{Kinematics}\nA particle of mass $m$ moves with velocity $v = \\frac{dx}{dt}$ and the kinetic energy is $E = \\frac{1}{2} m v^2$ for slow motion.\n\nNewton's second law reads\n\\begin{equation}\nF = m a = m \\frac{d^2 x}{dt^2}\n\\end{equation}\nwhich we use throughout.\n\n\\section{Energy}\nThe work done is $W = \\int F \\, dx$ and so $W = \\Delta E$ holds exactly.\n\n\\begin{itemize}\n\\item Conservation of $E$ in closed systems\n\\item Momentum $p = m v$ is also conserved\n\\end{itemize}\n\n\\section{Waves}\nA wave has $\\lambda f = c$ and the amplitude $A$ decays slowly in the medium we study here.\n\n\\section{Optics}\nSnell's law: $n_1 \\sin\\theta_1 = n_2 \\sin\\theta_2$ at the boundary between two media.\n\\end{document}\n";
+
+/// Delete or Backspace held down: presses come faster than TeX answers. No press may take more
+/// than what is beside the caret: a char, a macro, a formula.
+///
+/// `cargo test --release held_delete -- --ignored --nocapture`; HOLD_MS is the pause between
+/// presses (default 0: only the queue is drained), HOLD_N the presses.
+#[gpui_kit::test]
+#[ignore]
+fn held_delete(cx: &mut TestAppContext) {
+    let pause: u64 = std::env::var("HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let n: usize = std::env::var("HOLD_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(150);
+    let mut worst: Vec<String> = vec![];
+    for (name, back, from) in [
+        ("delete from the first paragraph", false, "A particle"),
+        ("delete from a formula paragraph", false, "The work done"),
+        ("delete from the list", false, "Conservation"),
+        (
+            "backspace from the end of the notes",
+            true,
+            "between two media.",
+        ),
+        (
+            "backspace from the waves paragraph",
+            true,
+            "medium we study here.",
+        ),
+    ] {
+        let (doc, cx) = open(cx, scratch("held", NOTES), "main.tex", 3);
+        doc.update_in(cx, |d, window, cx| d.focus.focus(window, cx));
+        calm(cx, &doc);
+        let at = cx.read(|cx| {
+            let d = doc.read(cx);
+            let i = d.source.find(from).unwrap();
+            if back { i + from.len() } else { i }
+        });
+        doc.update(cx, |d, cx| d.set_caret(at, cx));
+        for press in 0..n {
+            let before = cx.read(|cx| doc.read(cx).source.clone());
+            doc.update(cx, |d, cx| d.delete(back, cx));
+            cx.run_until_parked();
+            if pause > 0 {
+                std::thread::sleep(Duration::from_millis(pause));
+                cx.run_until_parked();
+            }
+            let after = cx.read(|cx| doc.read(cx).source.clone());
+            let lost = before.len().saturating_sub(after.len());
+            if lost > 40 && !gone_whole_equation(&before, &after) {
+                let cut = before
+                    .char_indices()
+                    .zip(
+                        after
+                            .char_indices()
+                            .chain(std::iter::repeat((after.len(), ' '))),
+                    )
+                    .find(|((_, a), (_, b))| a != b)
+                    .map_or(0, |((i, _), _)| i);
+                worst.push(format!(
+                    "{name}: press {press} took {lost} bytes at {cut}: {:?}",
+                    &before[cut..(cut + lost).min(before.len())]
+                ));
+                break;
+            }
+        }
+    }
+    assert!(
+        worst.is_empty(),
+        "a key press took more than what is beside the caret:\n{}",
+        worst.join("\n")
+    );
+}
+
+/// `held_delete` from many places in one document: undone between runs.
+#[gpui_kit::test]
+#[ignore]
+fn held_delete_everywhere(cx: &mut TestAppContext) {
+    let pause: u64 = std::env::var("HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let presses: usize = std::env::var("HOLD_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(45);
+    let stride: usize = std::env::var("HOLD_STRIDE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(37);
+    let (doc, cx) = open(cx, scratch("held-all", NOTES), "main.tex", 3);
+    doc.update_in(cx, |d, window, cx| d.focus.focus(window, cx));
+    calm(cx, &doc);
+    let (lo, hi) = (
+        NOTES.find("\\section{Kinematics}").unwrap(),
+        NOTES.find("\\end{document}").unwrap(),
+    );
+    let mut bad: Vec<String> = vec![];
+    let mut tried = 0;
+    for start in (lo..hi)
+        .step_by(stride)
+        .filter(|&i| NOTES.is_char_boundary(i))
+    {
+        for back in [false, true] {
+            doc.update(cx, |d, cx| d.set_caret(start, cx));
+            tried += 1;
+            let mut trace: Vec<String> = vec![];
+            for press in 0..presses {
+                let before = cx.read(|cx| doc.read(cx).source.clone());
+                doc.update(cx, |d, cx| d.delete(back, cx));
+                cx.run_until_parked();
+                if pause > 0 {
+                    std::thread::sleep(Duration::from_millis(pause));
+                    cx.run_until_parked();
+                }
+                let after = cx.read(|cx| doc.read(cx).source.clone());
+                let lost = before.len().saturating_sub(after.len());
+                let caret = cx.read(|cx| doc.read(cx).caret.as_ref().map(|c| c.off));
+                trace.push(format!(
+                    "press {press}: lost {lost}, caret {caret:?}, {} bytes",
+                    after.len()
+                ));
+                if lost > 40 && !gone_whole_equation(&before, &after) {
+                    let cut = before
+                        .bytes()
+                        .zip(after.bytes())
+                        .position(|(a, b)| a != b)
+                        .unwrap_or(after.len());
+                    let cut = (0..=cut)
+                        .rev()
+                        .find(|&i| before.is_char_boundary(i))
+                        .unwrap_or(0);
+                    bad.push(format!(
+                        "{} from {start} ({:?}), press {press}: {lost} bytes gone at {cut}: {:?}",
+                        if back { "backspace" } else { "delete" },
+                        &NOTES[start..(start + 12).min(NOTES.len())],
+                        before
+                            .get(cut..(cut + lost).min(before.len()))
+                            .unwrap_or("")
+                    ));
+                    let from = trace.len().saturating_sub(6);
+                    bad.push(format!("  last presses: {:?}", &trace[from..]));
+                    break;
+                }
+            }
+            // everything back as it was, then the next place
+            for _ in 0..presses * 3 {
+                doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+            }
+            calm(cx, &doc);
+            let now = cx.read(|cx| doc.read(cx).source.clone());
+            if now != NOTES {
+                bad.push(format!("undo did not return the notes after {start}"));
+                doc.update(cx, |d, cx| d.replace(0..d.source.len(), NOTES, cx));
+                calm(cx, &doc);
+            }
+        }
+    }
+    eprintln!("{tried} runs");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// `text` typed into the formula editor, from outside the document's own update (the editor's
+/// change reaches the document as an event, as it does from a key press).
+fn type_in_editor(cx: &mut gpui_kit::VisualTestContext, doc: &Entity<Doc>, text: &str) {
+    let input = cx.read(|cx| doc.read(cx).input.clone());
+    cx.update(|window, cx| {
+        input.update(cx, |s, cx| s.replace_text_in_range(None, text, window, cx))
+    });
+}
+
+/// How many unescaped `$` the TeX has outside comments: odd means a formula left open.
+fn dollars(s: &str) -> usize {
+    let (mut n, mut chars) = (0, s.chars());
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '%' => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '$' => n += 1,
+            _ => {}
+        }
+    }
+    n
+}
+
+/// Dollar signs typed the way a person types them, on the pages and in the formula editor:
+/// every `$` opens or closes a formula, nothing else is lost, the TeX stays typesettable.
+///
+/// `cargo test --release dollar_stress -- --ignored --nocapture`; `FUZZ_N` steps, `FUZZ_SEED`.
+#[gpui_kit::test]
+#[ignore]
+fn dollar_stress(cx: &mut TestAppContext) {
+    let n: usize = std::env::var("FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(90);
+    let seed: u64 = std::env::var("FUZZ_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let mut r = Rng(0x9E37_79B9_7F4A_7C15 ^ seed.wrapping_mul(0x2545_F491));
+    let (doc, cx) = open(cx, scratch("dollars", NOTES), "main.tex", 3);
+    doc.update_in(cx, |d, window, cx| d.focus.focus(window, cx));
+    calm(cx, &doc);
+    let math = [
+        "x",
+        "x^2",
+        "\\alpha ",
+        "\\frac{a}{b}",
+        "a_1",
+        "\\sum_i ",
+        "(a+b)",
+    ];
+    let mut log: Vec<String> = vec![];
+    for i in 0..n {
+        let before = cx.read(|cx| doc.read(cx).source.clone());
+        let editing = cx.read(|cx| {
+            doc.read(cx)
+                .active
+                .as_ref()
+                .is_some_and(|a| a.panel == Some(crate::ui::editor::Panel::Formula))
+        });
+        let (spots, choice) = (cx.read(|cx| stops(doc.read(cx))), r.below(100));
+        let at = spots[r.below(spots.len())];
+        let what = if editing {
+            match choice {
+                0..=34 => {
+                    type_in_editor(cx, &doc, "$");
+                    "in the editor: $".to_string()
+                }
+                35..=69 => {
+                    let t = math[r.below(math.len())];
+                    type_in_editor(cx, &doc, t);
+                    format!("in the editor: {t:?}")
+                }
+                70..=84 => {
+                    doc.update_in(cx, |d, window, cx| d.finish_formula(window, cx));
+                    "finish the formula".into()
+                }
+                85..=92 => {
+                    doc.update_in(cx, |d, window, cx| d.leave(window, cx));
+                    "leave".into()
+                }
+                _ => {
+                    doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+                    "undo".into()
+                }
+            }
+        } else {
+            match choice {
+                0..=39 => {
+                    doc.update_in(cx, |d, window, cx| {
+                        d.set_caret(at, cx);
+                        d.replace_text_in_range(None, "$", window, cx);
+                    });
+                    format!("$ at {at}")
+                }
+                40..=54 => {
+                    let t = ["a", "b ", "5", "x"][r.below(4)];
+                    doc.update_in(cx, |d, window, cx| {
+                        d.set_caret(at, cx);
+                        d.replace_text_in_range(None, t, window, cx);
+                    });
+                    format!("type {t:?} at {at}")
+                }
+                55..=74 => {
+                    let back = r.below(2) == 0;
+                    let times = 1 + r.below(8);
+                    doc.update(cx, |d, cx| {
+                        d.set_caret(at, cx);
+                        for _ in 0..times {
+                            d.delete(back, cx);
+                        }
+                    });
+                    format!(
+                        "{} x{times} at {at}",
+                        if back { "backspace" } else { "delete" }
+                    )
+                }
+                75..=84 => {
+                    doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+                    "undo".into()
+                }
+                85..=92 => {
+                    doc.update_in(cx, |d, window, cx| d.redo(window, cx));
+                    "redo".into()
+                }
+                _ => {
+                    doc.update_in(cx, |d, window, cx| d.leave(window, cx));
+                    "leave".into()
+                }
+            }
+        };
+        log.push(what.clone());
+        cx.run_until_parked();
+        calm(cx, &doc);
+        let (bad, status, src, active) = cx.read(|cx| {
+            let d = doc.read(cx);
+            (
+                sound(d).err(),
+                d.status.clone(),
+                d.source.clone(),
+                d.active.is_some(),
+            )
+        });
+        let lost = before.len().saturating_sub(src.len());
+        let undid = what.starts_with("undo") || what == "redo";
+        // a formula still open in the editor may hold one `$` too many or few while it is typed
+        let open_ok = active || what.starts_with("in the editor");
+        // (while the formula editor is open its text is raw TeX, as unfinished as typed)
+        let mut err = bad.filter(|_| !open_ok);
+        if err.is_none() && status.contains("LaTeX") && !open_ok {
+            err = Some(status.to_string());
+        }
+        if err.is_none() && !open_ok && dollars(&src) % 2 == 1 {
+            err = Some("an odd number of dollar signs: a formula left open".into());
+        }
+        // (a delete press is a char, a macro or a formula: x8 presses at most)
+        let allowed = if what.starts_with("backspace") || what.starts_with("delete") {
+            8 * 45
+        } else {
+            60
+        };
+        if err.is_none() && !undid && lost > allowed {
+            err = Some(format!("{lost} bytes lost by one step"));
+        }
+        if let Some(e) = err {
+            panic!(
+                "step {i} ({what}): {e}\n--- steps:\n{}\n--- before:\n{before}\n--- after:\n{src}",
+                log.join("\n")
+            );
+        }
+    }
+}
+
+/// A dollar sign typed inside a display formula opens nothing, and a second one (in the editor
+/// of a formula opened beside it) cannot take the equation: the equation always stays.
+#[gpui_kit::test]
+#[ignore]
+fn dollar_in_a_display_formula(cx: &mut TestAppContext) {
+    let (doc, cx) = open(cx, scratch("dollar-display", NOTES), "main.tex", 3);
+    doc.update_in(cx, |d, window, cx| d.focus.focus(window, cx));
+    calm(cx, &doc);
+    let src = |cx: &mut gpui_kit::VisualTestContext| cx.read(|cx| doc.read(cx).source.clone());
+    let at = src(cx).find("\\frac{d^2 x}").unwrap() + "\\frac{d^2 ".len();
+    doc.update_in(cx, |d, window, cx| {
+        d.set_caret(at, cx);
+        d.replace_text_in_range(None, "$", window, cx);
+    });
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let d = doc.read(cx);
+        let a = d.active.as_ref().map(|a| a.range.clone());
+        eprintln!(
+            "ACTIVE {a:?} = {:?}; input {:?}",
+            a.clone().map(|r| d.source[r].to_string()),
+            d.input.read(cx).value()
+        );
+    });
+    type_in_editor(cx, &doc, "$");
+    cx.run_until_parked();
+    let after = src(cx);
+    eprintln!("after the second:\n{after}");
+    assert!(
+        after.contains("\\begin{equation}") && after.contains("\\end{equation}"),
+        "the equation is gone"
+    );
+    assert!(after.contains("d^2 x}"), "{after}");
+    assert_eq!(dollars(&after) % 2, 0);
+}
+
+/// Which blocks the caret may enter, and what Backspace does with a caret put inside a display
+/// equation (not where a person can click, but where a stale layout may leave it).
+#[gpui_kit::test]
+#[ignore]
+fn backspace_inside_an_equation(cx: &mut TestAppContext) {
+    let (doc, cx) = open(cx, scratch("eq-bs", NOTES), "main.tex", 3);
+    doc.update_in(cx, |d, window, cx| d.focus.focus(window, cx));
+    calm(cx, &doc);
+    cx.read(|cx| {
+        let d = doc.read(cx);
+        for (i, b) in d.blocks.iter().enumerate() {
+            eprintln!(
+                "BLOCK {i} text={} {:?}",
+                d.is_text_block(i),
+                d.source[b.range.clone()]
+                    .chars()
+                    .take(34)
+                    .collect::<String>()
+            );
+        }
+        eprintln!("STOPS in the equation: {:?}", {
+            let eq = d.source.find("\\begin{equation}").unwrap();
+            let end = d.source.find("\\end{equation}").unwrap();
+            stops(d)
+                .into_iter()
+                .filter(|s| *s > eq && *s < end)
+                .collect::<Vec<_>>()
+        });
+    });
+    let at = cx.read(|cx| doc.read(cx).source.find("d^2 x").unwrap() + 5);
+    let before = cx.read(|cx| doc.read(cx).source.clone());
+    doc.update(cx, |d, cx| {
+        d.set_caret(at, cx);
+        for _ in 0..5 {
+            d.delete(true, cx);
+        }
+    });
+    let after = cx.read(|cx| doc.read(cx).source.clone());
+    eprintln!(
+        "EQUATION AFTER: {:?}",
+        after.lines().find(|l| l.starts_with("F ="))
+    );
+    // the equation goes whole or stays whole, never half; and nothing else goes with it
+    assert!(
+        after == before || !after.contains("\\frac{^") && !after.contains("d^}"),
+        "Backspace left half an equation: {after:?}"
+    );
+    assert!(balanced(&after));
+    assert!(
+        before.len() - after.len() <= 70,
+        "more than the equation went"
+    );
+}
+
+/// Backspace held from the start of a paragraph's text, shown press by press.
+#[gpui_kit::test]
+#[ignore]
+fn backspace_run_shown(cx: &mut TestAppContext) {
+    let (doc, cx) = open(cx, scratch("bs-run", NOTES), "main.tex", 3);
+    doc.update_in(cx, |d, window, cx| d.focus.focus(window, cx));
+    calm(cx, &doc);
+    let from: usize = std::env::var("FROM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(85);
+    let presses: usize = std::env::var("PRESSES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
+    doc.update(cx, |d, cx| d.set_caret(from, cx));
+    for p in 0..presses {
+        let before = cx.read(|cx| doc.read(cx).source.clone());
+        doc.update(cx, |d, cx| d.delete(true, cx));
+        cx.run_until_parked();
+        let (after, caret) = cx.read(|cx| {
+            let d = doc.read(cx);
+            (d.source.clone(), d.caret.as_ref().map(|c| c.off))
+        });
+        let line = after.lines().find(|l| l.contains("moves")).unwrap_or("");
+        eprintln!(
+            "PRESS {p}: lost {} caret {caret:?} | {line}",
+            before.len().saturating_sub(after.len())
+        );
+    }
 }

@@ -757,15 +757,13 @@ impl Doc {
         };
         // an empty heading goes whole, with the blank line after it
         if let Some(bi) = self.block_of(off)
-            && let b = self.blocks[bi].range.clone()
-            && let Some(title) = caret::heading_title(&self.source[b.clone()], b.start)
-            && !glyphmap::has_visible(&self.source[title])
+            && let Some(range) =
+                caret::empty_heading_cut(&self.source, self.blocks[bi].range.clone())
         {
-            let ws = self.source[b.end..].len() - self.source[b.end..].trim_start().len();
             let e = Edit {
-                range: b.start..b.end + ws,
+                caret: range.start,
+                range,
                 text: String::new(),
-                caret: b.start,
             };
             return self.apply(e, cx);
         }
@@ -808,9 +806,20 @@ impl Doc {
                 Some(_) => off - 1..off,
                 None => g.trim_end_matches([' ', '\t']).len() + off - g.len()..off,
             });
-            let gone = spaces
-                .or_else(|| m.deletion(i, back, &self.source))
+            // the page's map lags the source while TeX catches up: then it is not trusted, and
+            // what it gives is checked to be what lies beside the caret either way
+            let stale = self.spans_pending > 0 || self.compiling;
+            let mapped = spaces
                 .or_else(|| {
+                    if stale {
+                        return None;
+                    }
+                    m.deletion(i, back, &self.source)
+                })
+                .or_else(|| {
+                    if stale {
+                        return None;
+                    }
                     // the block goes on from the page before (after)
                     let pages: Vec<u32> = self.pages_of(bi).collect();
                     let at = pages.iter().position(|&p| p == page)?;
@@ -826,7 +835,9 @@ impl Doc {
                         0
                     };
                     m.deletion(j, back, &self.source)
-                });
+                })
+                .filter(|r| caret::sane_deletion(&self.source, r, off, back));
+            let gone = mapped.or_else(|| caret::source_deletion(&self.source, off, back));
             if let Some(r) = gone {
                 // until the page catches up the old glyphs no longer match the source, so the
                 // caret is held where the removed text began: not thrown back to a word's start
@@ -861,7 +872,17 @@ impl Doc {
                 }
                 return;
             }
-            return self.join(bi, back, cx);
+            // at the block's edge: it joins the one beside it; elsewhere nothing is guessed at
+            let b = self.blocks[bi].range.clone();
+            let edge = if back {
+                !glyphmap::has_visible(&self.source[b.start.min(off)..off])
+            } else {
+                !glyphmap::has_visible(&self.source[off..b.end.max(off)])
+            };
+            if edge {
+                return self.join(bi, back, cx);
+            }
+            return;
         }
         // between blocks (an empty new paragraph): back to the block before
         if back && let Some(i) = self.blocks.iter().rposition(|b| b.range.end <= off) {
