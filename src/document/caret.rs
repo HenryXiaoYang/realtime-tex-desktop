@@ -171,7 +171,25 @@ impl CharMap {
                 src.get(off..)?.len() - src.get(off..)?.trim_start().len()
             };
             if ws > 0 {
-                return Some(if back { off - ws..off } else { off..off + ws });
+                let (a, b) = if back {
+                    (off - ws, off)
+                } else {
+                    (off, off + ws)
+                };
+                // the space that ends a control word (`{\small x`): with it gone the word would
+                // read `\smallx`, so one space stays, or the whole declaration goes
+                if let Some(word) = control_word_before(src, a)
+                    && src[b..].starts_with(|c: char| c.is_alphabetic())
+                {
+                    return if ws > 1 {
+                        Some(a + 1..b)
+                    } else if back && word.len() > 1 && !src[word.clone()].ends_with("selectfont") {
+                        Some(word.start..b)
+                    } else {
+                        None
+                    };
+                }
+                return Some(a..b);
             }
         }
         if let Some(r) = &c.src {
@@ -213,6 +231,22 @@ impl CharMap {
             && !piece.is_empty();
         whole.then_some(start..end)
     }
+}
+
+/// The control word (`\\small`) that ends right at `end` in `src`, if one does (not `\\\\x`, a line
+/// break and a letter).
+fn control_word_before(src: &str, end: usize) -> Option<Range<usize>> {
+    let head = src.get(..end)?;
+    let name = head.len()
+        - head
+            .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+            .len();
+    let slashes = head[..head.len() - name]
+        .bytes()
+        .rev()
+        .take_while(|&b| b == b'\\')
+        .count();
+    (name > 0 && slashes % 2 == 1).then(|| end - name - 1..end)
 }
 
 /// TeX still being typed, which would only make LaTeX choke (or, `\\` alone, print a space): a
@@ -831,6 +865,9 @@ pub fn open_groups(block: &str, base: usize, off: usize) -> Vec<(String, usize, 
 pub fn group_command(src: &str, open: usize) -> (usize, String) {
     let s = src.as_bytes();
     let mut i = open;
+    // the `{…}` groups stepped over: a command takes only so many, and a group after one of a
+    // command that takes none (`\textbf{a}{\large b}`) is a group of its own
+    let mut braced = 0;
     // step back over earlier {…} and […] arguments
     loop {
         let j = src[..i].trim_end().len();
@@ -858,7 +895,12 @@ pub fn group_command(src: &str, open: usize) -> (usize, String) {
             }
         }
         match found {
-            Some(k) => i = k,
+            Some(k) => {
+                if close == b'}' {
+                    braced += 1;
+                }
+                i = k;
+            }
             None => break,
         }
     }
@@ -868,9 +910,23 @@ pub fn group_command(src: &str, open: usize) -> (usize, String) {
         .trim_end_matches(|c: char| c.is_ascii_alphabetic())
         .len();
     if name_start < name_end && name_start > 0 && s[name_start - 1] == b'\\' {
-        (name_start - 1, src[name_start..name_end].to_string())
+        let name = &src[name_start..name_end];
+        if braced > extra_arguments(name) {
+            return (open, String::new());
+        }
+        (name_start - 1, name.to_string())
     } else {
         (open, String::new())
+    }
+}
+
+/// How many `{…}` arguments `name` takes before the one that holds text (`\textcolor{red}{…}`: one).
+fn extra_arguments(name: &str) -> usize {
+    match name {
+        "textcolor" | "colorbox" | "href" | "parbox" | "raisebox" | "setlength" | "addtolength"
+        | "newcommand" | "renewcommand" | "hyperlink" | "hypertarget" | "color" => 1,
+        "fcolorbox" | "newenvironment" => 2,
+        _ => 0,
     }
 }
 
@@ -885,6 +941,9 @@ pub fn delete_range(src: &str, lo: usize, hi: usize) -> Edit {
     let mut keep: Vec<Range<usize>> = vec![];
     // groups and environments opened inside, not closed yet: where their opening markup is
     let mut open: Vec<(usize, usize, Option<String>)> = vec![];
+    // the last `\item` inside, by the start of the environment it is in: a list whose `\begin`
+    // stays (its `\end` is outside) keeps it, or text would stand before its first item
+    let mut last_item: std::collections::HashMap<usize, Range<usize>> = Default::default();
     let mut i = lo;
     while i < hi {
         if s[i] == b'%' && (i == 0 || !is_cmd(s, i - 1)) {
@@ -931,6 +990,12 @@ pub fn delete_range(src: &str, lo: usize, hi: usize) -> Edit {
                 i = j;
                 continue;
             }
+            if rest.starts_with("\\item")
+                && !rest[5..].starts_with(|c: char| c.is_ascii_alphabetic())
+                && let Some(k) = open.iter().rposition(|o| o.2.is_some())
+            {
+                last_item.insert(open[k].0, i..i + 5);
+            }
             i += 2;
             while i < hi && (s[i].is_ascii_alphabetic() || s[i] == b'@') {
                 i += 1;
@@ -951,9 +1016,35 @@ pub fn delete_range(src: &str, lo: usize, hi: usize) -> Edit {
         }
         i += 1;
     }
+    for (begin, _, name) in &open {
+        if name.is_some()
+            && let Some(item) = last_item.get(begin)
+        {
+            keep.push(item.clone());
+        }
+    }
     keep.extend(open.into_iter().map(|(a, b, _)| a..b));
     keep.sort_by_key(|r| r.start);
-    let text: String = keep.iter().map(|r| &src[r.clone()]).collect();
+    // (a kept `\item` has a space after it, or the text that follows would join its name)
+    // (a kept `\begin` or `\end` stands on a line of its own: run into the text beside it, the
+    // paragraph would no longer end where its environment does)
+    let mut text = String::new();
+    let own_line = src[..lo].is_empty() || src[..lo].ends_with('\n');
+    let line_after = src[hi..].is_empty() || src[hi..].starts_with('\n');
+    for (n, r) in keep.iter().enumerate() {
+        let part = &src[r.clone()];
+        let env = part.starts_with("\\begin{") || part.starts_with("\\end{");
+        if env && !(text.is_empty() && own_line) && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(part);
+        if part == "\\item" {
+            text.push(' ');
+        }
+        if env && !(n + 1 == keep.len() && line_after) {
+            text.push('\n');
+        }
+    }
     Edit {
         range: lo..hi,
         // where the selection began: typing goes on in the formatting there, as in Word
@@ -979,6 +1070,22 @@ pub fn balanced(tex: &str) -> bool {
         }
     }
     envs.is_empty()
+}
+
+/// Where the comment in `line` starts: its first `%` that is not escaped (`\\%` is a percent sign,
+/// `\\\\%` a line break and a comment).
+pub fn comment_start(line: &str) -> Option<usize> {
+    let mut chars = line.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '%' => return Some(i),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Headings: Enter inside one splits it in two, as it splits formatting.
@@ -1044,6 +1151,8 @@ enum Split {
 /// command's argument other than formatting or a heading). A caret at the edge of a group
 /// (`\textbf{word|} more`) breaks outside it rather than leaving it empty on one side.
 fn split_at(src: &str, text: Range<usize>, off: usize) -> Option<Split> {
+    // (a caret after the space that ends an item is past its trimmed text)
+    let off = off.clamp(text.start, text.end);
     if !shows_text(src, text.start..off) {
         return Some(Split::Start);
     }
@@ -1100,6 +1209,9 @@ pub fn heading_title(block: &str, base: usize) -> Option<Range<usize>> {
 /// Whether `src[r]` prints text, a picture's labels aside (a TikZ flowchart beside the text
 /// is not text the caret is after).
 fn shows_text(src: &str, r: Range<usize>) -> bool {
+    if r.start >= r.end {
+        return false;
+    }
     let mut t = String::new();
     let mut at = r.start;
     let mut pics = picture_regions(src);
@@ -1283,7 +1395,13 @@ fn break_edit(at: usize, n: usize) -> Edit {
 }
 
 fn breaks(src: &str, block: Range<usize>, off: usize, n: usize) -> Option<Edit> {
+    // (an item's text can begin with the line break after its `\item`)
+    let lead = src[block.clone()].len() - src[block.clone()].trim_start().len();
+    let title = heading_title(&src[block.start + lead..block.end], block.start + lead);
     match split_at(src, block.clone(), off)? {
+        // a heading's title may break inside; after its closing brace the break is TeX's "no
+        // line here to end"
+        Split::Mid(at, _, _) if title.is_some_and(|t| at < t.start || at >= t.end) => None,
         Split::Mid(at, _, _) => {
             let groups = open_groups(&src[block.clone()], block.start, at);
             groups
@@ -1316,6 +1434,71 @@ pub fn is_prose(block: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kept_item_is_not_joined_to_the_text_after_it() {
+        let src = "Some text here\n\n\\begin{itemize}\n\\item Two with it\n\\end{itemize}";
+        let lo = src.find("text").unwrap();
+        let hi = src.find("Two with ").unwrap() + "Two with ".len();
+        let out = apply(src, &delete_range(src, lo, hi));
+        assert!(
+            !out.contains("\\itemit") && out.contains("\\item it"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_list_cut_into_from_above_keeps_an_item_to_start_it() {
+        let src = "First para\\textbf{h with x}\n\\textbf{Second}\n\\begin{itemize}\n\\item \\textbf{One}\n\\item Two\n\\end{itemize}";
+        let lo = src.find("h with").unwrap();
+        let hi = src.find("One").unwrap() + 3;
+        let out = apply(src, &delete_range(src, lo, hi));
+        assert!(balanced(&out), "{out}");
+        let list = &out[out.find("\\begin{itemize}").unwrap() + "\\begin{itemize}".len()..];
+        assert!(list.trim_start().starts_with("\\item"), "{out}");
+    }
+
+    #[test]
+    fn a_block_goes_in_when_the_caret_is_past_the_space_ending_an_item() {
+        let src = "\\begin{itemize}\n\\item CD \n\\item \n\\end{itemize}";
+        let at = src.find("CD ").unwrap() + 3;
+        let e = insert_block(src, 0..src.len(), at, "\\begin{center}Q\\end{center}");
+        assert!(e.range.end <= src.len() && balanced(&apply(src, &e)));
+        // the same for a break and a new paragraph there
+        assert!(
+            enter_in_paragraph(src, 0..src.len(), at, false)
+                .is_none_or(|e| e.range.end <= src.len())
+        );
+    }
+
+    #[test]
+    fn deleting_between_two_groups_keeps_the_braces_even() {
+        let src = "\\begin{flushright}\n{\\large AB }{\\large CD }\n\\end{flushright}";
+        let lo = src.find("}{").unwrap();
+        let hi = src.find("CD").unwrap();
+        let out = apply(src, &delete_range(src, lo, hi));
+        assert!(balanced(&out), "{out}");
+    }
+
+    #[test]
+    fn a_group_after_a_command_group_is_its_own() {
+        // `\textbf{a}{\large b}`: two groups side by side, not a command with two arguments
+        let src = "\\textbf{a}{\\large b}";
+        assert_eq!(group_command(src, 10), (10, String::new()));
+        // …but `\textcolor{red}{x}` has its colour first, and an optional argument is skipped
+        let src = "\\textcolor{red}{x}";
+        assert_eq!(group_command(src, 15), (0, "textcolor".to_string()));
+        let src = "\\section[short]{Long}";
+        assert_eq!(group_command(src, 15), (0, "section".to_string()));
+    }
+
+    #[test]
+    fn a_comment_starts_at_the_first_percent_that_is_not_escaped() {
+        assert_eq!(comment_start("50\\% off % note"), Some(9));
+        assert_eq!(comment_start("a \\\\% b"), Some(4));
+        assert_eq!(comment_start("no comment"), None);
+        assert_eq!(comment_start("é日 % x"), Some("é日 ".len()));
+    }
 
     fn apply(src: &str, e: &Edit) -> String {
         let mut s = src.to_string();
@@ -1560,6 +1743,20 @@ mod tests {
         assert_eq!(lb("one |two").unwrap(), "one \\\\\n|two");
         assert_eq!(lb("|two"), None);
         assert_eq!(lb("\\section{A |B}"), None);
+        // nor behind its closing brace, where TeX has no line to end
+        assert_eq!(lb("\\section{{\\large IZ{}\\{}|}"), None);
+        assert_eq!(lb("\\section{{\\large IZ{}\\{}}|"), None);
+        assert_eq!(lb("\\section{{\\large IZ|{}\\{}}"), None);
+        // (also as an item's text, which starts with the line break after `\item`)
+        let s = "\\item \n\\section{T}{5} x";
+        assert_eq!(
+            line_break(s, 5..s.len(), s.find("x").unwrap()).map(|e| apply(s, &e)),
+            None
+        );
+        assert_eq!(
+            line_break(s, 5..s.len(), s.find("}{").unwrap() + 1).map(|e| apply(s, &e)),
+            None
+        );
     }
 
     #[test]
@@ -1686,17 +1883,35 @@ mod tests {
         // out of a list into the text after: the list's end stays
         assert_eq!(
             del("\\begin{itemize}\n  \\item on|e\n\\end{itemize}\n\nAft|er"),
-            "\\begin{itemize}\n  \\item on|\\end{itemize}er"
+            "\\begin{itemize}\n  \\item on|\n\\end{itemize}\ner"
         );
         // into a list from before: its beginning stays, with its options
         assert_eq!(
             del("Bef|ore\n\\begin{itemize}[nosep]\n  \\item on|e\n\\end{itemize}"),
-            "Bef|\\begin{itemize}[nosep]e\n\\end{itemize}"
+            "Bef|\n\\begin{itemize}[nosep]\n\\item e\n\\end{itemize}"
+        );
+        // across an alignment and into a list: what stays is on lines of its own, so each
+        // paragraph still ends where its environment does
+        let out = del(
+            "\\begin{flushright}\nFirst |one\n\\end{flushright}\n\nSecond\n\n\\begin{itemize}\n\\item One\n\\item Tw|o\n\\end{itemize}",
+        );
+        assert_eq!(
+            out,
+            "\\begin{flushright}\nFirst |\n\\end{flushright}\n\\begin{itemize}\n\\item o\n\\end{itemize}"
         );
         // a whole environment inside goes
         assert_eq!(del("a |b \\begin{center}x\\end{center} c| d"), "a | d");
         assert!(balanced("\\textbf{a} \\begin{center}b\\end{center}"));
         assert!(!balanced("bo} x \\textbf{y"));
+    }
+
+    #[test]
+    fn a_control_word_is_found_where_a_space_ends_it() {
+        let s = "{\\footnotesize x \\\\y";
+        assert_eq!(control_word_before(s, 13), Some(1..13));
+        // a line break and a letter is no control word
+        assert_eq!(control_word_before(s, s.len()), None);
+        assert_eq!(control_word_before("plain ", 5), None);
     }
 
     #[test]

@@ -5,6 +5,8 @@ pub mod caret;
 pub mod element;
 pub mod find;
 pub mod format;
+#[cfg(test)]
+mod fuzz;
 pub mod glyphmap;
 pub mod html;
 pub mod insert;

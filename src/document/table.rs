@@ -1,6 +1,7 @@
 // A `tabular` in its source: where each cell's TeX is, and the edits that change a cell or add and
 // remove rows and columns. Cells are kept as the TeX they are (a `\multicolumn`, a nested
 // environment), so nothing is lost by editing the one beside it.
+use super::caret::comment_start;
 use std::ops::Range;
 
 pub struct Table {
@@ -236,7 +237,7 @@ impl Table {
             }
             // the last row has no `\\`: it gets one, and the new row follows it
             None => {
-                let at = r.cells.last()?.end;
+                let at = past_comment(src, r.cells.last()?.end);
                 Some(Change {
                     range: at..at,
                     text: format!(" \\\\\n{indent}{empty} \\\\"),
@@ -258,9 +259,15 @@ impl Table {
         };
         // the row and the line break after it; the last row takes the `\\` before it
         if r.end.is_none() {
-            let prev = self.rows[row - 1].end.clone()?;
+            let before = &self.rows[row - 1];
+            let prev = before.end.clone()?;
+            // (a blank row keeps its `\\`: a last row with nothing in it is no row at all)
+            let blank = before
+                .cells
+                .iter()
+                .all(|c| src[c.clone()].trim().is_empty());
             return Some(Change {
-                range: prev.start..to,
+                range: if blank { prev.end } else { prev.start }..to,
                 text: String::new(),
             });
         }
@@ -292,7 +299,7 @@ impl Table {
             if r.cells.len() != self.cols() {
                 continue; // a `\multicolumn` row: left as it is
             }
-            let at = r.cells.get(col)?.end;
+            let at = past_comment(src, r.cells.get(col)?.end);
             out.push(Change {
                 range: at..at,
                 text: " &".into(),
@@ -312,7 +319,7 @@ impl Table {
 
     /// Column `col` removed from the spec and every row (never the only one).
     pub fn del_col(&self, src: &str, col: usize) -> Option<Vec<Change>> {
-        if self.cols() < 2 {
+        if self.cols() < 2 || col >= self.cols() {
             return None;
         }
         let mut out = vec![];
@@ -324,7 +331,16 @@ impl Table {
             let range = if col + 1 < r.cells.len() {
                 r.cells[col].start..r.cells[col + 1].start
             } else {
-                r.cells[col - 1].end..r.cells[col].end
+                // a comment ending the one before would swallow what follows it: the `&` goes too
+                let prev = r.cells[col - 1].end;
+                let gap = &src[prev..r.cells[col].start];
+                let from = match gap.rfind('&') {
+                    Some(amp) if comment_start(&src[line_start(src, prev)..prev]).is_some() => {
+                        prev + amp
+                    }
+                    _ => prev,
+                };
+                from..r.cells[col].end
             };
             out.push(Change {
                 range,
@@ -545,7 +561,7 @@ impl Table {
             && let Some(r) = rule(n)
         {
             let last = self.rows.last()?;
-            let at = last.cells.last()?.end;
+            let at = past_comment(src, last.cells.last()?.end);
             out.push(Change {
                 range: at..at,
                 text: format!(" \\\\\n{}{r}", indent_of(src, last.start)),
@@ -563,7 +579,7 @@ impl Table {
         let cells: Vec<&str> = self.rows.first().map_or(vec![], |r| {
             r.cells
                 .iter()
-                .map(|c| &src[c.clone()])
+                .map(|c| split_comment(&src[c.clone()]).0)
                 .filter(|c| !c.trim().is_empty())
                 .collect()
         });
@@ -576,7 +592,7 @@ impl Table {
         let row = self.rows.first()?;
         let mut out = vec![];
         for c in &row.cells {
-            let text = &src[c.clone()];
+            let (text, comment) = split_comment(&src[c.clone()]);
             if text.contains("\\multicolumn") {
                 return None;
             }
@@ -586,11 +602,11 @@ impl Table {
             match (on, bold_inner(text)) {
                 (true, None) => out.push(Change {
                     range: c.clone(),
-                    text: format!("\\textbf{{{text}}}"),
+                    text: with_comment(format!("\\textbf{{{text}}}"), comment),
                 }),
                 (false, Some(inner)) => out.push(Change {
                     range: c.clone(),
-                    text: inner.to_string(),
+                    text: with_comment(inner.to_string(), comment),
                 }),
                 _ => {}
             }
@@ -601,6 +617,7 @@ impl Table {
 
 /// `cell` with its whole text in `\\cmd{…}` (a bold or italic cell), or out of it again.
 pub fn toggle_cell(cell: &str, cmd: &str) -> String {
+    let (cell, comment) = split_comment(cell);
     let (shade, text) = split_shade(cell);
     let open = format!("\\{cmd}{{");
     let text = text.trim();
@@ -612,7 +629,7 @@ pub fn toggle_cell(cell: &str, cmd: &str) -> String {
         Some(i) => i.to_string(),
         None => format!("{open}{text}}}"),
     };
-    format!("{shade}{body}")
+    with_comment(format!("{shade}{body}"), comment)
 }
 
 /// `cell` shaded `color` (`yellow!30`), or not shaded with none.
@@ -626,6 +643,7 @@ pub fn shade_cell(cell: &str, color: Option<&str>) -> String {
 
 /// `cell`'s text in `\\textcolor{color}{…}`, or plain again with none.
 pub fn colour_cell(cell: &str, color: Option<&str>) -> String {
+    let (cell, comment) = split_comment(cell);
     let (shade, text) = split_shade(cell);
     let text = text.trim();
     let plain = text
@@ -634,10 +652,11 @@ pub fn colour_cell(cell: &str, color: Option<&str>) -> String {
         .and_then(|r| r.strip_suffix('}'))
         .filter(|i| crate::document::caret::balanced(i))
         .unwrap_or(text);
-    match color {
+    let out = match color {
         Some(c) => format!("{shade}\\textcolor{{{c}}}{{{plain}}}"),
         None => format!("{shade}{plain}"),
-    }
+    };
+    with_comment(out, comment)
 }
 
 /// A cell's `\\cellcolor{…}` (with the space after it) and the rest.
@@ -657,6 +676,7 @@ fn split_shade(cell: &str) -> (&str, &str) {
 
 /// What a cell is shaded, and whether its text is bold, italic or coloured.
 pub fn cell_look(cell: &str) -> (Option<String>, bool, bool, Option<String>) {
+    let cell = split_comment(cell).0;
     let shade = cell
         .strip_prefix("\\cellcolor{")
         .and_then(|r| r.split_once('}'))
@@ -796,6 +816,33 @@ fn line_start(src: &str, at: usize) -> usize {
     src[..at].rfind('\n').map_or(0, |i| i + 1)
 }
 
+/// Where text may go after a cell that ends at `at`: there, or, when a comment ends its line, past
+/// the line break (anything put inside the comment is lost with it).
+fn past_comment(src: &str, at: usize) -> usize {
+    if comment_start(&src[line_start(src, at)..at]).is_some() {
+        return src[at..].find('\n').map_or(at, |i| at + i + 1);
+    }
+    at
+}
+
+/// A cell without the comment that ends it, and that comment (`A % note` is `A` and `% note`).
+fn split_comment(cell: &str) -> (&str, &str) {
+    let ls = cell.rfind('\n').map_or(0, |i| i + 1);
+    match comment_start(&cell[ls..]) {
+        Some(i) => (cell[..ls + i].trim_end(), &cell[ls + i..]),
+        None => (cell, ""),
+    }
+}
+
+/// `text` and, after a space, the comment that ended the cell.
+fn with_comment(text: String, comment: &str) -> String {
+    if comment.is_empty() {
+        text
+    } else {
+        format!("{text} {comment}")
+    }
+}
+
 /// The white space the line at `at` starts with.
 fn indent_of(src: &str, at: usize) -> String {
     let s = &src[line_start(src, at)..at];
@@ -815,6 +862,48 @@ pub fn apply(src: &str, mut changes: Vec<Change>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const COMMENTED: &str =
+        "\\begin{tabular}{ll}\n  A % one\n  & B % two\n  \\\\\n  C & D % last\n\\end{tabular}";
+
+    #[test]
+    fn a_comment_ending_a_cell_does_not_swallow_what_follows_it() {
+        let t = table(COMMENTED);
+        let n = t.rows.len();
+        // a column: its `&` goes after the line break, not into the comment
+        let out = apply(COMMENTED, t.add_col(COMMENTED, 1).unwrap());
+        let t2 = table(&out);
+        assert_eq!((t2.cols(), t2.rows.len()), (3, n), "{out}");
+        // a row after the last, which has no `\\`
+        let out = apply(COMMENTED, vec![t.add_row(COMMENTED, 1).unwrap()]);
+        assert_eq!(table(&out).rows.len(), n + 1, "{out}");
+        // the last column out: the `\\` after the comment stays out of it
+        let out = apply(COMMENTED, t.del_col(COMMENTED, 1).unwrap());
+        assert_eq!(
+            (table(&out).cols(), table(&out).rows.len()),
+            (1, n),
+            "{out}"
+        );
+        // the header wraps the text, not the comment
+        let out = apply(COMMENTED, t.set_header(COMMENTED, true).unwrap());
+        assert!(out.contains("\\textbf{A} % one"), "{out}");
+        assert!(table(&out).header(&out));
+        // and so do the cell tools
+        assert_eq!(toggle_cell("A % note", "textbf"), "\\textbf{A} % note");
+        assert_eq!(toggle_cell("\\textbf{A} % note", "textbf"), "A % note");
+        assert_eq!(
+            colour_cell("A % note", Some("red")),
+            "\\textcolor{red}{A} % note"
+        );
+        assert!(cell_look("\\textbf{A} % note").1);
+    }
+
+    #[test]
+    fn a_column_or_row_that_is_not_there_is_left_alone() {
+        let t = table(T);
+        assert!(t.del_col(T, 2).is_none() && t.del_col(T, 9).is_none());
+        assert!(t.add_col(T, 9).is_none() && t.del_row(T, 9).is_none());
+    }
 
     const T: &str = "\\begin{tabular}{|l|c|}\n  \\hline\n  A & B \\\\\n  \\hline\n  c & {d \\& e} \\\\\n  \\hline\n\\end{tabular}";
 

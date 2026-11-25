@@ -12,6 +12,7 @@ mod perf;
 mod quit;
 mod sidebar;
 mod source_mode;
+mod stress;
 mod table;
 mod typing;
 

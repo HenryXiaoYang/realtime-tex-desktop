@@ -4,7 +4,7 @@
 // is in; sizes, colours and fonts rewrite a group that holds exactly the selection instead of
 // nesting another; lists, alignment and paragraph styles rewrite whole blocks. Each edit says
 // which packages it needs.
-use super::caret::{self, group_close, group_command, item_at, open_groups};
+use super::caret::{self, comment_start, group_close, group_command, item_at, open_groups};
 use super::glyphmap::has_visible;
 use std::ops::Range;
 
@@ -851,16 +851,40 @@ pub fn style_of(src: &str, block: Range<usize>) -> Style {
         .map_or(Style::Normal, Style::Heading)
 }
 
-/// The text of block `block` without its style: a heading's title, a quote's body, or itself.
-fn bare_text(src: &str, block: Range<usize>) -> String {
-    let t = &src[block.clone()];
-    if let Some(title) = caret::heading_title(t, block.start) {
-        return src[title].to_string();
-    }
-    for env in ["quote", "quotation"] {
-        let (b, e) = (format!("\\begin{{{env}}}"), format!("\\end{{{env}}}"));
-        if let Some(inner) = t.strip_prefix(&b).and_then(|r| r.strip_suffix(&e)) {
-            return inner.trim().to_string();
+/// The text of block `block` without its style: a heading's title, a quote's body, or itself. With
+/// `unalign`, an alignment around it goes too (a heading or quote carries no `center` of its own).
+fn bare_text(src: &str, block: Range<usize>, unalign: bool) -> String {
+    let mut t = &src[block];
+    loop {
+        if let Some(title) = caret::heading_title(t, 0) {
+            return t[title].to_string();
+        }
+        let wrapped = ["quote", "quotation"]
+            .into_iter()
+            .chain(ALIGN_ENVS.iter().copied().filter(|_| unalign))
+            .find_map(|env| {
+                t.trim()
+                    .strip_prefix(&format!("\\begin{{{env}}}"))
+                    .and_then(|r| r.strip_suffix(&format!("\\end{{{env}}}")))
+            });
+        match wrapped {
+            // (a quote ends it: what is inside is the text)
+            Some(inner) if unalign => t = inner.trim(),
+            Some(inner) => return inner.trim().to_string(),
+            None => {
+                let decl = ["\\centering", "\\raggedright", "\\raggedleft"]
+                    .into_iter()
+                    .filter(|_| unalign)
+                    .find_map(|d| {
+                        t.trim_start()
+                            .strip_prefix(d)
+                            .filter(|r| !r.starts_with(|c: char| c.is_ascii_alphabetic()))
+                    });
+                match decl {
+                    Some(rest) => t = rest.trim_start(),
+                    None => break,
+                }
+            }
         }
     }
     t.to_string()
@@ -869,9 +893,29 @@ fn bare_text(src: &str, block: Range<usize>) -> String {
 /// Give block `block` style `style`. A title goes into the preamble (`\title{…}`) and the block
 /// becomes `\maketitle` (or goes, when the document already makes its title).
 pub fn set_style(src: &str, block: Range<usize>, style: Style) -> Option<Fmt> {
-    let text = bare_text(src, block.clone());
+    let text = bare_text(src, block.clone(), style != Style::Normal);
+    // a heading, a quote or a title holds running text: an environment (a list, a figure, a
+    // table) does not go inside one
+    if style != Style::Normal && (text.contains("\\begin{") || text.contains("\\end{")) {
+        return None;
+    }
     // a heading's title is one paragraph
-    let one_line = |t: &str| t.split("\n\n").map(str::trim).collect::<Vec<_>>().join(" ");
+    // (a comment ending a paragraph keeps its line break, or it would take the next one with it)
+    let one_line = |t: &str| {
+        let mut out = String::new();
+        for p in t.split("\n\n").map(str::trim) {
+            if !out.is_empty() {
+                let last = out.rsplit('\n').next().unwrap_or("");
+                out.push(if comment_start(last).is_some() {
+                    '\n'
+                } else {
+                    ' '
+                });
+            }
+            out.push_str(p);
+        }
+        out
+    };
     let star = src[block.clone()]
         .split('{')
         .next()
@@ -891,6 +935,34 @@ pub fn set_style(src: &str, block: Range<usize>, style: Style) -> Option<Fmt> {
         range: block,
         text: new,
         select,
+        packages: vec![],
+    })
+}
+
+/// `set_style` for each of `blocks` (paragraphs selected together): each becomes the style, and
+/// what is not running text (a list, a figure) stays as it is; one edit from the first block's
+/// start to the last one's end. A title can be one only.
+pub fn set_style_each(src: &str, blocks: &[Range<usize>], style: Style) -> Option<Fmt> {
+    if style == Style::Title || blocks.len() < 2 {
+        return blocks.iter().find_map(|b| set_style(src, b.clone(), style));
+    }
+    let (first, last) = (blocks.first()?.start, blocks.last()?.end);
+    let (mut text, mut at, mut any) = (String::new(), first, false);
+    for b in blocks {
+        text.push_str(&src[at..b.start]);
+        match set_style(src, b.clone(), style) {
+            Some(f) if f.range == *b => {
+                any = true;
+                text.push_str(&f.text);
+            }
+            _ => text.push_str(&src[b.clone()]),
+        }
+        at = b.end;
+    }
+    any.then(|| Fmt {
+        range: first..last,
+        select: first..first + text.len(),
+        text,
         packages: vec![],
     })
 }
@@ -964,6 +1036,42 @@ pub fn add_lualatex(src: &str) -> Option<(usize, String)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_style_goes_on_each_paragraph_and_not_on_what_is_not_text() {
+        let src =
+            "First one.\n\n\\begin{itemize}\n\\item A\n\\end{itemize}\n\n\\centering Last one.";
+        let list = src.find("\\begin{itemize}").unwrap();
+        let list_end = src.find("\\end{itemize}").unwrap() + "\\end{itemize}".len();
+        let last = src.find("\\centering").unwrap();
+        let blocks = [0..10, list..list_end, last..src.len()];
+        let e = set_style_each(src, &blocks, Style::Heading("section")).unwrap();
+        assert_eq!(
+            e.text,
+            "\\section{First one.}\n\n\\begin{itemize}\n\\item A\n\\end{itemize}\n\n\\section{Last one.}"
+        );
+        // a list or a figure alone is no heading
+        assert!(set_style(src, list..list_end, Style::Heading("section")).is_none());
+        assert!(set_style(src, list..list_end, Style::Quote).is_none());
+        // but its style can be put back to normal
+        assert!(set_style(src, list..list_end, Style::Normal).is_some());
+    }
+
+    #[test]
+    fn a_heading_over_an_aligned_paragraph_leaves_the_alignment_behind() {
+        let style = |src: &str, st| set_style(src, 0..src.len(), st).unwrap().text;
+        let src = "\\begin{center}\nSome text\n\\end{center}";
+        assert_eq!(
+            style(src, Style::Heading("section")),
+            "\\section{Some text}"
+        );
+        assert_eq!(style(src, Style::Normal), src, "plain keeps its alignment");
+        let src = "\\begin{flushleft}\n\\section{Intro}\n\\end{flushleft}";
+        assert_eq!(
+            style(src, Style::Heading("subsection")),
+            "\\subsection{Intro}"
+        );
+    }
+
     /// Run `f` on `src` with the selection between its `[` `]` (or the caret at `|`), as the
     /// source after, the selection marked again.
     fn run(src: &str, f: impl Fn(&str, Range<usize>, Range<usize>) -> Option<Fmt>) -> String {
@@ -980,6 +1088,28 @@ mod tests {
         out.insert(e.select.end, ']');
         out.insert(e.select.start, '[');
         out
+    }
+
+    #[test]
+    fn a_group_beside_a_command_group_is_not_inside_it() {
+        // the caret in the second group: nothing of the first one is split or copied
+        let out = run("\\emph{AB }{\\large CD |EF }", |s, b, r| {
+            toggle_inline(s, b, r, "textit")
+        });
+        assert_eq!(out.matches("AB").count(), 1, "{out}");
+        assert_eq!(out.matches("EF").count(), 1, "{out}");
+        let out = run("\\textbf{AB }{\\large [CD ]}", |s, b, r| {
+            toggle_inline(s, b, r, "textbf")
+        });
+        assert_eq!(out.matches("AB").count(), 1, "{out}");
+        assert_eq!(out.matches("CD").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn a_heading_keeps_the_line_break_after_a_comment() {
+        let src = "first % note\n\nsecond";
+        let e = set_style(src, 0..src.len(), Style::Heading("section")).expect("an edit");
+        assert!(e.text.contains("% note\nsecond"), "{}", e.text);
     }
 
     #[test]

@@ -17,6 +17,9 @@ pub(super) struct Disk {
     /// Its text.
     pub(super) text: String,
     stamp: Option<Stamp>,
+    /// A change seen once: taken in when the next look finds it as it was, so a write still going
+    /// on (a file emptied and filled again) is not taken half done.
+    pending: Option<Stamp>,
 }
 
 impl Disk {
@@ -24,6 +27,7 @@ impl Disk {
         Self {
             text: text.to_string(),
             stamp: stamp(&root.join(path)),
+            pending: None,
         }
     }
 }
@@ -53,13 +57,24 @@ impl Doc {
             loop {
                 cx.background_executor().timer(POLL).await;
                 if this
-                    .update_in(cx, |this, window, cx| this.check_disk(window, cx))
+                    .update_in(cx, |this, window, cx| this.poll_disk(window, cx))
                     .is_err()
                 {
                     break;
                 }
             }
         })
+    }
+
+    /// A look for the watch: a change is let settle for one look first.
+    fn poll_disk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = stamp(&self.root.join(&self.path));
+        if now.is_some() && now != self.disk.stamp && self.disk.pending != now {
+            self.disk.pending = now;
+            return;
+        }
+        self.disk.pending = None;
+        self.check_disk(window, cx);
     }
 
     /// The file looked at: a change someone else made is taken in, or asked about.

@@ -28,6 +28,14 @@ pub fn html_to_tex(html: &str) -> (String, Vec<&'static str>) {
             let tag = tag.trim_start_matches('/').trim_end_matches('/');
             let (name, attrs) = tag.split_once(char::is_whitespace).unwrap_or((tag, ""));
             let name = name.to_ascii_lowercase();
+            // preformatted text is shown as it is: a tag in it is not markup (`<pre><code>`), but
+            // a line break, and `</pre>` ends it
+            if pre > 0 && !(closing && name == "pre") {
+                if name == "br" && !closing {
+                    out.push('\n');
+                }
+                continue;
+            }
             // what these hold is not text
             if !closing && ["style", "script", "head", "title", "xml"].contains(&name.as_str()) {
                 let close = format!("</{name}");
@@ -44,7 +52,7 @@ pub fn html_to_tex(html: &str) -> (String, Vec<&'static str>) {
                 if let Some(k) = open.iter().rposition(|(n, _)| *n == name) {
                     while open.len() > k {
                         let (n, close) = open.pop().unwrap();
-                        if n == "pre" {
+                        if n == "pre" && close.contains("verbatim") {
                             pre -= 1;
                         }
                         out.push_str(&close);
@@ -60,6 +68,10 @@ pub fn html_to_tex(html: &str) -> (String, Vec<&'static str>) {
                 "i" | "em" | "cite" => ("\\textit{".into(), "}".into()),
                 "u" | "ins" => ("\\underline{".into(), "}".into()),
                 "code" | "tt" | "kbd" | "samp" => ("\\texttt{".into(), "}".into()),
+                // (verbatim cannot stand in another command's argument: there, plain monospace)
+                "pre" if open.iter().any(|(_, c)| c.contains('}')) => {
+                    ("\\texttt{".into(), "}".into())
+                }
                 "pre" => {
                     pre += 1;
                     (
@@ -137,7 +149,8 @@ pub fn html_to_tex(html: &str) -> (String, Vec<&'static str>) {
         let next = html[i..].find('<').map_or(html.len(), |j| i + j);
         let text = decode(&html[i..next]);
         if pre > 0 {
-            out.push_str(&text);
+            // (the one line verbatim cannot hold)
+            out.push_str(&text.replace("\\end{verbatim}", "\\end{verbatim }"));
         } else {
             let squashed: String = text
                 .split(|c: char| c.is_whitespace() && c != '\u{a0}')
@@ -295,6 +308,25 @@ mod tests {
             "\\begin{itemize}\n\\item a\n\\item \\textbf{b}\n\\end{itemize}"
         );
         assert_eq!(tex("line<br>next"), "line\\\\\nnext");
+    }
+
+    #[test]
+    fn preformatted_text_is_verbatim_whatever_tags_it_holds() {
+        // GitHub and most editors write code as <pre><code>: no \texttt in what is shown as is
+        assert_eq!(
+            tex("<pre><code>let x = 1;<br>y</code></pre>"),
+            "\\begin{verbatim}\nlet x = 1;\ny\n\\end{verbatim}"
+        );
+        assert_eq!(
+            tex("<pre><b>a</b> % # &amp; <i>b</i></pre>after"),
+            "\\begin{verbatim}\na % # & b\n\\end{verbatim}\n\nafter"
+        );
+        // the one line verbatim cannot hold
+        assert!(!tex("<pre>\\end{verbatim} x</pre>").contains("\\end{verbatim} x"));
+        // not inside another command's argument, where verbatim does not typeset
+        let t = tex("<b><pre>a_b</pre></b><h1><pre>c</pre></h1>");
+        assert!(!t.contains("verbatim"), "{t}");
+        assert!(crate::document::caret::balanced(&t), "{t}");
     }
 
     #[test]

@@ -786,7 +786,9 @@ fn is_length(s: &str) -> bool {
 /// (which would end or break the argument) are escaped, and so are `$` when they do not pair
 /// up and `_`/`^` outside a formula.
 fn tex_text(v: &str) -> Option<String> {
-    if !super::caret::balanced(v) {
+    // a backslash at the end would escape the brace that closes the argument
+    let trailing = v.chars().rev().take_while(|&c| c == '\\').count();
+    if !super::caret::balanced(v) || trailing % 2 == 1 {
         return None;
     }
     let chars: Vec<char> = v.chars().collect();
@@ -859,7 +861,7 @@ pub fn hint(kind: Kind, key: &str, value: &str) -> Option<&'static str> {
         "placement" => "Letters from h t b p ! H",
         "label" => "No \\ { } # % ~ $ & ^ or commas",
         "file" => "No { } % # or \\",
-        _ => "Braces { } must pair up",
+        _ => "Braces { } must pair up, and no \\ at the end",
     })
 }
 
@@ -1350,6 +1352,9 @@ mod tests {
         assert_eq!(set(fig, &el, "label", "a#b"), None);
         // TeX text: braces must balance; specials are escaped
         assert_eq!(set(fig, &el, "caption", "\\textbf{x"), None);
+        // a backslash ending it would escape the brace that closes the caption
+        assert_eq!(set(fig, &el, "caption", "ends with \\"), None);
+        assert!(set(fig, &el, "caption", "a line\\\\ break").is_some());
         assert!(
             apply(
                 fig,

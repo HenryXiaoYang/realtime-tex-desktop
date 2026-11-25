@@ -10,7 +10,8 @@ impl Workspace {
     /// the terminal, git) shows up without the user asking. A name list is all it costs.
     pub(super) fn watch_tree(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
         cx.spawn_in(window, async move |this, cx| {
-            let mut seen: Vec<String> = vec![];
+            // (none until the first look: an empty folder is something to learn too)
+            let mut seen: Option<Vec<String>> = None;
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(1000))
@@ -24,9 +25,9 @@ impl Workspace {
                     .background_executor()
                     .spawn(async move { names_under(&root, &expanded) })
                     .await;
-                if now != seen {
+                if seen.as_ref() != Some(&now) {
                     // the first look only learns what is there
-                    let first = std::mem::replace(&mut seen, now).is_empty();
+                    let first = seen.replace(now).is_none();
                     if !first && this.update(cx, |this, cx| this.refresh_tree(cx)).is_err() {
                         break;
                     }

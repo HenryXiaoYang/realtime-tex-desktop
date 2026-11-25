@@ -1,6 +1,7 @@
 // The points of a TikZ picture: the plain `(x,y)` coordinates in its source, for dragging in the
 // TikZ panel. Only coordinates written out as two numbers count: a named node `(a)`, a polar
 // `(30:2)`, a relative `+(1,0)` or a computed `(\x,{..})` is not something a dot stands for.
+use super::caret::comment_start;
 use std::ops::Range;
 
 /// One `(x,y)` in the source: where its two numbers are, and what they say.
@@ -12,19 +13,18 @@ pub struct Point {
     pub y: f64,
 }
 
-/// The coordinates in `src` (the picture's TeX), in the order written. Comments are skipped.
+/// The coordinates in `src` (the picture's TeX), in the order written. Comments are skipped, and so
+/// is text in a node: `{f(0,1)}` is a label, not a place.
 pub fn points(src: &str) -> Vec<Point> {
+    let code = code(src);
+    let texts = node_texts(&code);
     let mut out = Vec::new();
     let mut line_start = 0;
-    for line in src.split_inclusive('\n') {
-        let code = match line.find('%') {
-            // `\%` is a percent sign, not a comment
-            Some(i) if !line[..i].ends_with('\\') => &line[..i],
-            _ => line,
-        };
-        scan(code, line_start, &mut out);
+    for line in code.split_inclusive('\n') {
+        scan(line, line_start, &mut out);
         line_start += line.len();
     }
+    out.retain(|p| !texts.iter().any(|t| t.contains(&p.x_at.start)));
     out
 }
 
@@ -106,16 +106,19 @@ pub fn snap(v: f64, step: f64) -> f64 {
 fn code(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     for line in src.split_inclusive('\n') {
-        match line.find('%') {
-            Some(i) if !line[..i].ends_with('\\') => {
+        match comment_start(line) {
+            Some(i) => {
                 out.push_str(&line[..i]);
-                out.extend(
-                    line[i..]
-                        .chars()
-                        .map(|c| if c == '\n' { '\n' } else { ' ' }),
-                );
+                // a space per byte, so every offset in `code` is the one in `src`
+                for c in line[i..].chars() {
+                    if c == '\n' {
+                        out.push('\n');
+                    } else {
+                        out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+                    }
+                }
             }
-            _ => out.push_str(line),
+            None => out.push_str(line),
         }
     }
     out
@@ -152,10 +155,9 @@ pub struct Label {
     pub anchor: Option<usize>,
 }
 
-/// The nodes of the picture that have text.
-pub fn labels(src: &str) -> Vec<Label> {
-    let code = code(src);
-    let pts = points(src);
+/// Each node's header start and the text it holds: where the header's `node` is, the `{` that
+/// opens the text and the `}` that closes it.
+fn node_braces(code: &str) -> Vec<(usize, usize, usize)> {
     let mut out = vec![];
     let mut from = 0;
     while let Some(i) = code[from..].find("node") {
@@ -190,18 +192,75 @@ pub fn labels(src: &str) -> Vec<Label> {
         if !ok {
             continue;
         }
-        let Some(close) = close_brace(&code, j) else {
+        let Some(close) = close_brace(code, j) else {
             continue;
         };
-        let anchor = pts
-            .iter()
-            .position(|p| p.x_at.start > at && p.x_at.start < j)
-            .or_else(|| pts.iter().rposition(|p| p.y_at.end <= at));
-        out.push(Label {
-            text: j + 1..close,
-            anchor,
-        });
+        out.push((at, j, close));
         from = close;
+    }
+    out
+}
+
+/// The text of every node, as ranges (what is between its braces).
+fn node_texts(code: &str) -> Vec<Range<usize>> {
+    node_braces(code)
+        .into_iter()
+        .map(|(_, open, close)| open + 1..close)
+        .collect()
+}
+
+/// The nodes of the picture that have text.
+pub fn labels(src: &str) -> Vec<Label> {
+    let code = code(src);
+    let pts = points(src);
+    node_braces(&code)
+        .into_iter()
+        .map(|(at, open, close)| Label {
+            text: open + 1..close,
+            anchor: pts
+                .iter()
+                .position(|p| p.x_at.start > at && p.x_at.start < open)
+                .or_else(|| pts.iter().rposition(|p| p.y_at.end <= at)),
+        })
+        .collect()
+}
+
+/// `text` as a node's text: a lone brace, a `%` or a trailing `\\` would take the rest of the
+/// picture with it, so each is written the way TeX takes it as itself.
+pub fn label_text(text: &str) -> String {
+    // the braces with no partner
+    let (mut open, mut lone) = (vec![], vec![]);
+    let mut chars = text.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '{' => open.push(i),
+            '}' if open.pop().is_none() => lone.push(i),
+            _ => {}
+        }
+    }
+    lone.extend(open);
+    let mut out = String::with_capacity(text.len() + 2);
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some((_, n)) => {
+                    out.push('\\');
+                    out.push(n);
+                }
+                // a backslash that ends the text would escape the brace after it
+                None => out.push_str("\\textbackslash{}"),
+            },
+            '%' => out.push_str("\\%"),
+            '{' | '}' if lone.contains(&i) => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
     }
     out
 }
@@ -212,7 +271,7 @@ pub fn set_label(src: &str, ix: usize, text: &str) -> Option<String> {
     Some(format!(
         "{}{}{}",
         &src[..l.text.start],
-        text,
+        label_text(text),
         &src[l.text.end..]
     ))
 }
@@ -574,6 +633,35 @@ pub fn added(src: &str, shape: Shape, x: f64, y: f64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_comment_after_an_escaped_percent_is_still_a_comment() {
+        let src = "\\node at (1,1) {50\\%}; % (9,9)\n\\draw (2,2) -- (3,3);";
+        let at: Vec<(f64, f64)> = points(src).iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(at, vec![(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]);
+    }
+
+    #[test]
+    fn a_comment_with_wide_letters_moves_nothing_after_it() {
+        let src = "% é日 (5,5)\n\\node at (1,1) {x}; \\draw (2,2) circle (0.5);";
+        let l = &labels(src)[0];
+        assert_eq!(&src[l.text.clone()], "x");
+        let c = &circles(src)[0];
+        assert_eq!(&src[c.r_at.clone()], "0.5");
+        assert_eq!(statements(src).len(), 2);
+    }
+
+    #[test]
+    fn numbers_in_a_label_are_not_points() {
+        let src = "\\node at (1,1) {$x\\in(0,1)$};";
+        assert_eq!(points(src).len(), 1);
+        // a label with a `}` or `%` of its own cannot end the node early
+        for text in ["{", "}", "a}b", "50%", "x\\", "ok {fine}"] {
+            let out = set_label("\\node at (1,1) {x};\n\\draw (2,2) -- (3,3);", 0, text).unwrap();
+            assert_eq!(labels(&out).len(), 1, "{text:?} in {out}");
+            assert_eq!(points(&out).len(), 3, "{text:?} in {out}");
+        }
+    }
 
     const PIC: &str = "\\begin{tikzpicture}\n  \\draw (0,0) -- (1.5, -2);\n  \\node (a) at (3,1) {x};\n  \\draw (a) -- ++(1,0) -- +(0,1) -- (30:2); % (9,9)\n  \\draw (1,2,3) -- ({\\x},1);\n\\end{tikzpicture}";
 
