@@ -75,7 +75,8 @@ fn type_on_pages(cx: &mut TestAppContext) {
     // OpenType twin here (the test text system has no fonts to register it with)
     let twin = |d: &Doc| {
         let name = d.caret_font().and_then(|f| f.name).unwrap_or_default();
-        let file = super::super::source_box::latin_modern(&name).expect("a Latin Modern twin");
+        let file = super::super::source_box::latin_modern(&name)
+            .unwrap_or_else(|| panic!("a Latin Modern twin of {name:?}"));
         assert!(
             engine::kpsewhich(&file).is_some(),
             "{file} is in the TeX tree"
