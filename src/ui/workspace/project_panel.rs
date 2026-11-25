@@ -222,130 +222,192 @@ impl Workspace {
                         }
                     })
             });
-        let header = |title: &'static str| {
+        let outline = outline.collect::<Vec<_>>();
+        let (files_open, outline_open) = (self.files_open, self.outline_open);
+        // a section's title bar: the arrow and the title fold it, the buttons beside are its own
+        let header = |id: &'static str, title: &'static str, open: bool, cx: &mut Context<Self>| {
             div()
                 .flex()
                 .items_center()
                 .justify_between()
                 .h_8()
-                .px_3()
+                .px_1()
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.muted_foreground)
-                .child(title)
+                .child(
+                    div()
+                        .id(id)
+                        .role(Role::Button)
+                        .aria_label(format!(
+                            "{} {title}",
+                            if open { "Collapse" } else { "Expand" }
+                        ))
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .gap_1()
+                        .h_full()
+                        .px_1()
+                        .cursor_pointer()
+                        .child(
+                            Icon::default()
+                                .path(if open {
+                                    "icons/chevron-down.svg"
+                                } else {
+                                    "icons/chevron-right.svg"
+                                })
+                                .size_3(),
+                        )
+                        .child(title)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if id == "fold-files" {
+                                this.files_open = !this.files_open;
+                            } else {
+                                this.outline_open = !this.outline_open;
+                            }
+                            cx.notify();
+                        })),
+                )
         };
         let files = div()
             .size_full()
             .flex()
             .flex_col()
             .child(
-                header("PROJECT").child(
-                    div()
-                        .flex()
-                        .child(
-                            icon_button("new-file", "icons/file-plus.svg", "New File").on_click(
-                                cx.listener(|this, _, w, cx| this.new_entry("", false, w, cx)),
-                            ),
-                        )
-                        .child(
-                            icon_button("new-folder", "icons/folder-plus.svg", "New Folder")
-                                .on_click(
-                                    cx.listener(|this, _, w, cx| this.new_entry("", true, w, cx)),
-                                ),
-                        )
-                        .child(
-                            icon_button("collapse", "icons/list-collapse.svg", "Collapse All")
-                                .on_click(cx.listener(|this, _, _, cx| this.collapse_tree(cx))),
-                        ),
-                ),
-            )
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
+                header("fold-files", "PROJECT", files_open, cx).when(files_open, |h| {
+                    h.child(
                         div()
-                            .id("files-scroll")
-                            .size_full()
                             .flex()
-                            .overflow_x_scroll()
-                            // a wheel's vertical turn scrolls the list in it, not this sideways
-                            .restrict_scroll_to_axis()
-                            .track_scroll(&self.files_scroll)
                             .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_w_full()
-                                    .h_full()
-                                    .px_1()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .h_0()
-                                            .overflow_hidden()
-                                            .text_sm()
-                                            .whitespace_nowrap()
-                                            .children(row_widths),
-                                    )
-                                    .child(file_tree),
+                                icon_button("new-file", "icons/file-plus.svg", "New File")
+                                    .on_click(cx.listener(|this, _, w, cx| {
+                                        this.new_entry("", false, w, cx)
+                                    })),
+                            )
+                            .child(
+                                icon_button("new-folder", "icons/folder-plus.svg", "New Folder")
+                                    .on_click(cx.listener(|this, _, w, cx| {
+                                        this.new_entry("", true, w, cx)
+                                    })),
+                            )
+                            .child(
+                                icon_button("collapse", "icons/list-collapse.svg", "Collapse All")
+                                    .on_click(cx.listener(|this, _, _, cx| this.collapse_tree(cx))),
                             ),
                     )
-                    .horizontal_scrollbar(&self.files_scroll),
-            );
+                }),
+            )
+            .when(files_open, |d| {
+                d.child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .child(
+                            div()
+                                .id("files-scroll")
+                                .size_full()
+                                .flex()
+                                .overflow_x_scroll()
+                                // a wheel's vertical turn scrolls the list in it, not this sideways
+                                .restrict_scroll_to_axis()
+                                .track_scroll(&self.files_scroll)
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .min_w_full()
+                                        .h_full()
+                                        .px_1()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .h_0()
+                                                .overflow_hidden()
+                                                .text_sm()
+                                                .whitespace_nowrap()
+                                                .children(row_widths),
+                                        )
+                                        .child(file_tree),
+                                ),
+                        )
+                        .horizontal_scrollbar(&self.files_scroll),
+                )
+            });
         let outline = div()
             .size_full()
             .flex()
             .flex_col()
-            .child(header("OUTLINE"))
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .id("outline")
-                            .size_full()
-                            .flex()
-                            .items_start()
-                            .overflow_scroll()
-                            .track_scroll(&self.outline_scroll)
-                            // one column as wide as the longest heading, so each row's hover
-                            // spans it
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_w_full()
-                                    .px_1()
-                                    .flex()
-                                    .flex_col()
-                                    .children(outline),
-                            ),
-                    )
-                    .scrollbar(&self.outline_scroll, ScrollbarAxis::Both),
-            );
-        // files above, outline below, with a divider to drag between them
+            .child(header("fold-outline", "OUTLINE", outline_open, cx))
+            .when(outline_open, |d| {
+                d.child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .child(
+                            div()
+                                .id("outline")
+                                .size_full()
+                                .flex()
+                                .items_start()
+                                .overflow_scroll()
+                                .track_scroll(&self.outline_scroll)
+                                // one column as wide as the longest heading, so each row's hover
+                                // spans it
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .min_w_full()
+                                        .px_1()
+                                        .flex()
+                                        .flex_col()
+                                        .children(outline),
+                                ),
+                        )
+                        .scrollbar(&self.outline_scroll, ScrollbarAxis::Both),
+                )
+            });
+        // files above, outline below, with a divider to drag between them; when one is folded
+        // the other takes the room (its title alone stays)
+        let sections = if files_open && outline_open {
+            v_resizable("sidebar-split")
+                .child(
+                    resizable_panel()
+                        .size_range(px(80.0)..px(4000.0))
+                        .child(files),
+                )
+                .child(
+                    resizable_panel()
+                        .size(px(320.0))
+                        .size_range(px(60.0)..px(4000.0))
+                        .child(outline),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .when(files_open, |d| d.flex_1().min_h_0())
+                        .child(files),
+                )
+                .child(
+                    div()
+                        .when(outline_open, |d| d.flex_1().min_h_0())
+                        .child(outline),
+                )
+                .into_any_element()
+        };
         div()
             .size_full()
             // the theme's sidebar, set off from the pages
             .bg(crate::ui::palette::panel(&theme))
             .text_color(theme.sidebar_foreground)
-            .child(
-                v_resizable("sidebar-split")
-                    .child(
-                        resizable_panel()
-                            .size_range(px(80.0)..px(4000.0))
-                            .child(files),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size(px(320.0))
-                            .size_range(px(60.0)..px(4000.0))
-                            .child(outline),
-                    ),
-            )
+            .child(sections)
     }
 }
 

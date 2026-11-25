@@ -2,6 +2,7 @@
 // cursor (a paragraph, a heading, a display formula) turns into its TeX source in place and every
 // keystroke goes to rtex, which re-typesets it in milliseconds. Other text files open as source.
 mod complete;
+mod disk;
 #[cfg(test)]
 mod e2e;
 mod editing;
@@ -156,6 +157,7 @@ actions!(
 /// for the selected blocks ("Pages"); commands' keys are in ui::keymap, which you can change. Inside a box the editor's own bindings win, so ⌘A, ⇧↑ and the rest act on
 /// its text.
 pub fn bind_keys(cx: &mut App) {
+    crate::ui::terminal::bind_keys(cx);
     let caret = Some("Caret");
     cx.bind_keys([
         KeyBinding::new(crate::ui::keymap::fixed_key("left"), CaretLeft, caret),
@@ -412,6 +414,12 @@ pub struct Doc {
     pub tex: bool,
     pub source: String,
     pub dirty: bool,
+    /// The file as last read or written here, to tell a change someone else made.
+    disk: disk::Disk,
+    /// The file's text after a change made on disk while there were unsaved edits here: the
+    /// user has not chosen yet which version stays.
+    pub conflict: Option<String>,
+    _watch: Task<()>,
     pub status: String,
     /// A full compile is under way for an edit the live path could not take.
     pub compiling: bool,
@@ -586,6 +594,9 @@ impl Doc {
             tex,
             source: String::new(),
             dirty: false,
+            disk: Default::default(),
+            conflict: None,
+            _watch: Task::ready(()),
             status: String::new(),
             compiling: false,
             quit_runs: 0,
@@ -680,6 +691,8 @@ impl Doc {
             }
         }
         this.outline = document::outline(&this.source);
+        this.disk = disk::Disk::of(&this.source, &this.root, &this.path);
+        this._watch = Self::watch_disk(window, cx);
         let text = this.source.clone();
         this.code.update(cx, |s, cx| s.set_value(text, window, cx));
         if !tex {
@@ -743,9 +756,20 @@ impl Doc {
         if !self.dirty {
             return;
         }
+        // the file changed on disk and which version stays is not decided: nothing is
+        // overwritten unseen
+        if self.conflict.is_some() {
+            self.status = format!(
+                "{} changed on disk: choose which version to keep first",
+                self.path
+            );
+            cx.notify();
+            return;
+        }
         match std::fs::write(self.root.join(&self.path), &self.source) {
             Ok(()) => {
                 self.dirty = false;
+                self.written();
                 if std::mem::take(&mut self.save_failed) {
                     self.notices.push(Notice::Saved);
                 }

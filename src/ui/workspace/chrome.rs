@@ -342,6 +342,17 @@ impl Workspace {
                     // the pages' zoom (a PDF's or a picture's too), not the source editor's
                     .children(zoom.map(|z| self.render_zoom(z, cx)))
                     .child(
+                        Button::new("toggle-terminal")
+                            .icon(Icon::default().path("icons/terminal.svg"))
+                            .ghost()
+                            .xsmall()
+                            .selected(self.bottom == Some(Bottom::Terminal))
+                            .tip("Show or Hide the Terminal (⌃`)")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
+                            ),
+                    )
+                    .child(
                         div()
                             .relative()
                             .child(
@@ -405,6 +416,89 @@ impl Workspace {
                         )
                 }))
         })
+    }
+
+    /// A notice over the pages when the open file changed on disk while it has unsaved edits
+    /// here: the user keeps their version or takes the file's.
+    pub(super) fn render_conflict(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let doc = self.doc()?.clone();
+        let msg = doc.read(cx).conflict_summary()?;
+        let theme = cx.theme().clone();
+        let (mine, disk) = (doc.clone(), doc);
+        Some(
+            div()
+                .absolute()
+                .top_2()
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("disk-conflict")
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .py_2()
+                        .max_w(px(760.0))
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme.warning)
+                        .bg(theme.popover)
+                        .text_color(theme.popover_foreground)
+                        .shadow_lg()
+                        .child(
+                            Icon::default()
+                                .path("icons/triangle-alert.svg")
+                                .text_color(theme.warning),
+                        )
+                        .child(
+                            div().text_sm().child(format!(
+                                "{msg} Keep your version, or load the one on disk (undo brings yours back)."
+                            )),
+                        )
+                        .child(
+                            Button::new("conflict-mine")
+                                .label("Keep mine")
+                                .outline()
+                                .small()
+                                .on_click(cx.listener(move |_, _, window, cx| {
+                                    mine.update(cx, |d, cx| d.resolve_conflict(true, window, cx))
+                                })),
+                        )
+                        .child(
+                            Button::new("conflict-disk")
+                                .label("Load from disk")
+                                .primary()
+                                .small()
+                                .on_click(cx.listener(move |_, _, window, cx| {
+                                    disk.update(cx, |d, cx| d.resolve_conflict(false, window, cx))
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The terminal under the pages, started in the project's folder the first time; a second
+    /// toggle hides it (the shell keeps running).
+    pub(super) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.bottom == Some(Bottom::Terminal) {
+            self.bottom = None;
+            cx.notify();
+            return;
+        }
+        if self.terminal.is_none() {
+            let root = self.root.clone();
+            self.terminal = Some(cx.new(|cx| crate::ui::terminal::Terminal::new(root, window, cx)));
+        }
+        self.bottom = Some(Bottom::Terminal);
+        if let Some(t) = &self.terminal {
+            let focus = t.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        }
+        cx.notify();
     }
 
     /// The problems or the log under the pages, or neither: a second click closes it.
@@ -572,4 +666,5 @@ impl Workspace {
 pub(super) enum Bottom {
     Problems,
     Logs,
+    Terminal,
 }

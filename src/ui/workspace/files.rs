@@ -6,6 +6,35 @@ use super::*;
 type FileAction = dyn Fn(&mut Workspace, String, &mut Window, &mut Context<Workspace>);
 
 impl Workspace {
+    /// The tree looked at now and then: a file made or removed by something else (an agent in
+    /// the terminal, git) shows up without the user asking. A name list is all it costs.
+    pub(super) fn watch_tree(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            let mut seen: Vec<String> = vec![];
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1000))
+                    .await;
+                let Ok((root, expanded)) =
+                    this.read_with(cx, |this, _| (this.root.clone(), this.expanded.clone()))
+                else {
+                    break;
+                };
+                let now = cx
+                    .background_executor()
+                    .spawn(async move { names_under(&root, &expanded) })
+                    .await;
+                if now != seen {
+                    // the first look only learns what is there
+                    let first = std::mem::replace(&mut seen, now).is_empty();
+                    if !first && this.update(cx, |this, cx| this.refresh_tree(cx)).is_err() {
+                        break;
+                    }
+                }
+            }
+        })
+    }
+
     pub(super) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
         let items = list_dir(
             &self.root,
@@ -436,6 +465,21 @@ impl Workspace {
             self.refresh_tree(cx);
         }
     }
+}
+
+/// The names in the project's top folder and in each open folder, sorted: what changes when a
+/// file is made, renamed or removed there.
+fn names_under(root: &Path, expanded: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut out = vec![];
+    let mut dirs = vec![root.to_path_buf()];
+    dirs.extend(expanded.iter().map(|e| root.join(e)));
+    for d in dirs {
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            out.extend(rd.flatten().map(|e| e.path().to_string_lossy().to_string()));
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The entries of `dir` the settings do not hide, folders first. Only folders in `expanded` are

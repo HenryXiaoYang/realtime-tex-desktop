@@ -51,6 +51,7 @@ actions!(
         Recompile,
         OpenSettings,
         ToggleInspector,
+        ToggleTerminal,
         InsertLink,
         InsertPicture,
         InsertTable,
@@ -94,6 +95,8 @@ pub struct Workspace {
     /// What shows under the pages (the problems or the rtex log); the log's scroll, and how
     /// long it was when last drawn (it follows new lines to the bottom).
     bottom: Option<chrome::Bottom>,
+    /// The terminal in the panel under the pages, kept (its shell too) while the panel is hidden.
+    terminal: Option<Entity<crate::ui::terminal::Terminal>>,
     log_scroll: ScrollHandle,
     log_seen: usize,
     /// Folders open in the project panel (paths): only they are read from disk, so a large
@@ -102,6 +105,9 @@ pub struct Workspace {
     /// The project panel's file tree and outline, scrolled sideways to names too long for it.
     files_scroll: ScrollHandle,
     outline_scroll: ScrollHandle,
+    /// Which of the project panel's two sections are open (a closed one shows its title only).
+    files_open: bool,
+    outline_open: bool,
     /// The heading the outline last marked as the one the pages are under (its offset).
     outline_seen: Option<usize>,
     /// The tree entry being renamed in place (its path) and its name field, and why the name
@@ -114,6 +120,7 @@ pub struct Workspace {
     tour: Option<tour::Tour>,
     _subs: Vec<Subscription>,
     _rename_sub: Option<Subscription>,
+    _tree_watch: Task<()>,
     _dialog_subs: Vec<Subscription>,
 }
 
@@ -142,6 +149,7 @@ impl Workspace {
             table_cols: cx.new(|cx| InputState::new(window, cx).default_value("3")),
             status: String::new(),
             bottom: None,
+            terminal: None,
             log_scroll: ScrollHandle::new(),
             log_seen: 0,
             rename: None,
@@ -151,12 +159,16 @@ impl Workspace {
             expanded: Default::default(),
             files_scroll: ScrollHandle::new(),
             outline_scroll: ScrollHandle::new(),
+            files_open: true,
+            outline_open: true,
             outline_seen: None,
             _subs: vec![],
             _rename_sub: None,
+            _tree_watch: Task::ready(()),
             _dialog_subs: vec![],
         };
         crate::ui::warm_fonts(cx);
+        this._tree_watch = Self::watch_tree(window, cx);
         // a colour typed in the palette's hex field, on Enter
         let hex = this.color_hex.clone();
         this._subs.push(cx.subscribe_in(
@@ -308,6 +320,10 @@ impl Render for Workspace {
         let bottom = match self.bottom {
             Some(chrome::Bottom::Logs) => self.render_logs(cx).into_any_element(),
             Some(chrome::Bottom::Problems) => self.render_problems(cx).into_any_element(),
+            Some(chrome::Bottom::Terminal) => match &self.terminal {
+                Some(t) => div().size_full().child(t.clone()).into_any_element(),
+                None => div().into_any_element(),
+            },
             None => div().into_any_element(),
         };
         let bottom = div()
@@ -337,6 +353,7 @@ impl Render for Workspace {
             .size_full()
             .children(self.tour_mark("pages"))
             .children(self.doc().cloned())
+            .children(self.render_conflict(cx))
             .when(self.tabs.is_empty(), |d| {
                 d.flex()
                     .items_center()
@@ -442,6 +459,11 @@ impl Render for Workspace {
             .on_action(|_: &ZoomWindow, window, _| window.zoom_window())
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
             .on_action(cx.listener(|this, _: &ToggleInspector, _, cx| this.toggle_right(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleTerminal, window, cx| {
+                    this.toggle_terminal(window, cx)
+                }),
+            )
             // the title bar keeps its mouse to itself: it moves the window
             .child(self.render_title_bar(cx))
             .child(

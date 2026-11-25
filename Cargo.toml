@@ -16,6 +16,7 @@ skrifa = "0.49"
 tiny-skia = "0.12.0"
 unicode-segmentation = "1"
 sha2 = "0.11"
+alacritty_terminal = "0.26"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

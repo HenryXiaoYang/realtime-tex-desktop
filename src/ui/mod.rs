@@ -6,6 +6,7 @@ pub mod palette;
 pub mod projects;
 pub mod setting;
 pub mod settings;
+pub mod terminal;
 pub mod tex_setup;
 pub mod themes;
 pub mod welcome;

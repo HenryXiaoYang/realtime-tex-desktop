@@ -3,6 +3,7 @@
 // #[ignore]d (they need a TeX installation): `cargo test --release <name> -- --ignored
 // --nocapture`, with RTD_TYPE=/abs/copy.tex for those that take a document (use a copy: rtex
 // writes beside it).
+mod disk;
 mod formula;
 mod image;
 mod insert;

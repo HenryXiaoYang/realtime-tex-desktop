@@ -139,6 +139,7 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::action("Show or Hide Project Panel", ToggleSidebar),
                     MenuItem::action("Show or Hide Sidebar", ToggleInspector),
+                    MenuItem::action("Show or Hide Terminal", ToggleTerminal),
                     MenuItem::action("Switch Visual / Source", ToggleSource),
                     MenuItem::separator(),
                     MenuItem::action("Enter Full Screen", ToggleFullScreen),
