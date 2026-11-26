@@ -15,6 +15,7 @@ mod outline;
 pub mod preamble;
 mod preview;
 pub mod table;
+pub mod table_lines;
 pub mod tikz;
 
 pub use blocks::*;

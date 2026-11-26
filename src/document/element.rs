@@ -350,8 +350,9 @@ fn width_percent(v: &str) -> Option<String> {
     None
 }
 
-/// The width of the picture in figure `el` as a percent of the line, when that alone sizes it
-/// (no scale, angle, trim or height, and a width given as a part of the line).
+/// The width of the picture in figure `el` as a percent of the line, when that and a height size
+/// it (no scale, angle or trim, a width given as a part of the line, and a height that is not
+/// fitted into a box with `keepaspectratio`).
 pub fn image_width_percent(src: &str, el: &Element) -> Option<f64> {
     let fields = fields(src, el);
     let get = |k: &str| {
@@ -360,9 +361,17 @@ pub fn image_width_percent(src: &str, el: &Element) -> Option<f64> {
             .find(|f| f.key == k)
             .map_or("", |f| f.value.trim())
     };
-    if ["scale", "angle", "trim", "height"]
+    if ["scale", "angle", "trim"]
         .iter()
         .any(|k| !get(k).is_empty())
+    {
+        return None;
+    }
+    // (`keepaspectratio` with a height fits the picture in a box: its size is neither alone)
+    if !get("height").is_empty()
+        && fields
+            .iter()
+            .any(|f| f.key == "keepaspectratio" && f.value == "true")
     {
         return None;
     }
@@ -1454,5 +1463,12 @@ mod size_tests {
         );
         assert_eq!(pct("width=0.5\\linewidth,angle=90").1, None);
         assert_eq!(pct("").1, None);
+        // a stretched picture (width and height) is still sized by its width and height
+        assert_eq!(pct("width=0.5\\linewidth,height=3cm").1, Some(50.0));
+        assert_eq!(
+            pct("width=0.5\\linewidth,height=3cm,keepaspectratio").1,
+            None,
+            "fitted in a box"
+        );
     }
 }

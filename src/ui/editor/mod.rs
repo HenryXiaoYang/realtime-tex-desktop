@@ -19,6 +19,7 @@ mod pages;
 mod selection;
 mod session;
 mod source_box;
+mod table_handles;
 mod table_panel;
 mod text_selection;
 mod tikz_points;
@@ -513,6 +514,8 @@ pub struct Doc {
     dragging: bool,
     /// A drag of the selected figure's picture handle under way.
     resizing: Option<image_resize::Resizing>,
+    /// A line of the selected table's, held to size its column or row.
+    line_drag: Option<table_handles::LineDrag>,
     /// A dot of the TikZ editor's canvas held, being dragged.
     pointing: Option<tikz_points::Pointing>,
     tikz_ui: tikz_points::Ui,
@@ -659,6 +662,7 @@ impl Doc {
             caret_bounds: Default::default(),
             dragging: false,
             resizing: None,
+            line_drag: None,
             pointing: None,
             tikz_ui: Default::default(),
             find: None,

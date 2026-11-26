@@ -2,6 +2,7 @@
 // --nocapture`.
 use super::{calm, open, scratch, wait};
 use crate::document::table::{self, Borders};
+use crate::document::table_lines;
 use crate::ui::editor::table_panel::Op;
 use gpui_kit::{EntityInputHandler, Keystroke, TestAppContext};
 
@@ -175,4 +176,106 @@ fn the_table_sizes(cx: &mut TestAppContext) {
     let status = cx.read(|cx| doc.read(cx).status.clone());
     assert!(!status.contains("LaTeX"), "{status}");
     let _ = before;
+}
+
+/// A selected table's lines are dragged on the page: a column's line sets its width, a row's the
+/// room under it; the table typesets each time and each drag is one undo step. `cargo test
+/// --release the_table_lines -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn the_table_lines(cx: &mut TestAppContext) {
+    use crate::ui::editor::table_handles::Edge;
+    use gpui_kit::{point, px};
+    let (doc, cx) = open(cx, scratch("table-lines", DOC), "main.tex", 2);
+    let src = |cx: &mut gpui_kit::VisualTestContext| cx.read(|cx| doc.read(cx).source.clone());
+    let select = |cx: &mut gpui_kit::VisualTestContext| {
+        let off = cx.read(|cx| {
+            let d = doc.read(cx);
+            d.blocks
+                .iter()
+                .position(|b| d.source[b.range.clone()].contains("tabular"))
+                .unwrap()
+        });
+        doc.update(cx, |d, cx| d.set_selection(off, off, cx));
+    };
+    // the pointer position (window coordinates) of a spot on the page, sp
+    let at = |cx: &mut gpui_kit::VisualTestContext, page: u32, x: f64, y: f64| {
+        cx.read(|cx| {
+            let d = doc.read(cx);
+            let bounds = d.page_bounds.take();
+            let o = bounds
+                .iter()
+                .find(|(n, _)| *n == page)
+                .map(|(_, b)| b.origin)
+                .unwrap();
+            d.page_bounds.set(bounds);
+            let px_of = |v: f64| px(crate::ui::editor::page_px(v, d.zoom));
+            point(o.x + px_of(x), o.y + px_of(y))
+        })
+    };
+    calm(cx, &doc);
+    select(cx);
+    let lines = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.read(|cx| doc.read(cx).table_lines())
+            .expect("the table's lines")
+    };
+    let (page, first) = lines(cx);
+    assert_eq!(first.cols.len(), 2, "{first:?}");
+    assert_eq!(first.rows.len(), 2, "{first:?}");
+    // the first column's line 40 pt to the right
+    let (x, y) = (first.cols[0].x, (first.bbox[1] + first.bbox[3]) / 2.0);
+    let grab = at(cx, page, x, y);
+    let to = at(cx, page, x + 40.0 * 65536.0, y);
+    doc.update(cx, |d, cx| {
+        let from = d.hit(page, grab).unwrap().0;
+        d.hold_line(page, Edge::Col(0), from, first.cols[0].width, cx);
+        d.line_drag_to(page, to, cx);
+        d.line_drag_end(cx);
+    });
+    let s = src(cx);
+    assert!(
+        s.contains("{|>{\\raggedright\\arraybackslash}p{") && s.contains("\\usepackage{array}"),
+        "{s}"
+    );
+    calm(cx, &doc);
+    let (_, wider) = lines(cx);
+    let grew = wider.cols[0].width - first.cols[0].width;
+    assert!((grew - 40.0).abs() < 2.0, "{grew} pt: {wider:?}");
+    // the drag was one undo step
+    doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+    assert_eq!(src(cx), DOC);
+    calm(cx, &doc);
+    select(cx);
+    // the first row's line 10 pt down: room under it
+    let (page, first) = lines(cx);
+    let (x, y) = ((first.bbox[0] + first.bbox[2]) / 2.0, first.rows[0].y);
+    let grab = at(cx, page, x, y);
+    let to = at(cx, page, x, y + 10.0 * 65536.0);
+    doc.update(cx, |d, cx| {
+        let from = d.hit(page, grab).unwrap().1;
+        d.hold_line(page, Edge::Row(0), from, 0.0, cx);
+        d.line_drag_to(page, to, cx);
+        d.line_drag_end(cx);
+    });
+    assert!(src(cx).contains("a & b \\\\[10pt]"), "{}", src(cx));
+    calm(cx, &doc);
+    let (_, taller) = lines(cx);
+    // the second row's baseline is 10 pt further from the first's (a table in a line is centred
+    // on it, so both rows move)
+    let gap = |l: &table_lines::Lines| {
+        (l.rows[1].y - (l.rows[0].y - l.rows[0].space * 65536.0)) / 65536.0
+    };
+    let grew = gap(&taller) - gap(&first);
+    assert!((grew - 10.0).abs() < 2.0, "{grew} pt: {taller:?}");
+    let status = cx.read(|cx| doc.read(cx).status.clone());
+    assert!(!status.contains("LaTeX"), "{status}");
+    // a click that moves nothing writes nothing and leaves no undo step
+    let before = src(cx);
+    let steps = cx.read(|cx| doc.read(cx).undo.len());
+    doc.update(cx, |d, cx| {
+        d.hold_line(page, Edge::Col(1), 0.0, 10.0, cx);
+        d.line_drag_end(cx);
+    });
+    assert_eq!(src(cx), before);
+    assert_eq!(cx.read(|cx| doc.read(cx).undo.len()), steps);
 }

@@ -92,6 +92,11 @@ pub fn needs_download() -> bool {
     }
 }
 
+/// The release the app pins, as its tag: `v0.0.8`.
+pub fn rtex_tag() -> &'static str {
+    RTEX_TAG
+}
+
 /// The pinned release's version: [0, 0, 8] for v0.0.8.
 fn pinned() -> Vec<u32> {
     version(&format!("rtex-{}", RTEX_TAG.trim_start_matches('v'))).unwrap_or_default()

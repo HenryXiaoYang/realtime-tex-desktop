@@ -113,6 +113,7 @@ impl Doc {
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseUpEvent, window, cx| {
                     this.resize_end(cx);
+                    this.line_drag_end(cx);
                     this.dragging = false;
                     if ev.click_count >= 2 && this.active.is_none() {
                         let clicks = ev.click_count;
@@ -122,6 +123,13 @@ impl Doc {
                 }),
             )
             .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                if this.line_drag.is_some() {
+                    match ev.pressed_button {
+                        Some(MouseButton::Left) => this.line_drag_to(n, ev.position, cx),
+                        _ => this.line_drag_end(cx),
+                    }
+                    return;
+                }
                 if this.resizing.is_some() {
                     // a release off the page was not seen: the drag ends with the next move
                     match ev.pressed_button {
@@ -245,6 +253,7 @@ impl Doc {
                 .children(blank)
                 .children(outline)
                 .children(self.render_image_handle(n, cx))
+                .children(self.render_table_handles(n, cx))
                 .children(insert)
                 .children(self.render_matches(n, cx))
                 .children(self.render_selection(n, cx))

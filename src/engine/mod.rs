@@ -4,7 +4,7 @@ mod process;
 mod protocol;
 mod tex_install;
 
-pub use download::{download_rtex, needs_download, upgrading};
+pub use download::{download_rtex, needs_download, rtex_tag, upgrading};
 pub use tex_install::{Stage, TexInstall, TexProgress, cancel_tex_install, install_tex};
 
 pub use process::*;
