@@ -209,7 +209,18 @@ pub fn char_fonts(gt: &GlyphText) -> Vec<Option<FontDesc>> {
 /// Each char of `gt.text`: the bytes of `src` it shows, None for text a macro printed.
 pub fn char_sources(gt: &GlyphText, src: &str) -> Vec<Option<Range<usize>>> {
     let vis = visible_source(src);
-    let (at, ..) = char_map(gt, &vis, gt.text.len() / 2);
+    let n = gt.text.len();
+    // a long block aligns in windows of 600 chars (`char_map`): tile the page with them
+    let centres: Vec<usize> = if n * vis.text.len() > MAX_CELLS {
+        (300..n + 300).step_by(600).collect()
+    } else {
+        vec![n / 2]
+    };
+    let mut at = vec![-1; n];
+    for c in centres {
+        let (t, a0, a1) = char_map(gt, &vis, c);
+        at[a0..a1].copy_from_slice(&t[a0..a1]);
+    }
     at.iter()
         .map(|&v| usize::try_from(v).ok().map(|v| vis.start[v]..vis.end[v]))
         .collect()
@@ -709,6 +720,28 @@ mod tests {
         // a click inside the second glyph of "world"
         let (i, _) = char_at(&gt, 5.0 * 5.0 * PT + 3.3 * PT + 7.0 * PT, 98.0 * PT).unwrap();
         assert_eq!(gt.text[i], 'o');
+    }
+
+    #[test]
+    fn a_long_block_maps_all_its_page_not_just_the_middle() {
+        let words: Vec<String> = (0..3000).map(|i| format!("w{i}")).collect();
+        let src = words.join(" ");
+        // the page shows the block's first 2000 words, 20 to a line
+        let lines: Vec<String> = words[..2000].chunks(20).map(|c| c.join(" ")).collect();
+        let rows: Vec<Row> = (0..lines.len())
+            .map(|i| row(&lines[i], 12.0 * i as f64))
+            .collect();
+        let gt = glyph_text_of(&rows.iter().collect::<Vec<_>>());
+        assert!(gt.text.len() * src.len() > MAX_CELLS);
+        let srcs = char_sources(&gt, &src);
+        for (i, ch) in gt.text.iter().enumerate().filter(|(_, c)| **c != ' ') {
+            let r = srcs[i]
+                .clone()
+                .unwrap_or_else(|| panic!("char {i} unmapped"));
+            assert_eq!(src[r].chars().next(), Some(*ch), "char {i}");
+        }
+        let w = text(&gt).find("w1500").unwrap();
+        assert_eq!(srcs[w].as_ref().map(|r| r.start), src.find("w1500 "));
     }
 
     #[test]
