@@ -106,7 +106,7 @@ impl Workspace {
         }
         let doc = self.tabs.remove(ix);
         doc.update(cx, |d, cx| {
-            d.save(cx);
+            d.save_closing(cx);
             d.release_images(window);
         });
         if self.active > ix || self.active >= self.tabs.len() {
@@ -119,6 +119,13 @@ impl Workspace {
     pub fn save_all(&mut self, cx: &mut Context<Self>) {
         for d in &self.tabs {
             d.update(cx, |d, cx| d.save(cx));
+        }
+    }
+
+    /// The window or app closing: every tab saved, or its edits kept beside an undecided conflict.
+    pub fn save_closing(&mut self, cx: &mut Context<Self>) {
+        for d in &self.tabs {
+            d.update(cx, |d, cx| d.save_closing(cx));
         }
     }
 

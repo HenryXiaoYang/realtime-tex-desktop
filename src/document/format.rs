@@ -763,7 +763,21 @@ fn strip_alignment(text: &str) -> String {
         }
     }
     for decl in ["\\centering", "\\raggedright", "\\raggedleft"] {
-        t = t.replace(decl, "");
+        let mut out = String::with_capacity(t.len());
+        let mut rest = t.as_str();
+        while let Some(i) = rest.find(decl) {
+            let after = &rest[i + decl.len()..];
+            // a table column's own (`>{\raggedright\arraybackslash}p{3cm}`) or a longer name stays
+            let keep =
+                rest[..i].ends_with(">{") || after.starts_with(|c: char| c.is_ascii_alphabetic());
+            out.push_str(&rest[..i]);
+            if keep {
+                out.push_str(decl);
+            }
+            rest = after;
+        }
+        out.push_str(rest);
+        t = out;
     }
     // the blank lines the removed tags leave
     while t.contains("\n\n\n") {
@@ -1252,6 +1266,18 @@ mod tests {
             "\\begin{flushright}\nOne.\n\nTwo.\n\nThree.\n\\end{flushright}"
         );
         assert!(!r.text.contains("center") && !r.text.contains("centering"));
+    }
+
+    #[test]
+    fn alignment_leaves_a_table_columns_own_alignment() {
+        let src =
+            "One.\n\n\\begin{tabular}{>{\\raggedright\\arraybackslash}p{3cm}}\nA\n\\end{tabular}";
+        let r = align(src, 0..src.len(), Align::Right).unwrap();
+        assert!(
+            r.text.contains(">{\\raggedright\\arraybackslash}p{3cm}"),
+            "{}",
+            r.text
+        );
     }
 
     #[test]

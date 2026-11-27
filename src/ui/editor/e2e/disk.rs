@@ -93,4 +93,21 @@ fn the_file_changes_under_us(cx: &mut TestAppContext) {
     // one undo brings the discarded edit back
     doc.update_in(cx, |d, window, cx| d.undo(window, cx));
     assert!(src(cx).contains("First, edited again."), "{}", src(cx));
+    // the agent writes and a save comes before the watch has looked: the file is not written over
+    let fourth = third.replace("Third.", "Fourth, written just now.");
+    std::fs::write(&file, &fourth).unwrap();
+    assert!(cx.read(|cx| doc.read(cx).dirty));
+    doc.update(cx, |d, cx| d.save(cx));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), fourth);
+    assert_eq!(
+        cx.read(|cx| doc.read(cx).conflict.clone()),
+        Some(fourth.clone())
+    );
+    // closing undecided: the file keeps theirs, the edits go beside it
+    doc.update(cx, |d, cx| d.save_closing(cx));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), fourth);
+    assert_eq!(
+        std::fs::read_to_string(file.with_file_name("main.tex.mine")).unwrap(),
+        src(cx)
+    );
 }

@@ -329,6 +329,9 @@ pub fn source_deletion(src: &str, off: usize, back: bool) -> Option<Range<usize>
         let before = &head[..head.len() - run];
         before.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
     };
+    // a char right after a backslash is part of a control symbol (`\ `, `\,`, `\)`): cutting it
+    // leaves a lone `\` that takes whatever follows
+    let escaped = |at: usize| src[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1;
     // inside a formula (an equation's TeX, `$…$`): never char by char
     if super::math::formula_at(src, off).is_some_and(|f| f.start < off && off < f.end) {
         return None;
@@ -336,7 +339,11 @@ pub fn source_deletion(src: &str, off: usize, back: bool) -> Option<Range<usize>
     if back {
         let c = src.get(..off)?.chars().next_back()?;
         let start = off - c.len_utf8();
-        if c == '$' && !src[..start].ends_with('\\') {
+        // (nor one sign of a `$$`, which would leave a display formula open)
+        if escaped(start) || (c == '$' && src[..start].ends_with('$')) {
+            return None;
+        }
+        if c == '$' {
             // the formula that ends here: back to its opening sign, in this paragraph
             let para = src[..start].rfind("\n\n").map_or(0, |i| i + 2);
             let open = src[para..start].rfind('$').map(|i| para + i)?;
@@ -350,7 +357,10 @@ pub fn source_deletion(src: &str, off: usize, back: bool) -> Option<Range<usize>
             .then_some(start..off)
     } else {
         let c = src.get(off..)?.chars().next()?;
-        if c == '$' && !src[..off].ends_with('\\') {
+        if escaped(off) || (c == '$' && src[off + 1..].starts_with('$')) {
+            return None;
+        }
+        if c == '$' {
             let end = src[off + 1..].find('$').map(|i| off + 1 + i + 1)?;
             return (!src[off..end].contains('\n')).then_some(off..end);
         }
@@ -2139,6 +2149,13 @@ mod tests {
         assert_eq!(source_deletion("x \\alpha y", 8, false), None);
         assert_eq!(source_deletion("x \\alpha  y", 10, true), Some(9..10));
         assert_eq!(source_deletion("x \\alpha 5", 9, true), Some(8..9));
+        // never one char of a control symbol, nor one sign of a `$$`
+        assert_eq!(source_deletion("Mr.\\ Smith", 5, true), None);
+        assert_eq!(source_deletion("10\\,km", 4, true), None);
+        assert_eq!(source_deletion("a \\(x\\) b", 7, true), None);
+        assert_eq!(source_deletion("a $$x$$ b", 7, true), None);
+        assert_eq!(source_deletion("a $$x$$ b", 2, false), None);
+        assert_eq!(source_deletion("a\\\\b", 3, false), Some(3..4));
     }
 
     #[test]

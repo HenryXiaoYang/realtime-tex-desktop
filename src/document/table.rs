@@ -186,7 +186,9 @@ fn trimmed(src: &str, r: Range<usize>) -> Range<usize> {
     let start = r.start + (t.len() - t.trim_start().len());
     let end = start + t.trim().len();
     if start == end {
-        let at = r.start + usize::from(r.len() >= 2);
+        // (after its first white space char, which may be more than a byte: a no-break space)
+        let first = t.chars().next().map_or(0, char::len_utf8);
+        let at = r.start + if r.len() >= 2 { first } else { 0 };
         return at..at;
     }
     start..end
@@ -211,6 +213,13 @@ impl Table {
             if !space_after {
                 text.push(' ');
             }
+        }
+        // a comment ending the text would hide the rest of its line (the row's `\\`, the next
+        // `&`): that goes on the next line
+        let last = &text[text.rfind('\n').map_or(0, |i| i + 1)..];
+        let rest = &src[r.end..src[r.end..].find('\n').map_or(src.len(), |i| r.end + i)];
+        if comment_start(last).is_some() && !rest.trim().is_empty() {
+            text.push('\n');
         }
         Some(Change { range: r, text })
     }
@@ -865,6 +874,25 @@ mod tests {
 
     const COMMENTED: &str =
         "\\begin{tabular}{ll}\n  A % one\n  & B % two\n  \\\\\n  C & D % last\n\\end{tabular}";
+
+    #[test]
+    fn an_empty_cell_of_a_no_break_space_is_a_spot_on_a_char() {
+        let src = "\\begin{tabular}{lll}\nA &\u{a0}& B \\\\\n\\end{tabular}";
+        let t = table(src);
+        let c = t.rows[0].cells[1].clone();
+        assert!(c.is_empty() && src.is_char_boundary(c.start), "{c:?}");
+        assert!(t.set_cell(src, 0, 1, "x").is_some());
+    }
+
+    #[test]
+    fn a_percent_typed_in_a_cell_does_not_hide_the_row_end() {
+        let src = "\\begin{tabular}{ll}\nA & B \\\\\nC & D\n\\end{tabular}";
+        let t = table(src);
+        let out = apply(src, vec![t.set_cell(src, 0, 1, "50%").unwrap()]);
+        let t2 = table(&out);
+        assert_eq!((t2.rows.len(), t2.cols()), (2, 2), "{out}");
+        assert_eq!(&out[t2.rows[1].cells[0].clone()], "C", "{out}");
+    }
 
     #[test]
     fn a_comment_ending_a_cell_does_not_swallow_what_follows_it() {

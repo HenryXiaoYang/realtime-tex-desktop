@@ -770,6 +770,10 @@ impl Doc {
             cx.notify();
             return;
         }
+        if self.disk_moved_on() {
+            cx.notify();
+            return;
+        }
         match std::fs::write(self.root.join(&self.path), &self.source) {
             Ok(()) => {
                 self.dirty = false;

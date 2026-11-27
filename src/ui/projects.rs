@@ -99,7 +99,7 @@ pub fn init(cx: &mut App) {
         for (root, _, ws) in windows.into_iter().filter(|w| w.0 != tour::dir()) {
             let shown = ws
                 .update(cx, |ws, cx| {
-                    ws.save_all(cx);
+                    ws.save_closing(cx);
                     ws.shown_file(cx)
                 })
                 .ok()
@@ -485,7 +485,7 @@ fn closing(root: &Path, ws: &WeakEntity<Workspace>, cx: &mut App) {
     let shown = ws
         .update(cx, |ws, cx| {
             ws.tour_end(cx);
-            ws.save_all(cx);
+            ws.save_closing(cx);
             ws.shown_file(cx)
         })
         .ok()

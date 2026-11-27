@@ -164,6 +164,50 @@ impl Doc {
         ))
     }
 
+    /// Right before a save: a change on disk the poll has not taken in yet (it lets one settle)
+    /// becomes a conflict instead of being written over. True when it did.
+    pub(super) fn disk_moved_on(&mut self) -> bool {
+        let path = self.root.join(&self.path);
+        let now = stamp(&path);
+        if now.is_none() || now == self.disk.stamp {
+            return false;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        self.disk.stamp = now;
+        // only touched, or already what is here: nothing to lose
+        if text == self.disk.text || text == self.source {
+            self.disk.text = text;
+            return false;
+        }
+        self.disk.text = text.clone();
+        self.conflict = Some(text);
+        self.status = format!(
+            "{} changed on disk; see the notice above the pages",
+            self.path
+        );
+        true
+    }
+
+    /// The tab, window or app closing: saved, or with a conflict not decided, the edits put in
+    /// `<file>.mine` beside it (the file keeps what was written there): nothing is lost unasked.
+    pub fn save_closing(&mut self, cx: &mut Context<Self>) {
+        if !self.dirty {
+            return;
+        }
+        if self.conflict.is_none() {
+            self.save(cx);
+            if self.conflict.is_none() {
+                return;
+            }
+        }
+        let side = self.root.join(format!("{}.mine", self.path));
+        if let Err(e) = std::fs::write(&side, &self.source) {
+            self.status = format!("Couldn’t keep your edits of {}: {e}", self.path);
+        }
+    }
+
     /// The text just written is what the disk has.
     pub(super) fn written(&mut self) {
         self.disk = Disk::of(&self.source, &self.root, &self.path);

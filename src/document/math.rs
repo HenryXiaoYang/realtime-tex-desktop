@@ -45,7 +45,12 @@ pub fn blank_formula(src: &str, at: Range<usize>) -> Option<Range<usize>> {
         return None;
     }
     // the dollar signs on both sides
-    if src[..at.start].ends_with('$') && src[at.end..].starts_with('$') {
+    // (not `$$…$$`, a display: one sign of each pair would leave a lone `$$`)
+    let (before, after) = (&src[..at.start], &src[at.end..]);
+    if before.ends_with('$')
+        && after.starts_with('$')
+        && !(before.ends_with("$$") && after.starts_with("$$"))
+    {
         return Some(at.start - 1..at.end + 1);
     }
     // another delimiter (`\(`…`\)`, `\[`…`\]`, `$$`…`$$`): the formula found must be all delimiters
@@ -75,6 +80,11 @@ mod tests {
         let e = "\\begin{equation}\nF = m\n\\end{equation}";
         assert_eq!(blank_formula(e, 20..20), None);
         // a display formula with nothing in it goes whole
+        // an emptied `$$…$$` goes whole, never down to a lone `$$`
+        let dd = "a $$$$ b";
+        assert_eq!(blank_formula(dd, 4..4).map(|r| &dd[r]), Some("$$$$"));
+        let dd = "a $$ $$ b";
+        assert_eq!(blank_formula(dd, 4..5).map(|r| &dd[r]), Some("$$ $$"));
         let d = "a \\[ \\] b";
         assert_eq!(blank_formula(d, 4..5).map(|r| &d[r]), Some("\\[ \\]"));
     }
