@@ -425,7 +425,18 @@ impl Doc {
             };
             d(a).total_cmp(&d(b))
         });
-        near.is_some_and(|c| c.src.is_some())
+        // a table's rules are not text, so its nearest char is always a cell's: only a click on
+        // a glyph is on text (a space spans the gap to the next cell), one beside it opens the table
+        let in_table = self
+            .blocks
+            .get(bi)
+            .is_some_and(|b| crate::document::table::find(&self.source, b.range.clone()).is_some());
+        near.is_some_and(|c| {
+            let pad = 0.5 * c.bbox[3];
+            c.src.is_some()
+                && (!in_table
+                    || (c.glyph && x >= c.bbox[0] - pad && x <= c.bbox[0] + c.bbox[2] + pad))
+        })
     }
 
     /// The next (`dir` 1) or previous (-1) block and page after (`bi`, `page`) that the caret
