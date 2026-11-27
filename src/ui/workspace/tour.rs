@@ -135,8 +135,8 @@ const STEPS: &[Step] = &[
         &["pages"],
         Show::Nothing,
         Done::BoxSeen,
-        "Open the source box",
-        "Double-click the formula in section 2. Its TeX opens in a box on the page, with the result under it as you type. Click outside the box or press Escape when you are done.",
+        "Edit a formula",
+        "Double-click the formula in section 2. Its TeX opens in a panel under it, and the formula on the page changes as you type. Click outside the panel or press Escape when you are done.",
     ),
     see(
         &["ribbon"],
@@ -413,7 +413,11 @@ impl Workspace {
         if to < STEPS.len() && show != Show::Files {
             self.open("main.tex".into(), window, cx);
             if let Some(d) = self.doc().cloned() {
-                d.update(cx, |d, cx| d.set_source_mode(false, window, cx));
+                // a caret left from the step before would take Return, meant for the card
+                d.update(cx, |d, cx| {
+                    d.set_source_mode(false, window, cx);
+                    d.drop_caret(cx);
+                });
             }
         }
         let since = Since {
@@ -1016,6 +1020,11 @@ mod e2e {
         press(cx, "escape");
         assert!(!cx.read(|cx| main.read(cx).box_open()));
         assert_eq!(step(cx), Some(3), "closed: on to the Home tab");
+        // the caret the formula left on the page does not take Return from the card
+        press(cx, "enter");
+        assert_eq!(step(cx), Some(4), "Return goes on");
+        click(cx, "tour-back");
+        assert_eq!(step(cx), Some(3));
         cx.read(|cx| {
             assert!(!AppSettings::get(cx).ribbon_collapsed, "unfolded");
             assert!(ws.read(cx).ribbon_tab == RibbonTab::Home);

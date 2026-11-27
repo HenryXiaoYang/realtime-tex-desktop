@@ -530,7 +530,7 @@ pub struct Doc {
     /// What the last edit made: the bytes it wrote.
     last_edit: Range<usize>,
     _tasks: Vec<Task<()>>,
-    _subs: [Subscription; 3],
+    _subs: [Subscription; 4],
 }
 
 impl Doc {
@@ -574,6 +574,8 @@ impl Doc {
                 this.on_code(cx);
             }
         });
+        // Source mode: the caret on the pages follows the code editor's cursor
+        let code_moves = cx.observe(&code, |this, _, cx| this.follow_code(cx));
         let sub = cx.subscribe_in(
             &input,
             window,
@@ -668,7 +670,7 @@ impl Doc {
             find: None,
             last_edit: 0..0,
             _tasks: vec![],
-            _subs: [sub, keys, code_sub],
+            _subs: [sub, keys, code_sub, code_moves],
         };
         if viewer::can_view(&this.path) {
             match viewer::open(&this.root.join(&this.path)) {
@@ -917,7 +919,7 @@ impl Render for Doc {
                     s.set_soft_wrap(st.soft_wrap, window, cx);
                 });
             }
-            return div()
+            let code = div()
                 .size_full()
                 .bg(theme.background)
                 .font_family(family.clone())
@@ -928,9 +930,34 @@ impl Render for Doc {
                         .bordered(false)
                         .font_family(family)
                         .text_size(px(fs)),
+                );
+            if !self.tex {
+                return code.into_any_element();
+            }
+            // Source mode: the source on the left, its pages beside it
+            return div()
+                .size_full()
+                .flex()
+                .child(code.flex_1().min_w_0())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .border_l_1()
+                        .border_color(theme.border)
+                        .child(self.render_pages(window, cx)),
                 )
                 .into_any_element();
         }
+        self.render_pages(window, cx)
+    }
+}
+
+impl Doc {
+    /// The typeset pages, scrolled; in Source mode only a preview of the code editor's text.
+    fn render_pages(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let st = AppSettings::get(cx).clone();
         self.ensure_images(window, cx);
         self.settle_overlay();
         // the source box's page, or the last one if the document got shorter
@@ -966,7 +993,7 @@ impl Render for Doc {
         };
         // the open source box, over its page: the column's top padding, the preamble strip and a
         // gap come before the first page
-        if !pages.is_empty() {
+        if !pages.is_empty() && !self.source_mode {
             let (w0, w1) = (
                 width(self.preview.pages.values().next()),
                 width(self.preview.pages.values().last()),
@@ -1173,7 +1200,12 @@ impl Render for Doc {
                     .flex_col()
                     .items_center()
                     .gap(px(PAGE_GAP))
-                    .pt(px(PAGES_TOP - FRAME_H - PAGE_GAP))
+                    // page_y counts the preamble strip, which Source mode does not show
+                    .pt(px(if self.source_mode {
+                        PAGES_TOP
+                    } else {
+                        PAGES_TOP - FRAME_H - PAGE_GAP
+                    }))
                     .pb(px(48.0))
                     .px_8()
                     .relative()

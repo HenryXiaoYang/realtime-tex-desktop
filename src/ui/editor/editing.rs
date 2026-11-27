@@ -400,6 +400,49 @@ impl Doc {
     pub(super) fn on_code(&mut self, cx: &mut Context<Self>) {
         let new = self.code.read(cx).value().to_string();
         self.replace(0..self.source.len(), &new, cx);
+        self.follow_code(cx);
+    }
+
+    /// Source mode: the caret on the pages where the code editor's cursor is, the pages
+    /// scrolled to it if it is out of view.
+    pub(super) fn follow_code(&mut self, cx: &mut Context<Self>) {
+        if !self.source_mode {
+            return;
+        }
+        let code = self.code.read(cx);
+        // an edit not passed on yet: the cursor is an offset in text the blocks do not have
+        if code.value().len() != self.source.len() {
+            return;
+        }
+        let off = code.cursor();
+        if self.caret.as_ref().is_none_or(|c| c.off != off) {
+            self.set_caret(off, cx);
+        }
+    }
+
+    /// Source mode: a click on the pages puts the code editor's cursor on the source of the
+    /// character clicked (a formula, a picture: its block's start).
+    pub(super) fn jump_to_source(
+        &mut self,
+        page: u32,
+        pos: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((x, y, Some(bi))) = self.hit(page, pos) else {
+            return;
+        };
+        let off = self
+            .is_text_block(bi)
+            .then(|| self.map_of(bi, page))
+            .flatten()
+            .and_then(|m| m.stop_near(x, y).map(|i| m.stops[i].off))
+            .unwrap_or(self.blocks[bi].range.start);
+        self.code.update(cx, |s, cx| {
+            s.set_selected_range(off..off, cx);
+            s.focus(window, cx);
+        });
+        self.set_caret(off, cx);
     }
 
     /// Make `source[region]` read `new`, telling rtex only the changed bytes so it keeps the span
@@ -536,6 +579,8 @@ impl Doc {
         }
         if on {
             self.checkpoint();
+            // the pages beside the editor are a preview: no block menu from Visual mode
+            self.menu_target.set(None);
             // the editor sees the file as edited on the pages, with the caret where editing was
             let at = self.source_focus(cx);
             self.leave(window, cx);

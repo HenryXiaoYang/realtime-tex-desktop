@@ -36,6 +36,13 @@ impl Doc {
         cx.notify();
     }
 
+    /// No caret and nothing selected on the pages: Return and Escape go to the window.
+    pub fn drop_caret(&mut self, cx: &mut Context<Self>) {
+        self.caret = None;
+        self.selected = None;
+        cx.notify();
+    }
+
     pub(super) fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.selected = None;
         cx.notify();

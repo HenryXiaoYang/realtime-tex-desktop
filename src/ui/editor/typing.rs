@@ -946,7 +946,7 @@ impl Doc {
     /// Enter: a new list item, or a paragraph break (two line breaks, `\\\\`, by the settings);
     /// Shift-Enter (`line`): a line break. Not in a table's cells (rows come with table editing).
     pub(super) fn enter(&mut self, line: bool, cx: &mut Context<Self>) {
-        self.delete_selection(cx);
+        let replaced = self.delete_selection(cx);
         let Some(off) = self.caret.as_ref().map(|c| c.off) else {
             return;
         };
@@ -969,7 +969,12 @@ impl Doc {
             }),
         };
         if let Some(e) = e {
+            // over a selection, one undo step with its deletion (as typing over it is)
+            let steps = self.undo.len();
             self.apply(e, cx);
+            if replaced {
+                self.undo.truncate(steps);
+            }
         }
     }
 
@@ -1133,7 +1138,8 @@ impl Doc {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let c = self.caret.as_ref().filter(|_| self.active.is_none())?;
-        if !self.focus.is_focused(window) {
+        // in Source mode it shows where the code editor's cursor is
+        if !(self.source_mode || self.focus.is_focused(window)) {
             return None;
         }
         let overlay = self.overlay.as_ref().filter(|o| o.end == c.off);

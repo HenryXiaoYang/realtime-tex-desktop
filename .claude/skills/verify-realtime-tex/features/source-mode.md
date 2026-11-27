@@ -1,6 +1,6 @@
 # Source mode
 
-A .tex file's other view: the TeX source in a code editor on the left and its typeset pages on the right, side by side. The pages there are a preview: they follow the edits as the user types, a caret on them shows where the code cursor is (they scroll to it), and a click on them puts the code cursor on the character clicked (a formula or picture: its block's start). The ribbon and the status bar's zoom control are hidden.
+A .tex file's other view: the TeX source in a code editor on the left and its typeset pages on the right, side by side. The pages there are a preview: they follow the edits as the user types, a caret on them shows where the code cursor is (they scroll to it), and a click on them puts the code cursor on the character clicked (a formula or picture: its block's start). The ribbon is hidden; the status bar's zoom control zooms the preview (Fit Width fits it to its half).
 
 ## Sub-features
 
@@ -27,5 +27,5 @@ Preconditions:
 
 ## Gotchas
 
-- At 100% a letter page is wider than its half of a 1460-point window; the right side of the page is clipped (pinch zoom only, no zoom control in this mode).
+- At 100% a letter page is wider than its half of a 1460-point window; use the zoom menu's Fit Width.
 - The page caret blinks; a single shot may catch it off.

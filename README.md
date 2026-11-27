@@ -135,9 +135,11 @@ scripts/dmg.sh                              # a .dmg to share: the app with rtex
 - The preamble (`\documentclass` … `\begin{document}`) and `\end{document}` print nothing, so
   they sit in thin strips above the first page and below the last; click one to edit it.
 - **Visual / Source** (right of the tab bar): edit on the typeset pages, or the whole file in a
-  code editor with LaTeX highlighting and line numbers. Edits in either show in the other. Switching
-  to Source opens it where you were: at the caret in the box being edited, else the caret, the
-  selection, or the first block on screen, scrolled into view.
+  code editor with LaTeX highlighting and line numbers, its pages beside it. Edits in either show
+  in the other. Switching to Source opens it where you were: at the caret in the box being edited,
+  else the caret, the selection, or the first block on screen, scrolled into view. In Source, a
+  caret on the pages follows the editor's cursor, and a click on the pages puts the cursor on the
+  character clicked; the status bar's zoom (Fit Width) sizes the pages to their half.
 - Autocomplete, in the source box and in Source mode: `\` commands (with the caret placed in
   the first argument), environments after `\begin{` (inserting the matching `\end`) and
   `\end{`, labels after `\ref{`/`\eqref{`/`\cref{`, citation keys from the project's `.bib`

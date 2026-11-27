@@ -242,7 +242,7 @@ impl Workspace {
         let zoom = self
             .doc()
             .map(|d| d.read(cx))
-            .filter(|d| d.view.is_some() || (d.tex && !d.source_mode))
+            .filter(|d| d.view.is_some() || d.tex)
             .map(|d| d.zoom);
         let (status, pages) = match self.doc() {
             Some(d) => {
