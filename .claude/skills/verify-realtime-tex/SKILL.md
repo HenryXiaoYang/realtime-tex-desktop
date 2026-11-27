@@ -19,7 +19,7 @@ $R launch --fresh-tour            # first-launch state: the tour starts by itsel
 ```
 
 - `--build` runs `scripts/bundle.sh` (safe while the user's app runs). Omit it only when `doctor` says the bundle is newer than HEAD and `src` is clean.
-- The run gets `HOME=/tmp/rtd-verify/<run>/home` with `settings.json` = `{"tour_seen": true}` (unless `--fresh-tour`) and a copy of the user's downloaded rtex, so nothing is downloaded. TeX comes from `/Library/TeX/texbin`.
+- The run gets `HOME=/tmp/rtd-verify/<run>/home` with `settings.json` = `{"tour_seen": true}` (unless `--fresh-tour`) and a copy of the user's downloaded rtex. The app downloads its pinned rtex itself if that copy is missing or older. TeX comes from `/Library/TeX/texbin`.
 - Ready = `launch` printed `run … pid … window …` and the window list. With no project the first window is **Welcome to Realtime Tex Desktop**; with a project, the project's window (titled by folder). A project window is usable for editing once its pages show (screenshot; "Page 1 of N" in the status bar), which can take a few seconds while rtex starts.
 - One run at a time (`/tmp/rtd-verify/current`); `launch` refuses while one is in progress.
 
@@ -36,7 +36,7 @@ Checks: the process is alive, is this repo's bundle, has the run's own `HOME` (i
 ```sh
 $R windows                 # id 'title' WxH of the run's windows
 $R use <id>                # make a window the default target (Settings opens as a window titled '')
-$R shot <name>             # evidence/<name>.png + <name>.small.png; prints the points factor
+$R shot <name> [window]    # evidence/<name>.png + <name>.small.png; prints the points factor
 $R click X Y               # window points; also: dclick X Y, key Escape, hotkey CmdOrCtrl+,
 $R scroll X Y down [pages] # wheel over a point (default 3 pages), e.g. the Settings sidebar
 $R type "text"             # into whatever has focus (click into the page first)
@@ -47,6 +47,7 @@ $R home; $R evidence
 ```
 
 - **Coordinates:** `shot` prints `window points = small-copy pixels x F`. Read the target's pixel position in `<name>.small.png`, multiply both by F, click. Re-shoot after anything that moves layout (tabs, ribbon folding, panels); never reuse coordinates across window sizes.
+- **Another Space.** An input command failing with `background_unavailable … on another Space` means the window is not on the Space the user is looking at; `doctor` can't see this. Ask the user, then either they move the window, or `export RTD_RESTORE=1` makes every input command bring the window forward first (it takes their screen, keyboard and pointer).
 - **Keys** reach GPUI in the background (`key`, `hotkey`, `type`). Shortcuts: `CmdOrCtrl+,` Settings, `CmdOrCtrl+Shift+R` Recompile, `CmdOrCtrl+B` bold, `CmdOrCtrl+Z` undo; the full list is `src/ui/keymap.rs`.
 - **Native Save/Open panels ignore background keys** and `--restore-window` cannot focus them; use `ax Save <panel-window>` then `axclick <index> <panel-window>` (and `axset` on the name field to change the file name). Each click on Export opens a new panel; cancel stray ones with their `Cancel` button the same way.
 - The feature recipes are in `features/` (index: `features/README.md`).

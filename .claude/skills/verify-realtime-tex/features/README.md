@@ -30,5 +30,6 @@ The maintained source for verifying what a user of Realtime Tex Desktop can see 
 - [colors.md](colors.md): every theme color under Appearance (per theme, accent, export).
 - [pages-editing.md](pages-editing.md): typing on the pages and the source box.
 - [export.md](export.md): Export PDF through the native Save panel.
+- [source-mode.md](source-mode.md): the source beside its pages, cursor and clicks linked.
 
-Not yet mapped: project panel (files, outline, sideways scroll), find bar, problems/log panels, ribbon Insert tab, TeX setup window, source mode.
+Not yet mapped: Welcome window (src/ui/welcome.rs), terminal panel (src/ui/terminal.rs), About window (src/ui/about.rs), table, image and TikZ editing on the page (src/ui/editor/table_panel.rs, image_resize.rs, tikz_points.rs), project panel (files, outline, sideways scroll), find bar, problems/log panels, ribbon Insert tab, TeX setup window.

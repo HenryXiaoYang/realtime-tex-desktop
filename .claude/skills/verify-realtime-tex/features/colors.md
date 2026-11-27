@@ -8,7 +8,7 @@ Settings › Appearance lists every color of the theme in use after its Window a
 - `colors-edit` a swatch opens the picker; a pick changes that color in the app at once and shows the row's reset icon.
 - `colors-per-theme` an edit in the dark theme does not change the light theme.
 - `colors-reset` the row reset and Reset all colors restore the theme's own colors (Reset all also its accent).
-- `colors-export` Export theme writes `<support>/themes/<name> (custom).json` (with `"accent"` among its colors), which then appears in Appearance's theme lists and shows that accent ringed.
+- `colors-export` Export theme writes `<support>/themes/<name> (custom).json` (with `"accent"` among its colors only when the theme has one: changed in Settings or named by its file), which then appears in Appearance's theme lists and shows that accent ringed.
 - `colors-pages` the Pages group (selected text, find matches, selected block, source box) changes what is drawn on the pages.
 
 ## How to get to it (user POV)
@@ -26,13 +26,13 @@ Preconditions:
 - **Search.** Click the search box, `$R type "tab.active.background"`; `$R shot colors-search`: Appearance's page shows the theme's title, then Tabs with the one row. Click `Appearance` in the sidebar if its entry is closed: Appearance › theme › Tabs.
 - **Edit.** Click a row's swatch (e.g. in Buttons, the primary background); pick a palette cell; `$R key Escape`. `$R shot colors-edited`: the row's hex changed and its reset icon shows; buttons in the window took the color. `$R settings` has `"colors": {"<theme name>": {"<key>": "#…"}}`.
 - **Per theme.** Window group › Theme › Light; back to the theme-named group: its title is the light theme's name, and the edited row and the accent are unchanged there.
-- **Export.** Click Export theme. `ls "$($R home)/Library/Application Support/Realtime Tex Desktop/themes"` lists `<name> (custom).json`; Appearance's dark/light theme list includes it.
-- **Pages colors.** Open a project (`$R launch --build <folder>`), select text on the pages, change Appearance › Pages › Selected text; the selection on the page takes the color (shot before/after).
+- **Export.** Pick an accent first (or the file has no `"accent"`), then click Export theme. `ls "$($R home)/Library/Application Support/Realtime Tex Desktop/themes"` lists `<name> (custom).json`; Appearance's dark/light theme list includes it.
+- **Pages colors.** Open a project (`$R launch --build <folder>`), select text on the pages, change Appearance › Pages › Selected text; the selection on the page takes that hue, see-through (an opaque pick is drawn at the mark's own strength; only a pick with an alpha is drawn as picked) (shot before/after).
 - **Proof.** Shots before/after, `$R settings`, and the exported file copied into `$($R evidence)`.
 
 ## Gotchas
 
-- Export reveals the file in Finder, which opens a Finder window on the user's screen; close it after.
+- Export reveals the file in Finder, which opens a Finder window titled `themes` on the user's screen; ask the user before closing anything in Finder, and say it was left open.
 - A theme file from the themes folder may show the default theme for a moment at launch before the folder is read.
 - Page colors only show on pages: verify them in a project window, not in Settings.
 - The Pages group (pages.* keys) is newer than the rest; check `$R doctor` reports a fresh bundle.
