@@ -39,6 +39,7 @@ Preconditions:
 
 - The tour copy lives in `<support>/Tour` of the run's HOME. Starting the tour while its window is open only restarts it at step 1; a fresh copy comes when the window closes or at the next launch.
 - A caret placed on the page during a step takes Return (a new paragraph) until the next step begins.
+- At step 2, `$R type "Hi "` lands only its first key: the keys that arrive while the tour moves to step 3 are dropped (the source gets `H`). Typing later reaches the page whole.
 - Opening any source box or Formula panel and closing it completes step 3, not only the formula's.
 - The card can sit over the formula after step 3; it is still there.
 - The export notification hides itself after a few seconds; shoot within 1–2 s of the PDF appearing if you need it.
