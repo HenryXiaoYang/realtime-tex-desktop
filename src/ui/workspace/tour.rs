@@ -245,7 +245,14 @@ pub(super) struct Since {
     pub(super) recompiled: bool,
     /// A PDF was made.
     pub(super) exported: bool,
+    /// The files' text at the last check, and when it last changed.
+    seen: (Option<String>, Option<String>),
+    typed_at: Option<std::time::Instant>,
 }
+
+/// A step done by typing goes on once the typing pauses: going on takes the caret (and from
+/// chapter.tex, the tab), and the rest of the word would be lost.
+const TYPING_PAUSE: std::time::Duration = std::time::Duration::from_millis(800);
 
 pub(super) struct Tour {
     /// The step shown; STEPS.len() is the end.
@@ -367,14 +374,25 @@ impl Workspace {
         if !problems {
             s.problems = false;
         }
+        if (&main, &chapter) != (&s.seen.0, &s.seen.1) {
+            s.seen = (main.clone(), chapter.clone());
+            s.typed_at = Some(std::time::Instant::now());
+            // no frame comes once the typing stops: one after the pause checks again
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TYPING_PAUSE).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        let paused = s.typed_at.is_none_or(|t| t.elapsed() >= TYPING_PAUSE);
         let bold = |s: &str| s.matches("\\textbf").count();
         let is_done = match done {
-            Done::TypedInMain => main != s.main,
+            Done::TypedInMain => main != s.main && paused,
             Done::BoxSeen => s.opened && boxed.is_none(),
             Done::MadeBold => main
                 .zip(s.main.as_deref())
                 .is_some_and(|(now, then)| bold(&now) > bold(then)),
-            Done::TypedInChapter => chapter != s.chapter,
+            Done::TypedInChapter => chapter != s.chapter && paused,
             Done::ProblemsOpened => problems && !s.problems,
             Done::Recompiled => s.recompiled,
             Done::Exported => s.exported,
@@ -420,9 +438,14 @@ impl Workspace {
                 });
             }
         }
+        let (main, chapter) = (
+            self.tour_source("main.tex", cx),
+            self.tour_source("chapter.tex", cx),
+        );
         let since = Since {
-            main: self.tour_source("main.tex", cx),
-            chapter: self.tour_source("chapter.tex", cx),
+            seen: (main.clone(), chapter.clone()),
+            main,
+            chapter,
             boxed: self.tour_box(cx),
             problems: self.bottom == Some(Bottom::Problems),
             ..Default::default()
@@ -952,8 +975,18 @@ mod e2e {
             Some(1),
             "what was typed before is not this step's"
         );
-        type_in(cx, &main, "Hello. ", "Now. ");
-        assert_eq!(step(cx), Some(2), "typed: on to the source box");
+        // a step done by typing waits for the typing to pause, so no key of it is lost
+        let reach = |cx: &mut TestAppContext, n: usize| {
+            wait(cx, "the typing pause", &|cx| {
+                ws.read(cx).tour.as_ref().map(|t| t.step) == Some(n)
+            })
+        };
+        type_in(cx, &main, "Hello. ", "N");
+        assert_eq!(step(cx), Some(1), "one key: the step waits");
+        in_window(cx, &mut |window, cx| window.input("ow. ", cx));
+        frame(cx);
+        reach(cx, 2);
+        assert!(source(cx).contains("Now. Hello. "), "every key landed");
         frame(cx);
         assert_eq!(step(cx), Some(2), "the box open already is not this step's");
         // Back stays back: the step is not done again by what was done in it
@@ -962,7 +995,7 @@ mod e2e {
         frame(cx);
         assert_eq!(step(cx), Some(1), "Back does not bounce forward");
         type_in(cx, &main, "Now. ", "Then. ");
-        assert_eq!(step(cx), Some(2));
+        reach(cx, 2);
         // a double-click at `at` in the window, as a mouse makes it
         let double_click = |cx: &mut TestAppContext, at: Point<Pixels>| {
             in_window(cx, &mut |window, cx| {
@@ -1147,7 +1180,7 @@ mod e2e {
         });
         type_in(cx, &chapter, "This section", "Mine. ");
         assert!(cx.read(|cx| chapter.read(cx).source.contains("Mine. This section")));
-        assert_eq!(step(cx), Some(7), "typed in chapter.tex");
+        reach(cx, 7);
         assert!(cx.read(|cx| ws.read(cx).shown_file(cx)).as_deref() == Some("main.tex"));
         press(cx, "escape");
         press(cx, "enter");
