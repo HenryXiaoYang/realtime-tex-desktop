@@ -360,20 +360,18 @@ pub fn start_tour(cx: &mut App) {
     }
 }
 
-/// Ask where a new project goes, make its folder with a main.tex, and open it.
+/// Ask for the new project's folder (the dialog can make one), put a main.tex in it, and open it.
 pub fn new_project(cx: &mut App) {
-    let home = std::env::home_dir().unwrap_or_default();
-    // beside the newest project, else in Documents
-    let dir = cx
-        .global::<Projects>()
-        .list
-        .first()
-        .and_then(|r| r.root.parent().map(Path::to_path_buf))
-        .filter(|d| d.is_dir())
-        .unwrap_or_else(|| home.join("Documents"));
-    let rx = cx.prompt_for_new_path(&dir, Some("Untitled"));
+    let rx = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Create".into()),
+    });
     cx.spawn(async move |cx| {
-        if let Ok(Ok(Some(path))) = rx.await {
+        if let Ok(Ok(Some(paths))) = rx.await
+            && let Some(path) = paths.into_iter().next()
+        {
             cx.update(|cx| match create(&path) {
                 Ok(()) => open_in(path, Some("main.tex".into()), cx),
                 Err(e) => welcome::report(format!("Couldn’t create the project: {e}"), cx),
