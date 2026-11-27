@@ -24,11 +24,12 @@ fn main() {
         gpui_kit::init(cx);
         settings::AppSettings::init(cx);
         cx.on_action(|_: &OpenSettings, cx| open_settings(cx));
+        cx.on_action(|_: &ui::about::ShowAbout, cx| ui::about::open_about(cx));
         // the fixed editing keys first, then every command's key (the settings may have
         // changed some): later bindings win
         editor::bind_keys(cx);
         ui::keymap::bind_all(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| ui::projects::quit(cx));
         // no rtex or lualatex outlives the app
         cx.on_app_quit(|_| async { engine::stop_all() }).detach();
         // every command has a place in the menu bar, where its shortcut shows
@@ -46,6 +47,8 @@ fn main() {
             menu(
                 "Realtime Tex Desktop",
                 vec![
+                    MenuItem::action("About Realtime Tex Desktop", ui::about::ShowAbout),
+                    MenuItem::separator(),
                     MenuItem::action("Settings…", OpenSettings),
                     MenuItem::separator(),
                     MenuItem::os_submenu("Services", SystemMenuType::Services),
@@ -139,6 +142,7 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::action("Show or Hide Project Panel", ToggleSidebar),
                     MenuItem::action("Show or Hide Sidebar", ToggleInspector),
+                    MenuItem::action("Show or Hide Terminal", ToggleTerminal),
                     MenuItem::action("Switch Visual / Source", ToggleSource),
                     MenuItem::separator(),
                     MenuItem::action("Enter Full Screen", ToggleFullScreen),
@@ -151,7 +155,14 @@ fn main() {
                     MenuItem::action("Zoom", ZoomWindow),
                 ],
             ),
-            menu("Help", vec![MenuItem::action("Show the Tour", ShowTour)]),
+            menu(
+                "Help",
+                vec![
+                    MenuItem::action("Show the Tour", ShowTour),
+                    MenuItem::separator(),
+                    MenuItem::action("About Realtime Tex Desktop", ui::about::ShowAbout),
+                ],
+            ),
         ]);
         cx.activate(true);
         // the projects open when the app quit, else the welcome window

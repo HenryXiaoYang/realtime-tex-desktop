@@ -50,10 +50,22 @@ impl RibbonState {
 }
 
 impl Doc {
-    /// The selection, or the caret as an empty one.
+    /// The selection, or the caret as an empty one; with whole blocks selected, their text.
     fn format_target(&self) -> Option<Range<usize>> {
-        let c = self.caret.as_ref()?;
+        let Some(c) = self.caret.as_ref() else {
+            let (lo, hi) = self.selection()?;
+            return Some(self.blocks.get(lo)?.range.start..self.blocks.get(hi)?.range.end);
+        };
         Some(self.selection_range().unwrap_or(c.off..c.off))
+    }
+
+    /// Each block the target touches.
+    fn target_block_ranges(&self, t: &Range<usize>) -> Vec<Range<usize>> {
+        self.blocks
+            .iter()
+            .filter(|b| b.range.start <= t.end && b.range.end >= t.start)
+            .map(|b| b.range.clone())
+            .collect()
     }
 
     /// The blocks the target touches, from the first's start to the last's end.
@@ -105,6 +117,8 @@ impl Doc {
         self.leave(window, cx);
         self.focus.focus(window, cx);
         let Some(t) = self.format_target() else {
+            self.status = "Click in the text, or select some, to format it".into();
+            cx.notify();
             return;
         };
         let blocks = self.target_blocks(&t);
@@ -118,7 +132,7 @@ impl Doc {
             FormatOp::Color(c) => format::set_color(src, inline_block, t.clone(), c),
             FormatOp::List(env) => blocks.and_then(|b| format::toggle_list(src, b, t.start, env)),
             FormatOp::Align(a) => blocks.and_then(|b| format::align(src, b, *a)),
-            FormatOp::Style(s) => blocks.and_then(|b| format::set_style(src, b, *s)),
+            FormatOp::Style(s) => format::set_style_each(src, &self.target_block_ranges(&t), *s),
             FormatOp::Indent(inward) => {
                 return self.tab(!*inward, cx);
             }
@@ -128,6 +142,18 @@ impl Doc {
             cx.notify();
             return;
         };
+        // a format that would leave the source crossing its own \begin{..}/\end{..} (the text
+        // runs into a list's start, say) is not done: better nothing than a document that no
+        // longer typesets
+        if document::caret::balanced(&self.source) {
+            let mut after = self.source.clone();
+            after.replace_range(fmt.range.clone(), &fmt.text);
+            if !document::caret::balanced(&after) {
+                self.status = "That text cannot be formatted this way".into();
+                cx.notify();
+                return;
+            }
+        }
         self.checkpoint();
         self.typing = None;
         self.overlay = None;

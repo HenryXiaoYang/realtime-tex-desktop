@@ -6,7 +6,7 @@ impl Doc {
     /// Where the source box goes: over its block's lines on their first page; for new text not
     /// typeset yet, where it was opened; for text that lost its lines, where it last was.
     pub(super) fn box_place(&self) -> Option<BoxPlace> {
-        let a = self.active.as_ref().filter(|a| !a.frame)?;
+        let a = self.active.as_ref().filter(|a| !a.frame && !a.in_panel())?;
         // the box covers every block its text spans, from the first one's page
         let covered: Vec<&document::Block> = self
             .blocks
@@ -313,13 +313,26 @@ impl Doc {
     }
 
     pub fn leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_box(window, cx);
+    }
+
+    /// Close the source box or the formula editor; for a formula, where the caret belongs after it.
+    pub(super) fn close_box(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
         // nothing open: no redraw (a click on the title bar must not disturb its window drag)
         if self.active.is_none() && self.live.is_none() {
-            return;
+            return None;
         }
         // what a command left half typed in it goes in now
         self.sync_box(true, cx);
+        let after = self.end_formula(cx);
         self.active = None;
+        self.table = None;
+        self.pointing = None;
+        self.tikz_ui = Default::default();
         // a hidden box keeps focus otherwise and takes ⌘Z; the pages take it (and its actions)
         if self.input.focus_handle(cx).is_focused(window) {
             self.focus.focus(window, cx);
@@ -328,15 +341,32 @@ impl Doc {
             let _ = window.drop_image(old);
         }
         cx.notify();
+        after
     }
 
-    pub(super) fn on_input(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn on_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|a| a.panel == Some(Panel::Formula))
+            && self.dollar_closes(window, cx)
+        {
+            return;
+        }
         self.sync_box(false, cx);
     }
 
     /// The box's text into the source, unless (`!force`) a command is still being typed in it:
     /// that waits until it is whole (or the box closes), so LaTeX never sees `\\ti` or `\\`.
     pub(super) fn sync_box(&mut self, force: bool, cx: &mut Context<Self>) {
+        // the table editor writes its cells as they change; the box holds nothing of it
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|a| a.panel == Some(Panel::Table))
+        {
+            return;
+        }
         let (mut new, at) = self
             .input
             .read_with(cx, |s, _| (s.value().to_string(), s.cursor()));
@@ -356,6 +386,13 @@ impl Doc {
             && let Some(a) = self.active.as_mut()
         {
             a.range.end = region.start + new.len();
+        }
+    }
+
+    /// rtex's first reply, before any edit, says what revision its count began at.
+    pub(super) fn note_revision(&mut self, rev: u64) {
+        if self.first_revision.is_none() && self.edits_sent == 0 {
+            self.first_revision = Some(rev);
         }
     }
 
@@ -413,6 +450,8 @@ impl Doc {
         let text = &new[p..new.len() - s];
         if let Some(r) = self.rtex.as_mut() {
             r.edit(start, end, text);
+            self.edits_sent += 1;
+            self.edited_at = Instant::now();
             r.request_spans();
             self.spans_pending += 1;
         }
@@ -465,6 +504,31 @@ impl Doc {
         true
     }
 
+    /// The source offset the user is working at on the pages, for the code editor to open at: the
+    /// caret in the box being edited, else the caret, else the selection, else the first block in
+    /// view.
+    fn source_focus(&self, cx: &App) -> Option<usize> {
+        if let Some(a) = &self.active {
+            let inside = (!a.in_panel()).then(|| self.input.read(cx).cursor());
+            return Some(a.range.start + inside.unwrap_or(0));
+        }
+        if let Some(c) = &self.caret {
+            return Some(c.off);
+        }
+        if let Some((lo, _)) = self.selection() {
+            return self.blocks.get(lo).map(|b| b.range.start);
+        }
+        let top = -f32::from(self.scroll.offset().y);
+        self.blocks
+            .iter()
+            .find(|b| {
+                b.rows
+                    .last()
+                    .is_some_and(|r| self.page_y(r.page) + page_px(r.bbox[3], self.zoom) > top)
+            })
+            .map(|b| b.range.start)
+    }
+
     /// Switch a .tex file between its typeset pages and its source in the code editor.
     pub fn set_source_mode(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
         if on == self.source_mode || !self.tex {
@@ -473,14 +537,14 @@ impl Doc {
         if on {
             self.checkpoint();
             // the editor sees the file as edited on the pages, with the caret where editing was
-            let caret = self.active.as_ref().map(|a| a.range.start);
+            let at = self.source_focus(cx);
             self.leave(window, cx);
             let text = self.source.clone();
             self.code.update(cx, |s, cx| {
                 if s.value().as_ref() != text {
                     s.set_value(text, window, cx);
                 }
-                if let Some(c) = caret {
+                if let Some(c) = at {
                     s.set_selected_range(c..c, cx);
                 }
                 s.focus(window, cx);
@@ -497,6 +561,9 @@ impl Doc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.table.is_some() {
+            return self.on_table_key(ks, window, cx);
+        }
         if self.active.is_none() || !self.input.focus_handle(cx).is_focused(window) {
             return;
         }
@@ -506,8 +573,12 @@ impl Doc {
         }
         let key = ks.key.as_str();
         if key == "escape" {
-            self.leave(window, cx);
+            self.finish_formula(window, cx);
             cx.stop_propagation();
+            return;
+        }
+        // the formula editor has no neighbouring blocks to move to
+        if self.active.as_ref().is_some_and(|a| a.in_panel()) {
             return;
         }
         if ks.modifiers.modified() || (key != "up" && key != "down") {

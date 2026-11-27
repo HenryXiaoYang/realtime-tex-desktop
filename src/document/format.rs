@@ -4,7 +4,7 @@
 // is in; sizes, colours and fonts rewrite a group that holds exactly the selection instead of
 // nesting another; lists, alignment and paragraph styles rewrite whole blocks. Each edit says
 // which packages it needs.
-use super::caret::{self, group_close, group_command, item_at, open_groups};
+use super::caret::{self, comment_start, group_close, group_command, item_at, open_groups};
 use super::glyphmap::has_visible;
 use std::ops::Range;
 
@@ -226,6 +226,17 @@ fn wrap(
     open: &str,
     close: &str,
 ) -> Option<(Range<usize>, String, Range<usize>)> {
+    wrap_with(src, sel, open, close, |s| s.to_string())
+}
+
+/// `wrap`, with `inside` made of each wrapped piece first.
+fn wrap_with(
+    src: &str,
+    sel: Range<usize>,
+    open: &str,
+    close: &str,
+    inside: impl Fn(&str) -> String,
+) -> Option<(Range<usize>, String, Range<usize>)> {
     let segs = segments(src, sel.clone());
     let (first, last) = (segs.first()?.start, segs.last()?.end);
     let mut text = String::new();
@@ -233,7 +244,7 @@ fn wrap(
     for r in segs {
         text.push_str(&src[at..r.start]);
         text.push_str(open);
-        text.push_str(&src[r.clone()]);
+        text.push_str(&inside(&src[r.clone()]));
         text.push_str(close);
         at = r.end;
     }
@@ -453,13 +464,56 @@ pub fn set_font(src: &str, block: Range<usize>, sel: Range<usize>, font: &Font) 
             packages: vec![],
         });
     }
-    let (range, text, select) = wrap(src, sel, &format!("\\{cmd}{{"), "}")?;
+    // a family set over text that has one of its own replaces it, as in Word
+    let (range, text, select) = wrap_with(src, sel, &format!("\\{cmd}{{"), "}", |t| {
+        unwrap_commands(t, &["textrm", "textsf", "texttt"])
+    })?;
     Some(Fmt {
         range,
         text,
         select,
         packages: vec![],
     })
+}
+
+/// `text` with the commands `names` (`\textsf{x}`) replaced by their argument.
+fn unwrap_commands(text: &str, names: &[&str]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    'scan: while i < text.len() {
+        let rest = &text[i..];
+        for n in names {
+            let head = format!("\\{n}{{");
+            if rest.starts_with(&head) {
+                // the matching brace
+                let (mut depth, mut j) = (1, i + head.len());
+                let bytes = text.as_bytes();
+                while j < text.len() {
+                    match bytes[j] {
+                        b'\\' => j += 1,
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth == 0 {
+                    out.push_str(&unwrap_commands(&text[i + head.len()..j], names));
+                    i = j + 1;
+                    continue 'scan;
+                }
+            }
+        }
+        let c = rest.chars().next().unwrap();
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
 }
 
 /// The colour taken off the selection (Automatic): the `\\textcolor` around it unwrapped.
@@ -671,9 +725,11 @@ pub fn align(src: &str, blocks: Range<usize>, a: Align) -> Option<Fmt> {
     // the blocks are an alignment environment's whole body, or the environment itself
     let around = alignment_env(src, blocks.clone());
     if let Some((outer, _, inner)) = around {
+        // an alignment set inside it would still win
+        let body = strip_alignment(&src[inner.clone()]);
         let text = match env {
-            Some(e) => format!("\\begin{{{e}}}{}\\end{{{e}}}", &src[inner.clone()]),
-            None => src[inner.clone()].trim().to_string(),
+            Some(e) => format!("\\begin{{{e}}}{body}\\end{{{e}}}"),
+            None => body.trim().to_string(),
         };
         let select = outer.start..outer.start + text.len();
         return Some(Fmt {
@@ -684,7 +740,10 @@ pub fn align(src: &str, blocks: Range<usize>, a: Align) -> Option<Fmt> {
         });
     }
     let e = env?;
-    let text = format!("\\begin{{{e}}}\n{}\n\\end{{{e}}}", &src[blocks.clone()]);
+    let text = format!(
+        "\\begin{{{e}}}\n{}\n\\end{{{e}}}",
+        strip_alignment(&src[blocks.clone()]).trim()
+    );
     let select = blocks.start..blocks.start + text.len();
     Some(Fmt {
         range: blocks,
@@ -692,6 +751,39 @@ pub fn align(src: &str, blocks: Range<usize>, a: Align) -> Option<Fmt> {
         select,
         packages: vec![],
     })
+}
+
+/// `text` without alignment of its own: the environments and declarations that would win over
+/// one set around it.
+fn strip_alignment(text: &str) -> String {
+    let mut t = text.to_string();
+    for env in ALIGN_ENVS {
+        for tag in [format!("\\begin{{{env}}}"), format!("\\end{{{env}}}")] {
+            t = t.replace(&tag, "");
+        }
+    }
+    for decl in ["\\centering", "\\raggedright", "\\raggedleft"] {
+        let mut out = String::with_capacity(t.len());
+        let mut rest = t.as_str();
+        while let Some(i) = rest.find(decl) {
+            let after = &rest[i + decl.len()..];
+            // a table column's own (`>{\raggedright\arraybackslash}p{3cm}`) or a longer name stays
+            let keep =
+                rest[..i].ends_with(">{") || after.starts_with(|c: char| c.is_ascii_alphabetic());
+            out.push_str(&rest[..i]);
+            if keep {
+                out.push_str(decl);
+            }
+            rest = after;
+        }
+        out.push_str(rest);
+        t = out;
+    }
+    // the blank lines the removed tags leave
+    while t.contains("\n\n\n") {
+        t = t.replace("\n\n\n", "\n\n");
+    }
+    t
 }
 
 /// The alignment environment `blocks` are: itself (when they begin with it) or its body: the
@@ -773,16 +865,40 @@ pub fn style_of(src: &str, block: Range<usize>) -> Style {
         .map_or(Style::Normal, Style::Heading)
 }
 
-/// The text of block `block` without its style: a heading's title, a quote's body, or itself.
-fn bare_text(src: &str, block: Range<usize>) -> String {
-    let t = &src[block.clone()];
-    if let Some(title) = caret::heading_title(t, block.start) {
-        return src[title].to_string();
-    }
-    for env in ["quote", "quotation"] {
-        let (b, e) = (format!("\\begin{{{env}}}"), format!("\\end{{{env}}}"));
-        if let Some(inner) = t.strip_prefix(&b).and_then(|r| r.strip_suffix(&e)) {
-            return inner.trim().to_string();
+/// The text of block `block` without its style: a heading's title, a quote's body, or itself. With
+/// `unalign`, an alignment around it goes too (a heading or quote carries no `center` of its own).
+fn bare_text(src: &str, block: Range<usize>, unalign: bool) -> String {
+    let mut t = &src[block];
+    loop {
+        if let Some(title) = caret::heading_title(t, 0) {
+            return t[title].to_string();
+        }
+        let wrapped = ["quote", "quotation"]
+            .into_iter()
+            .chain(ALIGN_ENVS.iter().copied().filter(|_| unalign))
+            .find_map(|env| {
+                t.trim()
+                    .strip_prefix(&format!("\\begin{{{env}}}"))
+                    .and_then(|r| r.strip_suffix(&format!("\\end{{{env}}}")))
+            });
+        match wrapped {
+            // (a quote ends it: what is inside is the text)
+            Some(inner) if unalign => t = inner.trim(),
+            Some(inner) => return inner.trim().to_string(),
+            None => {
+                let decl = ["\\centering", "\\raggedright", "\\raggedleft"]
+                    .into_iter()
+                    .filter(|_| unalign)
+                    .find_map(|d| {
+                        t.trim_start()
+                            .strip_prefix(d)
+                            .filter(|r| !r.starts_with(|c: char| c.is_ascii_alphabetic()))
+                    });
+                match decl {
+                    Some(rest) => t = rest.trim_start(),
+                    None => break,
+                }
+            }
         }
     }
     t.to_string()
@@ -791,9 +907,29 @@ fn bare_text(src: &str, block: Range<usize>) -> String {
 /// Give block `block` style `style`. A title goes into the preamble (`\title{…}`) and the block
 /// becomes `\maketitle` (or goes, when the document already makes its title).
 pub fn set_style(src: &str, block: Range<usize>, style: Style) -> Option<Fmt> {
-    let text = bare_text(src, block.clone());
+    let text = bare_text(src, block.clone(), style != Style::Normal);
+    // a heading, a quote or a title holds running text: an environment (a list, a figure, a
+    // table) does not go inside one
+    if style != Style::Normal && (text.contains("\\begin{") || text.contains("\\end{")) {
+        return None;
+    }
     // a heading's title is one paragraph
-    let one_line = |t: &str| t.split("\n\n").map(str::trim).collect::<Vec<_>>().join(" ");
+    // (a comment ending a paragraph keeps its line break, or it would take the next one with it)
+    let one_line = |t: &str| {
+        let mut out = String::new();
+        for p in t.split("\n\n").map(str::trim) {
+            if !out.is_empty() {
+                let last = out.rsplit('\n').next().unwrap_or("");
+                out.push(if comment_start(last).is_some() {
+                    '\n'
+                } else {
+                    ' '
+                });
+            }
+            out.push_str(p);
+        }
+        out
+    };
     let star = src[block.clone()]
         .split('{')
         .next()
@@ -813,6 +949,34 @@ pub fn set_style(src: &str, block: Range<usize>, style: Style) -> Option<Fmt> {
         range: block,
         text: new,
         select,
+        packages: vec![],
+    })
+}
+
+/// `set_style` for each of `blocks` (paragraphs selected together): each becomes the style, and
+/// what is not running text (a list, a figure) stays as it is; one edit from the first block's
+/// start to the last one's end. A title can be one only.
+pub fn set_style_each(src: &str, blocks: &[Range<usize>], style: Style) -> Option<Fmt> {
+    if style == Style::Title || blocks.len() < 2 {
+        return blocks.iter().find_map(|b| set_style(src, b.clone(), style));
+    }
+    let (first, last) = (blocks.first()?.start, blocks.last()?.end);
+    let (mut text, mut at, mut any) = (String::new(), first, false);
+    for b in blocks {
+        text.push_str(&src[at..b.start]);
+        match set_style(src, b.clone(), style) {
+            Some(f) if f.range == *b => {
+                any = true;
+                text.push_str(&f.text);
+            }
+            _ => text.push_str(&src[b.clone()]),
+        }
+        at = b.end;
+    }
+    any.then(|| Fmt {
+        range: first..last,
+        select: first..first + text.len(),
+        text,
         packages: vec![],
     })
 }
@@ -886,6 +1050,42 @@ pub fn add_lualatex(src: &str) -> Option<(usize, String)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_style_goes_on_each_paragraph_and_not_on_what_is_not_text() {
+        let src =
+            "First one.\n\n\\begin{itemize}\n\\item A\n\\end{itemize}\n\n\\centering Last one.";
+        let list = src.find("\\begin{itemize}").unwrap();
+        let list_end = src.find("\\end{itemize}").unwrap() + "\\end{itemize}".len();
+        let last = src.find("\\centering").unwrap();
+        let blocks = [0..10, list..list_end, last..src.len()];
+        let e = set_style_each(src, &blocks, Style::Heading("section")).unwrap();
+        assert_eq!(
+            e.text,
+            "\\section{First one.}\n\n\\begin{itemize}\n\\item A\n\\end{itemize}\n\n\\section{Last one.}"
+        );
+        // a list or a figure alone is no heading
+        assert!(set_style(src, list..list_end, Style::Heading("section")).is_none());
+        assert!(set_style(src, list..list_end, Style::Quote).is_none());
+        // but its style can be put back to normal
+        assert!(set_style(src, list..list_end, Style::Normal).is_some());
+    }
+
+    #[test]
+    fn a_heading_over_an_aligned_paragraph_leaves_the_alignment_behind() {
+        let style = |src: &str, st| set_style(src, 0..src.len(), st).unwrap().text;
+        let src = "\\begin{center}\nSome text\n\\end{center}";
+        assert_eq!(
+            style(src, Style::Heading("section")),
+            "\\section{Some text}"
+        );
+        assert_eq!(style(src, Style::Normal), src, "plain keeps its alignment");
+        let src = "\\begin{flushleft}\n\\section{Intro}\n\\end{flushleft}";
+        assert_eq!(
+            style(src, Style::Heading("subsection")),
+            "\\subsection{Intro}"
+        );
+    }
+
     /// Run `f` on `src` with the selection between its `[` `]` (or the caret at `|`), as the
     /// source after, the selection marked again.
     fn run(src: &str, f: impl Fn(&str, Range<usize>, Range<usize>) -> Option<Fmt>) -> String {
@@ -902,6 +1102,28 @@ mod tests {
         out.insert(e.select.end, ']');
         out.insert(e.select.start, '[');
         out
+    }
+
+    #[test]
+    fn a_group_beside_a_command_group_is_not_inside_it() {
+        // the caret in the second group: nothing of the first one is split or copied
+        let out = run("\\emph{AB }{\\large CD |EF }", |s, b, r| {
+            toggle_inline(s, b, r, "textit")
+        });
+        assert_eq!(out.matches("AB").count(), 1, "{out}");
+        assert_eq!(out.matches("EF").count(), 1, "{out}");
+        let out = run("\\textbf{AB }{\\large [CD ]}", |s, b, r| {
+            toggle_inline(s, b, r, "textbf")
+        });
+        assert_eq!(out.matches("AB").count(), 1, "{out}");
+        assert_eq!(out.matches("CD").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn a_heading_keeps_the_line_break_after_a_comment() {
+        let src = "first % note\n\nsecond";
+        let e = set_style(src, 0..src.len(), Style::Heading("section")).expect("an edit");
+        assert!(e.text.contains("% note\nsecond"), "{}", e.text);
     }
 
     #[test]
@@ -1033,6 +1255,39 @@ mod tests {
         assert_eq!(r.text, "\\begin{flushright}\nSome text.\n\\end{flushright}");
         let j = align(&centred, blk, Align::Justify).unwrap();
         assert_eq!(j.text, "Some text.");
+    }
+
+    #[test]
+    fn alignment_over_text_that_has_its_own_replaces_it() {
+        let src = "One.\n\n\\begin{center}\nTwo.\n\\end{center}\n\nThree. \\centering";
+        let r = align(src, 0..src.len(), Align::Right).unwrap();
+        assert_eq!(
+            r.text,
+            "\\begin{flushright}\nOne.\n\nTwo.\n\nThree.\n\\end{flushright}"
+        );
+        assert!(!r.text.contains("center") && !r.text.contains("centering"));
+    }
+
+    #[test]
+    fn alignment_leaves_a_table_columns_own_alignment() {
+        let src =
+            "One.\n\n\\begin{tabular}{>{\\raggedright\\arraybackslash}p{3cm}}\nA\n\\end{tabular}";
+        let r = align(src, 0..src.len(), Align::Right).unwrap();
+        assert!(
+            r.text.contains(">{\\raggedright\\arraybackslash}p{3cm}"),
+            "{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn a_family_over_text_that_has_one_replaces_it() {
+        let src = "Plain \\textsf{sans \\emph{in {braces}}} and \\texttt{mono} end";
+        let f = set_font(src, 0..src.len(), 0..src.len(), &Font::Serif).unwrap();
+        assert_eq!(
+            f.text,
+            "\\textrm{Plain sans \\emph{in {braces}} and mono end}"
+        );
     }
 
     #[test]

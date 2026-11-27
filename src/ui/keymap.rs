@@ -250,6 +250,14 @@ pub fn commands() -> Vec<Command> {
             ToggleInspector
         ),
         cmd!(
+            "terminal",
+            "View",
+            "Show or Hide Terminal",
+            ANY,
+            "ctrl-`",
+            ToggleTerminal
+        ),
+        cmd!(
             "source",
             "View",
             "Switch Visual / Source",

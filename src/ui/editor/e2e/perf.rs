@@ -81,3 +81,72 @@ fn frame_costs(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// Where the caret is drawn at each step after an edit, until rtex has answered: it stays on its
+/// line and moves by a few points at a time, never back to a word's or a line's start. `cargo test --release caret_follows_edits --
+/// --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn caret_follows_edits(cx: &mut TestAppContext) {
+    let words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega ";
+    let tex = format!(
+        "\\documentclass{{article}}\n\\begin{{document}}\n{}\n\n\\end{{document}}\n",
+        words.repeat(6)
+    );
+    let (doc, cx) = open(cx, scratch("caret", &tex), "main.tex", 0);
+    let at = cx.read(|cx| doc.read(cx).source.find("kappa").unwrap() + 3);
+    doc.update_in(cx, |d, window, cx| {
+        d.set_caret(at, cx);
+        d.focus.focus(window, cx);
+    });
+    // where the pages draw the caret: at the overlay holding it, else at its stop
+    let spot = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.read(|cx| {
+            let at = doc.read(cx).caret_spot();
+            at.map(|(p, x, y, ..)| (p, (x / 65536.0).round(), (y / 65536.0).round()))
+        })
+    };
+    let mut prev = spot(cx).unwrap();
+    println!("start {prev:?}");
+    for (what, edit) in [
+        ("backspace", 0),
+        ("backspace", 0),
+        ("type a", 1),
+        ("type b", 1),
+        ("delete", 2),
+    ] {
+        doc.update_in(cx, |d, window, cx| match edit {
+            0 => d.delete(true, cx),
+            1 => {
+                use gpui_kit::EntityInputHandler;
+                d.replace_text_in_range(None, if what == "type a" { "a" } else { "b" }, window, cx)
+            }
+            _ => d.delete(false, cx),
+        });
+        let t = std::time::Instant::now();
+        // (when, the caret's page and position then)
+        type Seen = (u128, Option<(u32, f64, f64)>);
+        let mut seen: Vec<Seen> = vec![];
+        loop {
+            let now = spot(cx);
+            if seen.last().is_none_or(|l| l.1 != now) {
+                seen.push((t.elapsed().as_millis(), now));
+            }
+            let settled = cx.read(|cx| doc.read(cx).spans_pending == 0);
+            if (settled && t.elapsed().as_millis() > 150) || t.elapsed().as_secs() > 5 {
+                break;
+            }
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        println!("{what}: {seen:?}");
+        for (_, now) in seen {
+            let now = now.unwrap();
+            assert!(
+                now.0 == prev.0 && now.2 == prev.2 && (now.1 - prev.1).abs() < 12.0,
+                "{what}: the caret jumped from {prev:?} to {now:?}"
+            );
+            prev = now;
+        }
+    }
+}

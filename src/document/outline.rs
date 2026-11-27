@@ -87,9 +87,25 @@ pub fn outline(src: &str) -> Vec<Heading> {
     out
 }
 
+/// The heading the reader is under: the last of `headings` (their offsets, in order) at or
+/// before `at`.
+pub fn heading_at(headings: impl IntoIterator<Item = usize>, at: usize) -> Option<usize> {
+    headings.into_iter().take_while(|&h| h <= at).last()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reader_is_under_the_last_heading_before_them() {
+        let hs = [10, 50, 90];
+        assert_eq!(heading_at(hs, 5), None);
+        assert_eq!(heading_at(hs, 10), Some(10));
+        assert_eq!(heading_at(hs, 89), Some(50));
+        assert_eq!(heading_at(hs, 500), Some(90));
+        assert_eq!(heading_at([], 5), None);
+    }
 
     #[test]
     fn numbers_sections() {

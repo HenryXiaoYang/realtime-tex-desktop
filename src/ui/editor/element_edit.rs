@@ -2,6 +2,7 @@
 // its fields, and setting one as an undo step, with the packages it needs.
 use super::*;
 use document::element::{self, Element, Field};
+use document::preamble;
 
 impl Doc {
     /// The element the sidebar shows: the selected block's, the caret's, else the document.
@@ -55,19 +56,70 @@ impl Doc {
         }
     }
 
+    /// Several fields of the element at hand, as one undo step.
+    pub fn set_element_fields(&mut self, fields: &[(&str, String)], cx: &mut Context<Self>) {
+        self.checkpoint();
+        for (key, value) in fields {
+            let el = self.element();
+            self.apply_field(&el, key, value, false, cx);
+        }
+    }
+
     fn set_field_of(&mut self, el: &Element, key: &str, value: &str, cx: &mut Context<Self>) {
+        self.apply_field(el, key, value, true, cx);
+    }
+
+    fn apply_field(
+        &mut self,
+        el: &Element,
+        key: &str,
+        value: &str,
+        checkpoint: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(change) = element::set(&self.source, el, key, value) else {
             return;
         };
         if self.source.get(change.range.clone()) == Some(change.text.as_str()) {
             return;
         }
-        self.checkpoint();
+        if checkpoint {
+            self.checkpoint();
+        }
         self.typing = None;
         self.overlay = None;
         // the selection and caret stay on the element (they follow the edit)
         self.replace(change.range.clone(), &change.text, cx);
         self.add_packages(&change.packages, cx);
+        cx.notify();
+    }
+
+    /// The packages the preamble loads.
+    pub fn packages(&self) -> Vec<String> {
+        preamble::packages(&self.source)
+    }
+
+    /// Load package `name` (already loaded: nothing), as an undo step.
+    pub fn add_package(&mut self, name: &str, cx: &mut Context<Self>) {
+        if !preamble::is_package_name(name) {
+            return;
+        }
+        self.checkpoint();
+        self.typing = None;
+        self.overlay = None;
+        self.add_packages(&[name], cx);
+        cx.notify();
+    }
+
+    /// Stop loading package `name`, as an undo step.
+    pub fn remove_package(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(change) = preamble::remove_package(&self.source, name) else {
+            return;
+        };
+        self.checkpoint();
+        self.typing = None;
+        self.overlay = None;
+        self.replace(change.range, &change.text, cx);
         cx.notify();
     }
 }

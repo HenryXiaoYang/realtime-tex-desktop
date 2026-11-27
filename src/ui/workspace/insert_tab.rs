@@ -289,7 +289,11 @@ impl Workspace {
         vec![
             Self::group("Pages", vec![pages], cx),
             Self::group("Tables", vec![tables], cx),
-            Self::group("Illustrations", vec![pictures], cx),
+            Self::group(
+                "Illustrations",
+                vec![pictures, self.tikz_menu(enabled, cx)],
+                cx,
+            ),
             Self::group("Formulas", vec![formulas], cx),
             Self::group("Links", vec![links], cx),
             Self::last_group("References", vec![refs], cx),
@@ -312,6 +316,48 @@ impl Workspace {
 
     pub(super) fn insert_block(&self, tex: &str, cx: &mut Context<Self>) {
         self.with_doc(cx, |d, cx| d.insert_block(tex, &[], cx));
+    }
+
+    /// TikZ: a menu of pictures to start from, each edited in the TikZ panel once it is in.
+    fn tikz_menu(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
+        let face = widgets::big_button(
+            "ins-tikz",
+            "icons/network.svg",
+            "TikZ",
+            true,
+            self.insert_compact(),
+            enabled,
+            cx,
+        );
+        if !enabled {
+            return face.disabled(true).into_any_element();
+        }
+        let weak = cx.entity().downgrade();
+        gpui_kit::component::popover::Popover::new("ins-tikz-menu")
+            .trigger(face)
+            .content(move |_, _, cx| {
+                let popover = cx.entity();
+                let mut list = div().flex().flex_col().min_w(px(180.0));
+                for (i, (label, tex)) in crate::document::insert::TIKZ.iter().enumerate() {
+                    let (weak, popover) = (weak.clone(), popover.clone());
+                    list = list.child(
+                        Button::new(("tikz", i))
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .justify_start()
+                            .label(*label)
+                            .on_click(move |_, window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.with_doc(cx, |d, cx| d.insert_block(tex, &["tikz"], cx))
+                                });
+                                popover.update(cx, |p, cx| p.dismiss(window, cx));
+                            }),
+                    );
+                }
+                list
+            })
+            .into_any_element()
     }
 
     /// Space: a menu of LaTeX's vertical skips.

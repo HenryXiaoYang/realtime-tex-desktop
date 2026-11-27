@@ -1,10 +1,13 @@
 // The window: the workspace around the open files, each file's editor, and the settings.
+pub mod about;
+pub mod app_icon;
 pub mod editor;
 pub mod keymap;
 pub mod palette;
 pub mod projects;
 pub mod setting;
 pub mod settings;
+pub mod terminal;
 pub mod tex_setup;
 pub mod themes;
 pub mod welcome;

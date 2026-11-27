@@ -75,7 +75,8 @@ fn type_on_pages(cx: &mut TestAppContext) {
     // OpenType twin here (the test text system has no fonts to register it with)
     let twin = |d: &Doc| {
         let name = d.caret_font().and_then(|f| f.name).unwrap_or_default();
-        let file = super::super::source_box::latin_modern(&name).expect("a Latin Modern twin");
+        let file = super::super::source_box::latin_modern(&name)
+            .unwrap_or_else(|| panic!("a Latin Modern twin of {name:?}"));
         assert!(
             engine::kpsewhich(&file).is_some(),
             "{file} is in the TeX tree"
@@ -979,4 +980,92 @@ fn a_main_of_inputs_names_them(cx: &mut TestAppContext) {
     });
     let named = cx.read(|cx| doc.read(cx).text_elsewhere());
     assert_eq!(named, ["part.tex"], "the missing gone.tex is not offered");
+}
+
+/// Alignment and a font change what is typeset, not only the source: a centred line starts
+/// further across, a sans word is in another font; over text that has its own, the new one wins.
+/// `cargo test --release format_changes_the_pages -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn format_changes_the_pages(cx: &mut TestAppContext) {
+    use super::super::FormatOp;
+    use crate::document::format::{Align, Font};
+    let tex = "\\documentclass{article}\n\\begin{document}\nFirst paragraph of plain text that is long enough to fill a line of the page and then wrap onto a second one.\n\nSecond short one.\n\nThird one, to set in another font.\n\\end{document}\n";
+    let (doc, cx) = open(cx, scratch("format-pages", tex), "main.tex", 2);
+    // the first glyph of the block holding `start`: its font and where it starts across the page
+    let first = |cx: &mut gpui_kit::VisualTestContext, start: &str| {
+        cx.read(|cx| {
+            let d = doc.read(cx);
+            let b = d
+                .blocks
+                .iter()
+                .find(|b| d.source[b.range.clone()].contains(start))
+                .unwrap();
+            let l = &b.rows[0].row.dl.lines[b.rows[0].row.line];
+            let g = l.items[0].as_array().unwrap();
+            (g[1].as_i64().unwrap(), g[4].as_f64().unwrap())
+        })
+    };
+    let at = |cx: &mut gpui_kit::VisualTestContext, start: &str| {
+        cx.read(|cx| {
+            let d = doc.read(cx);
+            d.blocks
+                .iter()
+                .find(|b| d.source[b.range.clone()].contains(start))
+                .unwrap()
+                .range
+                .start
+                + 2
+        })
+    };
+    let (_, x0) = first(cx, "Second short");
+    let off = at(cx, "Second short");
+    doc.update_in(cx, |d, window, cx| {
+        d.set_caret(off, cx);
+        d.format(FormatOp::Align(Align::Center), window, cx);
+    });
+    calm(cx, &doc);
+    let (_, x1) = first(cx, "begin{center}");
+    assert!(
+        x1 - x0 > 2_000_000.0,
+        "the centred line starts further across: {x0} -> {x1}"
+    );
+    let (f0, _) = first(cx, "to set in another");
+    let off = at(cx, "to set in another");
+    doc.update_in(cx, |d, window, cx| {
+        d.set_caret(off, cx);
+        d.format(FormatOp::Font(Font::Sans), window, cx);
+    });
+    calm(cx, &doc);
+    let (f1, _) = first(cx, "to set in another");
+    assert_ne!(f0, f1, "the word is in another font");
+    // the whole text, set right then mono: what each paragraph had of its own gives way
+    doc.update_in(cx, |d, window, cx| {
+        d.select_all_text(cx);
+        d.format(FormatOp::Font(Font::Mono), window, cx);
+        d.select_all_text(cx);
+        d.format(FormatOp::Align(Align::Right), window, cx);
+    });
+    calm(cx, &doc);
+    let src = cx.read(|cx| doc.read(cx).source.clone());
+    assert!(
+        !src.contains("\\begin{center}") && !src.contains("\\textsf"),
+        "{src}"
+    );
+    assert!(src.contains("\\begin{flushright}"), "{src}");
+    // whole blocks selected (no caret): the ribbon acts on them too
+    doc.update_in(cx, |d, window, cx| {
+        d.set_selection(0, 0, cx);
+        assert!(
+            d.ribbon_state().enabled,
+            "the ribbon is on for a block selection"
+        );
+        d.format(FormatOp::Align(Align::Left), window, cx);
+    });
+    calm(cx, &doc);
+    let src = cx.read(|cx| doc.read(cx).source.clone());
+    assert!(
+        src.contains("\\begin{flushleft}") && !src.contains("\\begin{flushright}"),
+        "{src}"
+    );
 }
