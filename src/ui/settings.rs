@@ -175,7 +175,7 @@ impl Default for AppSettings {
             pinch_zoom: true,
             live_preview: true,
             backslash_opens_source: true,
-            enter_no_indent: true,
+            enter_no_indent: false,
             line_numbers: true,
             soft_wrap: true,
             autocomplete: true,

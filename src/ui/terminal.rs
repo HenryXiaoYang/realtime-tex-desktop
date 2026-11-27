@@ -85,19 +85,29 @@ pub struct Terminal {
 
 const DEFAULT: (usize, usize) = (100, 24);
 
+/// Off the Mac: the Ctrl keys a shell needs, kept from the app's shortcuts in the terminal.
+const SHELL_KEYS: [&str; 30] = [
+    "ctrl-a", "ctrl-b", "ctrl-c", "ctrl-d", "ctrl-e", "ctrl-f", "ctrl-g", "ctrl-h", "ctrl-i",
+    "ctrl-j", "ctrl-k", "ctrl-l", "ctrl-m", "ctrl-n", "ctrl-o", "ctrl-p", "ctrl-q", "ctrl-r",
+    "ctrl-s", "ctrl-t", "ctrl-u", "ctrl-v", "ctrl-w", "ctrl-x", "ctrl-y", "ctrl-z", "ctrl-\\",
+    "ctrl-[", "ctrl-]", "ctrl-/",
+];
+
 pub fn bind_keys(cx: &mut App) {
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([
+            KeyBinding::new("cmd-c", Copy, Some("Terminal")),
+            KeyBinding::new("cmd-v", Paste, Some("Terminal")),
+        ]);
+        return;
+    }
+    // off the Mac the app's Ctrl shortcuts would take the shell's control keys (Ctrl-C, -W,
+    // -Z…): in the terminal they reach the shell, and copy/paste is Ctrl-Shift-C/V
     cx.bind_keys([
-        KeyBinding::new(
-            crate::ui::keymap::fixed_key("cmd-c"),
-            Copy,
-            Some("Terminal"),
-        ),
-        KeyBinding::new(
-            crate::ui::keymap::fixed_key("cmd-v"),
-            Paste,
-            Some("Terminal"),
-        ),
+        KeyBinding::new("ctrl-shift-c", Copy, Some("Terminal")),
+        KeyBinding::new("ctrl-shift-v", Paste, Some("Terminal")),
     ]);
+    cx.bind_keys(SHELL_KEYS.map(|k| KeyBinding::new(k, NoAction, Some("Terminal"))));
 }
 
 impl Terminal {
@@ -729,7 +739,7 @@ impl Focusable for Terminal {
 
 #[cfg(test)]
 mod tests {
-    use super::{Terminal, encode, hsla, palette};
+    use super::{SHELL_KEYS, Terminal, encode, hsla, palette};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::term::TermMode;
@@ -832,5 +842,16 @@ mod tests {
             assert!(std::time::Instant::now() < until, "no answer:\n{seen}");
             std::thread::sleep(std::time::Duration::from_millis(30));
         }
+    }
+
+    #[test]
+    fn shell_keys_parse_and_reach_the_shell() {
+        for k in SHELL_KEYS {
+            assert!(Keystroke::parse(k).is_ok(), "{k}");
+        }
+        let send = |s: &'static str| encode(&Keystroke::parse(s).unwrap(), TermMode::NONE);
+        assert_eq!(send("ctrl-c"), Some(vec![3]));
+        assert_eq!(send("ctrl-w"), Some(vec![0x17]));
+        assert_eq!(send("ctrl-z"), Some(vec![0x1a]));
     }
 }
