@@ -44,6 +44,5 @@ Preconditions:
 - The panel covers the lines under the formula while open.
 - On a table, a double-click on a cell's letters selects the word; the editor needs a double-click in a cell's empty part (give the test table `p{4cm}` columns: a 2×2 `l` table has hardly any).
 - ⌘= does not zoom until the pages have focus; click the status bar's zoom + instead. 175% makes words easy to hit in a 1460-point window.
-- With Dark pages on, a picture is drawn color-inverted; right after a grip drag it shows its true colors until the next typeset.
 - Pages draw a spinner while a full LaTeX run is in progress; wait for the pages before clicking.
 - In the dark theme with Dark pages on, the page is black and syntax colors in the box are faint; compare shapes, not contrast.
