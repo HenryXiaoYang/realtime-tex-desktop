@@ -26,7 +26,7 @@ Preconditions:
 - **Bold.** `$R dclick` on a word; click the ribbon's B (or `$R hotkey CmdOrCtrl+B`); the word is bold; the file has `\textbf{word}` after ⌘S.
 - **Select.** `$R click` on the formula (re-shoot first: typing reflows the page); `$R shot pages-formula-click`: an outline round it, `Equation` (Numbered, Label) in the sidebar.
 - **Formula panel.** `$R dclick` on the formula; `$R shot pages-box`: the panel shows `e^{i\pi} + 1 = 0` (no `\[ \]`) and the symbol tabs. `$R key Escape`; the panel closes.
-- **Undo.** `$R hotkey CmdOrCtrl+Z`; after ⌘S the file has lost the last edit (e.g. the `\textbf`).
+- **Undo.** `$R hotkey CmdOrCtrl+Z`; after ⌘S the file has lost the last edit (e.g. the `\textbf`). Enter or typing over a selected word is one step: one ⌘Z brings the word back.
 - **Proof.** Shots before and after each action; the saved `main.tex` copied into `$($R evidence)`.
 
 ## Gotchas

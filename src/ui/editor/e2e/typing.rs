@@ -1069,3 +1069,27 @@ fn format_changes_the_pages(cx: &mut TestAppContext) {
         "{src}"
     );
 }
+
+// Enter over a selected word is one undo step, as typing over it is: `cargo test --release
+// enter_over_a_selection_undoes_at_once -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn enter_over_a_selection_undoes_at_once(cx: &mut TestAppContext) {
+    let tex = "\\documentclass{article}\n\\begin{document}\nDouble-click a word in this paragraph, then make it bold.\n\\end{document}\n";
+    let (doc, cx) = super::open(cx, super::scratch("enter-undo", tex), "main.tex", 0);
+    let base = cx.read(|cx| doc.read(cx).source.clone());
+    let off = base.find("paragraph").unwrap();
+    doc.update_in(cx, |d, _, cx| {
+        d.set_caret(off, cx);
+        d.extending(cx, |d, cx| d.move_word(1, cx));
+        d.enter(false, cx);
+    });
+    let src = cx.read(|cx| doc.read(cx).source.clone());
+    assert!(!src.contains("paragraph"), "the word replaced: {src:?}");
+    doc.update_in(cx, |d, window, cx| d.undo(window, cx));
+    assert_eq!(
+        cx.read(|cx| doc.read(cx).source.clone()),
+        base,
+        "one undo step"
+    );
+}

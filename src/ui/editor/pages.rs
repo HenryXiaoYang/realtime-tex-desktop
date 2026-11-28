@@ -73,6 +73,43 @@ impl Doc {
             .role(Role::Document)
             .aria_label(format!("Page {n}"))
             .aria_description(self.text_of_page(n));
+        if self.source_mode {
+            // a preview of the code editor's text: a click jumps there, nothing is edited here
+            return div()
+                .id(("page", n as usize))
+                .relative()
+                .flex_none()
+                .w(px(w))
+                .h(px(h))
+                .bg(palette::paper(self.dark_pages(cx), cx))
+                .shadow_md()
+                .cursor_pointer()
+                .child(spoken)
+                .child(
+                    canvas(
+                        move |b, _, _| {
+                            let mut v = bounds.take();
+                            v.retain(|(p, _)| *p != n);
+                            v.push((n, b));
+                            bounds.set(v);
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
+                        this.jump_to_source(n, ev.position, window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(slice(0.0, h))
+                .children(self.render_caret(n, window, cx))
+                .children(spinner)
+                .into_any_element();
+        }
         let page = div()
             .id(("page", n as usize))
             .relative()
