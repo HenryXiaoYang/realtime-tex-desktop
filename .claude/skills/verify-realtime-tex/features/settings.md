@@ -4,7 +4,7 @@ The Settings window: a sidebar of pages (General, Appearance, Editor, Files, Typ
 
 ## Sub-features
 
-- `settings-open` opens from ⌘, and File › Settings.
+- `settings-open` opens from ⌘, and Realtime Tex Desktop › Settings… (the app menu); ⌘W closes it.
 - `settings-accent` Appearance › <theme name> › Accent color: 8 preset swatches and a custom picker; the picked one is ringed and the whole UI takes the color. Each theme has its own accent (stored as `colors[<theme>].accent`).
 - `settings-themes` Appearance › Light theme / Dark theme dropdowns, Themes folder › Open.
 - `settings-mode` Appearance › Theme (System / Light / Dark) switches to the other theme's own accent and colors; each comes back with its theme.
@@ -16,8 +16,9 @@ The Settings window: a sidebar of pages (General, Appearance, Editor, Files, Typ
 ## How to get to it (user POV)
 
 - ⌘, in any window.
-- File › Settings in the menu bar.
-- The gear button in the status bar of a project window.
+- Realtime Tex Desktop › Settings… in the menu bar (after About).
+- The gear button in the status bar of a project window, and in the Welcome window's title bar.
+- `Open Settings` on the "rtex couldn’t start" notice.
 
 ## Driving it with rtd.sh
 
@@ -25,7 +26,7 @@ Preconditions:
 
 - `$R launch --build`; the Welcome window is listed. `$R doctor` exits 0.
 
-- **Open.** `$R hotkey CmdOrCtrl+,`; `$R windows` lists a new window titled `''` (860x621); `$R use <id>`; `$R shot settings-open`. General is selected.
+- **Open.** `$R hotkey CmdOrCtrl+,`; `$R windows` lists a new window titled `''` (860x620); `$R use <id>`; `$R shot settings-open`. General is selected.
 - **Appearance.** Click `Appearance` in the sidebar; `$R shot appearance-before`. Groups, in order: Window (Theme, Light theme, Dark theme, Themes folder, Interface font size, Dark pages, Blinking caret), Layout (Show ribbon tools, Show sidebar), and a group titled with the theme on screen (e.g. `Realtime Tex Dark`: Accent color, Export theme, Reset all colors) that holds the color groups (see [colors.md](colors.md)). The sidebar is a three-level tree: under Appearance the entries Window, Layout and the theme's name; under the theme's entry, open from the start (its caret folds it), one entry per color group. On the page the color groups follow the theme's own rows, their titles smaller.
 - **Nested entry.** Click a color group's entry (e.g. `Source syntax`; `$R scroll 120 450 down` first to bring the sidebar's end into view); `$R shot appearance-nested`: the page scrolled to that group, the entry is marked. Scrolling the page by hand marks the entry of the deepest group at the top.
 - **Accent preset.** Click the theme-named sub-entry in the sidebar, then the green swatch (sixth). `$R shot appearance-green`: green is ringed, switches are green, Reset all colors is enabled. `$R settings` has `"colors": {"<theme>": {"accent": "#1E7F47"}}` and no top-level `"accent"`.

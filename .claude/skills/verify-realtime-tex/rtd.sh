@@ -15,8 +15,9 @@ orc() { orca computer "$@" --app "pid:$PID" --json; }
 ok() { python3 -c 'import json,sys; r=json.load(sys.stdin); sys.exit(0 if r.get("ok") else (print(json.dumps(r.get("error")),file=sys.stderr) or 1))'; }
 win() { [ -n "${1:-}" ] && echo "$1" || echo "$WIN"; }
 act() { # act <window|""> <orca action args...>: background input, no screenshot
+  # RTD_RESTORE=1 brings the window forward first (it is on another Space); only with the user's OK
   w=$(win "$1"); shift
-  orc "$@" --window-id "$w" --no-screenshot | ok
+  orc "$@" --window-id "$w" --no-screenshot ${RTD_RESTORE:+--restore-window} | ok
 }
 
 cmd=${1:-help}; shift 2>/dev/null || true
