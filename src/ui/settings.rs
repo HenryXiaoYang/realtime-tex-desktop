@@ -454,11 +454,22 @@ fn group(cx: &App) -> SettingGroup {
     SettingGroup::new().pr(clear.max(px(0.0)))
 }
 
+/// The commands' groups in the order the keymap lists them, so no group is left off the page.
+fn shortcut_groups(all: &[keymap::Command]) -> Vec<&'static str> {
+    let mut groups = Vec::new();
+    for c in all {
+        if !groups.contains(&c.group) {
+            groups.push(c.group);
+        }
+    }
+    groups
+}
+
 /// Keyboard shortcuts: each command and its key; click the key and press a new one.
 fn shortcuts_page(cx: &App) -> SettingPage {
     let all = keymap::commands();
     let mut page = SettingPage::new("Keyboard shortcuts");
-    for name in ["File", "Edit", "Format", "View"] {
+    for name in shortcut_groups(&all) {
         let items: Vec<SettingItem> = all
             .iter()
             .filter(|c| c.group == name)
@@ -1575,7 +1586,7 @@ impl Render for SettingsView {
 mod tests {
     use super::{
         AppSettings, FontField, OnLaunch, OutlineDepth, SettingsView, TexView, Zoom, choice, font,
-        font_choices, group, pages,
+        font_choices, group, pages, shortcut_groups,
     };
     use crate::ui::editor::MONO;
     use crate::ui::palette;
@@ -2751,5 +2762,14 @@ mod tests {
         vcx.simulate_click(reset.expect("the page's reset"), Modifiers::default());
         vcx.run_until_parked();
         assert!(!dirty.get());
+    }
+
+    #[test]
+    fn every_command_group_has_a_shortcuts_group() {
+        assert_eq!(
+            shortcut_groups(&crate::ui::keymap::commands()),
+            ["File", "Edit", "Insert", "Format", "View"],
+            "Insert's commands (Link, Picture, Page Break…) can be rebound too"
+        );
     }
 }
