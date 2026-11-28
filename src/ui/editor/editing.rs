@@ -594,6 +594,9 @@ impl Doc {
                 }
                 s.focus(window, cx);
             });
+        } else if self.code.focus_handle(cx).is_focused(window) {
+            // the hidden editor keeps focus otherwise, and ⌘S and the other keys reach nothing
+            self.focus.focus(window, cx);
         }
         self.source_mode = on;
         cx.notify();
