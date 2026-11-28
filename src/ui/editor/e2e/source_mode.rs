@@ -42,6 +42,11 @@ fn source_mode_opens_where_you_were(cx: &mut TestAppContext) {
     // back on the pages, scrolled with nothing being edited: the first block in view
     doc.update_in(cx, |d, window, cx| d.set_source_mode(false, window, cx));
     settle(cx);
+    let pages_focused = doc.update_in(cx, |d, window, _| d.focus.is_focused(window));
+    assert!(
+        pages_focused,
+        "the pages take focus back, so ⌘S and the other keys reach them"
+    );
     doc.update_in(cx, |d, _, cx| {
         d.caret = None;
         d.scroll.set_offset(point(px(0.0), px(-4000.0)));
