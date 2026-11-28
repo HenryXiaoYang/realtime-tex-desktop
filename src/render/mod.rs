@@ -137,7 +137,8 @@ pub fn render(fonts: &mut Resources, job: &Job) -> (u32, u32, Vec<u8>) {
         );
         if let Some(d) = job.dark {
             // shortcut: a PDF-drawn page (TikZ) is inverted onto dark paper, so its colours flip
-            // hue too; draw such pages from their display list when that can render pictures
+            // hue too (the included pictures are drawn again below); draw such pages from their
+            // display list when that can render TikZ
             onto_dark(pix.data_mut(), d);
         }
         let mut white = Paint::default();
@@ -165,8 +166,11 @@ pub fn render(fonts: &mut Resources, job: &Job) -> (u32, u32, Vec<u8>) {
         color: on_paper([0, 0, 0], job.dark),
         dark: job.dark,
     };
-    if let Some(dl) = job.other.as_ref().filter(|_| from_pdf.is_none()) {
-        p.draw(dl, &dl.other, 0.0, 0.0);
+    match job.other.as_ref() {
+        Some(dl) if from_pdf.is_none() => p.draw(dl, &dl.other, 0.0, 0.0),
+        // included graphics keep their colours on dark paper: the inversion flipped them
+        Some(dl) if job.dark.is_some() => p.draw(dl, &pictures(dl), 0.0, 0.0),
+        _ => {}
     }
     for r in &job.rows {
         p.draw(&r.dl, &r.dl.lines[r.line].items, r.dx, r.dy);
@@ -176,6 +180,29 @@ pub fn render(fonts: &mut Resources, job: &Job) -> (u32, u32, Vec<u8>) {
         px.swap(0, 2);
     }
     (pw, ph, data)
+}
+
+/// The page's included pictures, with the matrix changes that place them; not the ones rtex
+/// draws itself (`cached_picture`), which have no file to draw from.
+fn pictures(dl: &DisplayList) -> Vec<Value> {
+    let lines = dl.lines.iter().flat_map(|l| &l.items);
+    dl.other
+        .iter()
+        .chain(lines)
+        .filter(|it| {
+            let a = it.as_array().map_or(&[][..], Vec::as_slice);
+            match a.first().and_then(Value::as_str) {
+                Some("M") => true,
+                Some("i") => a
+                    .get(1)
+                    .and_then(Value::as_i64)
+                    .and_then(|ix| image_info(dl, ix))
+                    .is_some_and(|i| !i.cached_picture),
+                _ => false,
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 struct Painter<'a> {
@@ -451,6 +478,26 @@ mod tests {
         };
         assert_eq!(at(Some(navy), 15, 15), navy.paper);
         assert_eq!(at(Some(navy), 5, 5), navy.ink);
+    }
+
+    #[test]
+    fn a_pdf_drawn_page_draws_its_pictures_again() {
+        let pt = 65536.0;
+        let dl: DisplayList = serde_json::from_value(serde_json::json!({
+            "other": [["M", "save"], ["i", 1, 0, 0, pt, pt], ["g", 1, 65, 0, 0, 0], ["M", "restore"]],
+            "lines": [{"x": 0, "y": 0, "w": pt, "h": pt, "d": 0, "items": [["i", 2, 0, 0, pt, pt], ["r", 0, 0, pt, pt]]}],
+            "images_info": {"1": {"file": "pic.png"}, "2": {"file": "tikz.pdf", "page": 1, "cached_picture": true}},
+        }))
+        .unwrap();
+        let kinds: Vec<String> = pictures(&dl)
+            .iter()
+            .map(|it| it[0].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["M", "i", "M"],
+            "the picture and its placing, no glyph, rule or cached picture"
+        );
     }
 
     #[test]

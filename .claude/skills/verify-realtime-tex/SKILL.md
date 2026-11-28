@@ -21,7 +21,7 @@ $R launch --fresh-tour            # first-launch state: the tour starts by itsel
 - `--build` runs `scripts/bundle.sh` (safe while the user's app runs). Omit it only when `doctor` says the bundle is newer than HEAD and `src` is clean.
 - The run gets `HOME=/tmp/rtd-verify/<run>/home` with `settings.json` = `{"tour_seen": true}` (unless `--fresh-tour`) and a copy of the user's downloaded rtex. The app downloads its pinned rtex itself if that copy is missing or older. TeX comes from `/Library/TeX/texbin`.
 - Ready = `launch` printed `run … pid … window …` and the window list. With no project the first window is **Welcome to Realtime Tex Desktop**; with a project, the project's window (titled by folder). A project window is usable for editing once its pages show (screenshot; "Page 1 of N" in the status bar), which can take a few seconds while rtex starts.
-- One run at a time (`/tmp/rtd-verify/current`); `launch` refuses while one is in progress.
+- One run per state file (default `/tmp/rtd-verify/current`); `launch` refuses while one is in progress. Two agent sessions sharing the default end up driving the same copy: give each its own, `export RTD_STATE=/tmp/rtd-verify/current-<session>`, on every call.
 
 ## Doctor
 
@@ -38,6 +38,9 @@ $R windows                 # id 'title' WxH of the run's windows
 $R use <id>                # make a window the default target (Settings opens as a window titled '')
 $R shot <name> [window]    # evidence/<name>.png + <name>.small.png; prints the points factor
 $R click X Y               # window points; also: dclick X Y, key Escape, hotkey CmdOrCtrl+,
+$R tclick X Y; $R sclick X Y  # triple-click; Shift-click
+$R drag X1 Y1 X2 Y2        # press, move, release: text selection, image grips, TikZ dots
+$R rclick X Y              # right-click: refused in the background (it opens a menu); needs RTD_RESTORE=1
 $R scroll X Y down [pages] # wheel over a point (default 3 pages), e.g. the Settings sidebar
 $R type "text"             # into whatever has focus (click into the page first)
 $R ax <text> <window>      # native panels only: find elements, e.g. ax Save 60437

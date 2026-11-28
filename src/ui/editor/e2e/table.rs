@@ -279,3 +279,76 @@ fn the_table_lines(cx: &mut TestAppContext) {
     assert_eq!(src(cx), before);
     assert_eq!(cx.read(|cx| doc.read(cx).undo.len()), steps);
 }
+
+/// A double-click on a cell's text selects the word; one in the cell beside its text opens the
+/// table editor, through real mouse events. `cargo test --release double_click_beside_a_cells_text
+/// -- --ignored --nocapture`.
+#[gpui_kit::test]
+#[ignore]
+fn double_click_beside_a_cells_text(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, point, px};
+    let wide = DOC.replace("{|l|l|}", "{|p{4cm}|p{4cm}|}");
+    let (doc, cx) = open(cx, scratch("table-dclick", &wide), "main.tex", 2);
+    // window points of cell "a": on its glyph, and 2cm to its right, still in the cell
+    let (on, beside) = cx.read(|cx| {
+        let d = doc.read(cx);
+        let bi = d
+            .blocks
+            .iter()
+            .position(|b| d.source[b.range.clone()].contains("tabular"))
+            .unwrap();
+        let bounds = d.page_bounds.take();
+        d.page_bounds.set(bounds.clone());
+        let (page, pb) = bounds[0];
+        let m = d.map_of(bi, page).unwrap();
+        let a = m
+            .chars
+            .iter()
+            .find(|c| c.ch == 'a' && c.src.is_some())
+            .unwrap();
+        let p = |v: f64| px(super::super::page_px(v, d.zoom));
+        let y = pb.origin.y + p(a.bbox[1] - 0.25 * a.bbox[3]);
+        let x = |v: f64| pb.origin.x + p(v);
+        let cm = 72.27 / 2.54 * 65536.0;
+        (
+            point(x(a.bbox[0] + a.bbox[2] / 2.0), y),
+            point(x(a.bbox[0] + 2.0 * cm), y),
+        )
+    });
+    let dclick = |cx: &mut gpui_kit::VisualTestContext, at| {
+        for n in 1..=2 {
+            let (button, modifiers) = (MouseButton::Left, Modifiers::default());
+            cx.simulate_event(MouseDownEvent {
+                position: at,
+                button,
+                modifiers,
+                click_count: n,
+                first_mouse: false,
+            });
+            cx.simulate_event(MouseUpEvent {
+                position: at,
+                button,
+                modifiers,
+                click_count: n,
+            });
+        }
+        cx.run_until_parked();
+    };
+    dclick(cx, on);
+    cx.read(|cx| {
+        let d = doc.read(cx);
+        let sel = d.selection_range().map(|r| d.source[r].to_string());
+        assert_eq!(sel.as_deref(), Some("a"), "on the text: the word");
+        assert!(d.active.is_none(), "on the text: no editor");
+    });
+    dclick(cx, beside);
+    cx.read(|cx| {
+        let d = doc.read(cx);
+        assert!(
+            d.active
+                .as_ref()
+                .is_some_and(|a| a.panel == Some(crate::ui::editor::Panel::Table)),
+            "beside the text: the table editor"
+        );
+    });
+}

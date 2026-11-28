@@ -118,6 +118,10 @@ print([x['width'] for x in json.load(sys.stdin)['result']['windows'] if x['id']=
   ;;
 click)  load; act "${3:-}" click --x "${1:?click x y [window]}" --y "$2" ;;
 dclick) load; act "${3:-}" click --x "${1:?dclick x y [window]}" --y "$2" --click-count 2 ;;
+tclick) load; act "${3:-}" click --x "${1:?tclick x y [window]}" --y "$2" --click-count 3 ;;
+sclick) load; act "${3:-}" click --x "${1:?sclick x y [window]}" --y "$2" --modifiers shift ;;
+rclick) load; act "${3:-}" click --x "${1:?rclick x y [window]}" --y "$2" --mouse-button right ;;
+drag)   load; act "${5:-}" drag --from-x "${1:?drag x1 y1 x2 y2 [window]}" --from-y "$2" --to-x "$3" --to-y "$4" ;;
 scroll) load; act "${5:-}" scroll --x "${1:?scroll x y up|down [pages] [window]}" --y "$2" --direction "${3:?up|down}" --pages "${4:-3}" ;;
 key)    load; act "${2:-}" press-key --key "${1:?key <Key> [window]}" ;;
 hotkey) load; act "${2:-}" hotkey --key "${1:?hotkey <Chord> [window]}" ;;
@@ -144,6 +148,6 @@ stop)
   ls "$EVID"
   ;;
 *)
-  sed -n '1,4p' "$0"; echo "commands: launch doctor windows use shot click dclick scroll key hotkey type ax axclick axset home settings evidence stop"
+  sed -n '1,4p' "$0"; echo "commands: launch doctor windows use shot click dclick tclick sclick rclick drag scroll key hotkey type ax axclick axset home settings evidence stop"
   ;;
 esac

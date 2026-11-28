@@ -28,8 +28,8 @@ The maintained source for verifying what a user of Realtime Tex Desktop can see 
 - [tour.md](tour.md): the first-run spotlight tour.
 - [settings.md](settings.md): Settings window pages, per-theme accent, themes.
 - [colors.md](colors.md): every theme color under Appearance (per theme, accent, export).
-- [pages-editing.md](pages-editing.md): typing on the pages and the source box.
+- [pages-editing.md](pages-editing.md): typing and selecting on the pages; the formula, TikZ, picture and table editors.
 - [export.md](export.md): Export PDF through the native Save panel.
 - [source-mode.md](source-mode.md): the source beside its pages, cursor and clicks linked.
 
-Not yet mapped: Welcome window (src/ui/welcome.rs), terminal panel (src/ui/terminal.rs), About window (src/ui/about.rs), table, image and TikZ editing on the page (src/ui/editor/table_panel.rs, image_resize.rs, tikz_points.rs), project panel (files, outline, sideways scroll), find bar, problems/log panels, ribbon Insert tab, TeX setup window.
+Not yet mapped: Welcome window (src/ui/welcome.rs), terminal panel (src/ui/terminal.rs), About window (src/ui/about.rs), the right sidebar and page setup (src/ui/workspace/inspector.rs, page_setup.rs), table lines dragged on the page (src/ui/editor/table_handles.rs), the disk-conflict banner (src/ui/editor/disk.rs), the pages' right-click menu (src/ui/editor/menu.rs), project panel (files, outline, sideways scroll), find bar, problems/log panels, ribbon Insert tab, TeX setup window.
