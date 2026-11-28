@@ -24,15 +24,15 @@ Preconditions:
 
 - `$R launch --build --fresh-tour`; the window list shows `Tour`. `$R doctor` exits 0.
 
-- **Start.** `$R shot tour-1`. The card reads `1 of 14 · Your document, typeset` with Next; the pages are ringed.
+- **Start.** `$R shot tour-1`. The card reads `1 of 14` over the title `Your document, typeset`, with Skip Tour and Next; the pages are ringed.
 - **Next.** Click the card's `Next` (read its position from the shot), or `$R key Return`. `2 of 14` appears.
-- **Type.** Click inside the sentence under "1 Write on the pages", `$R type "Hi "`; a second later the card reads `3 of 14 · Edit a formula` and the source has all of `Hi `. Don't press Escape now: with nothing open it ends the tour.
-- **Formula panel.** Double-click (`$R dclick X Y`) the display formula e^{iπ}+1=0 in section 2, "Formulas" (the page scrolls it up). Expected: a panel under it headed `Formula` / `Esc or $ to finish`, with `e^{i\pi} + 1 = 0` (no `\[ \]`) and symbol tabs (Structure, Greek, Operators, Relations, Arrows), no preview under it; the card still reads `3 of 14`. `$R key Escape`: the panel closes and the card reads `4 of 14 · The Home tab`.
+- **Type.** Click inside the sentence under "1 Write on the pages", `$R type "Hi "`; a second later the card reads `3 of 14` / `Edit a formula` and the source has all of `Hi `. Don't press Escape now: with nothing open it ends the tour.
+- **Formula panel.** Double-click (`$R dclick X Y`) the display formula e^{iπ}+1=0 in section 2, "Formulas" (the page scrolls it up). Expected: a panel under it headed `Formula` / `Esc or $ to finish`, with `e^{i\pi} + 1 = 0` (no `\[ \]`) and symbol tabs (Structure, Greek, Operators, Relations, Arrows), no preview under it; the card still reads `3 of 14`. `$R key Escape`: the panel closes and the card reads `4 of 14` / `The Home tab`.
 - **Act steps.** Step 5: `$R dclick` a word in section 3, `$R hotkey CmdOrCtrl+B` (or click Skip Step). Step 7 shows `Skip Step`; click it. Steps 4 and 6: Next or `$R key Return` (each step starts with no caret on the page, so Return reaches the card).
 - **Step 8.** Card `The project panel`; in the shot, the ring surrounds only the bottom-left panel button, not "Page 1 of 1".
 - **Step 9.** Card `Problems`, ring on the Problems button. Click it: the bottom list opens ("No problems in the last LaTeX run"), stays lit, the card moves above it and its button reads `Next`.
 - **Steps 10–13.** Next (or `$R key Return`) for 10, 11, 13; `$R hotkey CmdOrCtrl+Shift+R` completes 12.
-- **Step 14.** Follow [export.md](export.md); the closing card `That's the tour` appears.
+- **Step 14.** Follow [export.md](export.md); the closing card `That’s the tour` appears.
 - **Proof.** One shot per step named `tour-<n>`; for step 14 also the exported PDF under `$R home` (the panel opens in the run's Documents, else its HOME: `home`; the notification says `Saved in home`).
 
 ## Gotchas

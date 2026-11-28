@@ -12,9 +12,9 @@ The user writes on the typeset pages: a click puts a caret in running text and t
 - `pages-undo` ⌘Z undoes on the pages.
 - `pages-drag` dragging in text selects from where the press began, across lines and list items (also deep in a long list).
 - `pages-triple` a triple-click selects the paragraph's text; a Shift-click extends the selection from the caret.
-- `pages-image` a click on a picture selects its figure: 8 grips round it and `Figure` (Width % of line) in the sidebar. A corner scales it; a side stretches it and writes both `width=` and `height=`.
+- `pages-image` a click on a picture selects its figure: 8 grips round it and `Figure` (Width % of line) in the sidebar. A corner scales it; the left or right grip stretches it and writes `width=` plus `height=` when the source has no `height=` yet (only `width=` when it has one); the top or bottom grip writes `height=` alone. Grips only show when the width is a plain fraction of `\linewidth`, `\textwidth` or `\columnwidth` and the picture has no other option such as `angle=`.
 - `pages-tikz` a double-click on a TikZ picture opens the `TikZ` panel (`Esc to finish`): its source, a canvas with a dot per coordinate, `+ Line`/`+ Rectangle`/`+ Circle`/`+ Text`. Dragging a dot rewrites that coordinate and the page redraws.
-- `pages-table` the table editor (`Table`, a grid of cell inputs, `+ Row`) opens from a double-click in a cell beside its text, or right-click › Edit Table.
+- `pages-table` the table editor (`Table`, a grid of cell inputs, `+ Row`) opens from a double-click in a cell beside its text, or right-click › Edit Table (that item only for a table inside `\begin{table}`; a bare or centered `tabular` has none).
 
 ## How to get to it (user POV)
 
@@ -40,6 +40,8 @@ Preconditions:
 ## Gotchas
 
 - A single click on a display formula or picture selects it; inline math in a paragraph takes a caret beside it. The panel needs a double-click.
+- A TikZ picture with `$…$` in a node can open the Formula panel instead of TikZ: the formula check runs first.
+- `rclick` (right-click › Edit Table) needs `RTD_RESTORE=1`, which takes the user's screen; skip it unless they are away.
 - Typing `$` on the pages opens a new formula and `\` opens the paragraph's source box: don't `$R type` text with either.
 - The panel covers the lines under the formula while open.
 - On a table, a double-click on a cell's letters selects the word; the editor needs a double-click in a cell's empty part (give the test table `p{4cm}` columns: a 2×2 `l` table has hardly any).
